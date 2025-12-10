@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>쿠키 클리어</title>
+</head>
+<body>
+    <h1>쿠키 강제 삭제</h1>
+    <button onclick="clearCookies()">모든 empno 쿠키 삭제</button>
+    <div id="result"></div>
+    
+    <script>
+    function clearCookies() {
+        // 모든 가능한 방법으로 empno 쿠키 삭제
+        document.cookie = 'empno=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+        document.cookie = 'empno=; path=/; max-age=0'
+        document.cookie = 'empno=; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+        document.cookie = 'empno=; max-age=0'
+        
+        document.getElementById('result').innerHTML = 
+            '<p>쿠키 삭제 완료!</p><p>현재 쿠키: ' + document.cookie + '</p>'
+    }
+    </script>
+</body>
+</html>

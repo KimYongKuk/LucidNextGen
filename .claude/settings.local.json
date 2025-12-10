@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest -v --tb=short)",
+      "Bash(python3:*)",
+      "Bash(pkill:*)",
+      "Bash(ss:*)",
+      "Bash(curl:*)",
+      "Bash(uvicorn:*)",
+      "Bash(npm run dev:*)",
+      "Bash(PORT=3002 npm run dev)",
+      "Bash(fuser:*)",
+      "Bash(kill:*)",
+      "Bash(python:*)",
+      "Bash(lsof:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:chat.vercel.ai)",
+      "WebFetch(domain:demo.chat-sdk.dev)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(chmod:*)",
+      "Bash(cp:*)",
+      "Bash(ls:*)",
+      "Bash(mkdir:*)",
+      "Bash(mv:*)",
+      "Bash(tree:*)",
+      "Bash(rm:*)",
+      "Bash(cat:*)",
+      "Bash(npm install)",
+      "Bash(npm install:*)",
+      "Bash(dir:*)",
+      "Bash(findstr:*)",
+      "Bash(netstat:*)",
+      "Bash(pip install:*)",
+      "Bash(taskkill:*)",
+      "Read(//c/Users/Administrator/Documents/**)",
+      "Bash(.kill_ports.bat)",
+      "Bash(venv/Scripts/pip install:*)"
+    ],
+    "deny": []
+  }
+}
