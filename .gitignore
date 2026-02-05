@@ -70,3 +70,42 @@ backend/tests/
 *.tmp
 *.temp
 backend/temp_uploads/
+
+# Python 가상환경
+backend/venv/
+venv/
+
+# ChromaDB 데이터 (런타임 생성)
+backend/data/chromadb_user/
+backend/data/chromadb_admin/
+backend/data/chromadb/
+
+# 생성된 출력물
+backend/data/pdf_output/
+backend/data/chart_output/
+
+# 기타 데이터
+backend/chdata/
+backend/metadata/
+
+# MCP 설정 (API 키 포함)
+backend/mcp_config.json
+
+# 임시 파일
+nul
+**/nul
+tmpclaude-*
+**/tmpclaude-*
+*.tsbuildinfo
+pnpm-lock.yaml
+
+# 로컬 스크립트
+KILL_ALL_PYTHON.bat
+
+# IDE/에디터 설정
+.claude/
+
+# 백업 파일
+*.backup_*
+backend/response.txt
+backend/test_request.json

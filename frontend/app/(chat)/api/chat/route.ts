@@ -1,11 +1,27 @@
-import { generateUUID } from "@/lib/utils";
+﻿import { generateUUID } from "@/lib/utils";
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
 import { ChatSDKError } from "@/lib/errors";
 import { createUIMessageStream, JsonToSseTransformStream } from "ai";
 import type { ChatMessage } from "@/lib/types";
 
 export const maxDuration = 60;
-export const dynamic = 'force-dynamic';
+export const dynamic = "force-dynamic";
+
+// 백엔드 URL 설정
+const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+/**
+ * Get user ID for server-side API routes
+ * SSO 쿠키(empno)에서만 읽음 - 인증 필수
+ */
+const getUserId = (request: Request): string | null => {
+  const cookieHeader = request.headers.get("cookie") || "";
+  const empnoCookie = cookieHeader
+    .split(";")
+    .map((c) => c.trim())
+    .find((c) => c.startsWith("empno="));
+  return empnoCookie?.split("=")[1] || null;
+};
 
 export async function POST(request: Request) {
   let requestBody: PostRequestBody;
@@ -16,6 +32,16 @@ export async function POST(request: Request) {
   } catch (error) {
     return new ChatSDKError("bad_request:api").toResponse();
   }
+
+  const userId = getUserId(request);
+  if (!userId) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  // Use session_id from request body if provided, otherwise generate new one
+  const sessionId = requestBody.session_id || generateUUID();
 
   try {
     const { messages, message } = requestBody;
@@ -63,18 +89,21 @@ export async function POST(request: Request) {
 
         try {
           console.log("[ROUTE] Fetching backend...");
-          const backendResponse = await fetch("http://localhost:8000/api/v1/chat/message/stream", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              message: content,
-              user_id: "anonymous",
-              session_id: generateUUID(),
-              chat_mode: "normal",
-            }),
-          });
+          const backendResponse = await fetch(
+            `${BACKEND_URL}/api/v1/chat/message/stream`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                message: content,
+                user_id: userId,
+                session_id: sessionId,
+                chat_mode: "normal",
+              }),
+            }
+          );
 
           console.log("[ROUTE] Backend response status:", backendResponse.status);
 
@@ -83,7 +112,8 @@ export async function POST(request: Request) {
             console.error("[ROUTE]", errorText);
             writer.write({
               type: "text-delta",
-              textDelta: errorText,
+              delta: errorText,
+              id: generateUUID(),
             });
             return;
           }
@@ -93,7 +123,8 @@ export async function POST(request: Request) {
             console.error("[ROUTE] No reader available");
             writer.write({
               type: "text-delta",
-              textDelta: "No reader available",
+              delta: "No reader available",
+              id: generateUUID(),
             });
             return;
           }
@@ -127,14 +158,19 @@ export async function POST(request: Request) {
                     console.log("[ROUTE] Writing text delta:", data.chunk);
                     writer.write({
                       type: "text-delta",
-                      textDelta: data.chunk,
+                      delta: data.chunk,
+                      id: generateUUID(),
                     });
                   } else if (data.error) {
                     console.error("[ROUTE] Backend error:", data.error);
-                    const errorMessage = typeof data.error === 'string' ? data.error : JSON.stringify(data.error);
+                    const errorMessage =
+                      typeof data.error === "string"
+                        ? data.error
+                        : JSON.stringify(data.error);
                     writer.write({
                       type: "text-delta",
-                      textDelta: `Error: ${errorMessage}`,
+                      delta: `Error: ${errorMessage}`,
+                      id: generateUUID(),
                     });
                   }
                 } catch (e) {
@@ -147,7 +183,8 @@ export async function POST(request: Request) {
           console.error("[ROUTE] Stream processing error:", error);
           writer.write({
             type: "text-delta",
-            textDelta: `Stream error: ${String(error)}`,
+            delta: `Stream error: ${String(error)}`,
+            id: generateUUID(),
           });
         }
 
@@ -161,10 +198,9 @@ export async function POST(request: Request) {
       headers: {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
+        Connection: "keep-alive",
       },
     });
-
   } catch (error) {
     console.error("Unhandled error in chat API:", error);
     return new ChatSDKError("offline:chat").toResponse();

@@ -1,19 +1,22 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-// import type { User } from "next-auth";
+import type { User } from "@/lib/types";
 import { useState } from "react";
 import { toast } from "sonner";
 import { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
 import { PlusIcon, TrashIcon } from "@/components/icons";
+import { Search } from "lucide-react";
 import {
   getChatHistoryPaginationKey,
   SidebarHistory,
 } from "@/components/sidebar-history";
 import { SidebarUserNav } from "@/components/sidebar-user-nav";
+import { SidebarWorkspaces } from "@/components/sidebar-workspaces";
+import { ChatSearchModal } from "@/components/chat-search-modal";
 import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import {
   Sidebar,
   SidebarContent,
@@ -39,6 +42,7 @@ export function AppSidebar({ user }: { user: User | undefined }) {
   const { setOpenMobile } = useSidebar();
   const { mutate } = useSWRConfig();
   const [showDeleteAllDialog, setShowDeleteAllDialog] = useState(false);
+  const [showSearchModal, setShowSearchModal] = useState(false);
 
   const handleDeleteAll = () => {
     const deletePromise = fetch("/api/history", {
@@ -63,18 +67,34 @@ export function AppSidebar({ user }: { user: User | undefined }) {
         <SidebarHeader>
           <SidebarMenu>
             <div className="flex flex-row items-center justify-between">
-              <Link
-                className="flex flex-row items-center gap-3"
-                href="/"
+              <div
+                className="flex flex-row items-center gap-3 cursor-pointer"
                 onClick={() => {
                   setOpenMobile(false);
+                  router.push("/");
+                  router.refresh();
                 }}
               >
-                <span className="cursor-pointer rounded-md px-2 font-semibold text-lg hover:bg-muted">
-                  &nbsp;Always On, Lucid
+                <span className="rounded-md px-2 font-semibold text-lg hover:bg-muted">
+                  &nbsp;Lucid AI
                 </span>
-              </Link>
+              </div>
               <div className="flex flex-row gap-1">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      className="h-8 p-1 md:h-fit md:p-2"
+                      onClick={() => setShowSearchModal(true)}
+                      type="button"
+                      variant="ghost"
+                    >
+                      <Search className="size-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent align="end" className="hidden md:block">
+                    Search Chats
+                  </TooltipContent>
+                </Tooltip>
                 {user && (
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -116,7 +136,9 @@ export function AppSidebar({ user }: { user: User | undefined }) {
           </SidebarMenu>
         </SidebarHeader>
         <SidebarContent>
-          <SidebarHistory user={user} />
+          <SidebarWorkspaces />
+          <Separator className="my-2" />
+          <SidebarHistory />
         </SidebarContent>
         <SidebarFooter>{user && <SidebarUserNav user={user} />}</SidebarFooter>
       </Sidebar>
@@ -141,6 +163,11 @@ export function AppSidebar({ user }: { user: User | undefined }) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <ChatSearchModal
+        open={showSearchModal}
+        onOpenChange={setShowSearchModal}
+      />
     </>
   );
 }

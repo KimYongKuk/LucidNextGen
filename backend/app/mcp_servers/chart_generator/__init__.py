@@ -1,0 +1,1 @@
+# Chart Generator MCP Server

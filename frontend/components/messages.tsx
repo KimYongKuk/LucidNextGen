@@ -4,6 +4,7 @@ import { ArrowDownIcon } from "lucide-react";
 import { memo } from "react";
 import { useMessages } from "@/hooks/use-messages";
 import type { ChatMessage } from "@/lib/types";
+import { Workspace } from "@/lib/api/workspaces";
 // Mock Vote type
 type Vote = {
   chatId: string;
@@ -24,6 +25,7 @@ type MessagesProps = {
   isReadonly: boolean;
   isArtifactVisible: boolean;
   selectedModelId: string;
+  workspace?: Workspace | null;
 };
 
 function PureMessages({
@@ -35,6 +37,7 @@ function PureMessages({
   regenerate,
   isReadonly,
   selectedModelId: _selectedModelId,
+  workspace,
 }: MessagesProps) {
   const {
     containerRef: messagesContainerRef,
@@ -62,7 +65,7 @@ function PureMessages({
             <br />
             STATUS: {status}
           </div> */}
-          {messages.length === 0 && <Greeting />}
+          {messages.length === 0 && <Greeting workspace={workspace} />}
 
           {messages.map((message, index) => (
             <PreviewMessage
@@ -98,8 +101,8 @@ function PureMessages({
       <button
         aria-label="Scroll to bottom"
         className={`-translate-x-1/2 absolute bottom-4 left-1/2 z-10 rounded-full border bg-background p-2 shadow-lg transition-all hover:bg-muted ${isAtBottom
-            ? "pointer-events-none scale-0 opacity-0"
-            : "pointer-events-auto scale-100 opacity-100"
+          ? "pointer-events-none scale-0 opacity-0"
+          : "pointer-events-auto scale-100 opacity-100"
           }`}
         onClick={() => scrollToBottom("smooth")}
         type="button"
@@ -128,6 +131,9 @@ export const Messages = memo(PureMessages, (prevProps, nextProps) => {
     return false;
   }
   if (!equal(prevProps.votes, nextProps.votes)) {
+    return false;
+  }
+  if (prevProps.workspace?.id !== nextProps.workspace?.id) {
     return false;
   }
 

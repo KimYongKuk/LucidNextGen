@@ -28,6 +28,42 @@ import { MessageEditor } from "./message-editor";
 import { MessageReasoning } from "./message-reasoning";
 import { PreviewAttachment } from "./preview-attachment";
 import { Weather } from "./weather";
+import { SourcesCarousel } from "./sources-carousel";
+import { CorpSourcesCarousel } from "./corp-sources-carousel";
+import { YouTubeCard } from "./youtube-card";
+import { YouTubeModal } from "./youtube-modal";
+import { ChartDisplay } from "./chart-display";
+
+// Separate component to handle YouTube summary with card and modal
+const YoutubeSummaryCard = ({ summary }: { summary: any }) => {
+  const [showModal, setShowModal] = useState(false);
+
+  return (
+    <>
+      {/* Border line before the YouTube card */}
+      <div className="my-4 border-t border-border/50" />
+      <div className="max-w-md">
+        <YouTubeCard
+          title={summary.title}
+          videoId={summary.video_id}
+          summary={summary.summary}
+          onClick={() => setShowModal(true)}
+        />
+      </div>
+      <YouTubeModal
+        isOpen={showModal}
+        onClose={() => setShowModal(false)}
+        videoUrl={summary.original_link}
+        videoId={summary.video_id}
+        title={summary.title}
+        summary={summary.summary}
+        insight={summary.insight}
+        keywords={summary.keywords}
+        segments={summary.segments}
+      />
+    </>
+  );
+};
 
 const PurePreviewMessage = ({
   chatId,
@@ -123,6 +159,28 @@ const PurePreviewMessage = ({
 
             if (type === "text") {
               if (mode === "view") {
+                const isAssistantLoadingPlaceholder =
+                  message.role === "assistant" &&
+                  isLoading &&
+                  !(part.text?.trim()?.length);
+
+                if (isAssistantLoadingPlaceholder) {
+                  return (
+                    <div key={key}>
+                      <MessageContent className="w-fit rounded-2xl px-3 py-2 text-left text-muted-foreground">
+                        <div className="relative inline-flex items-center gap-2">
+                          <span className="absolute inset-0 animate-pulse text-muted-foreground/40 blur">
+                            루시드가 생각을 정리하고 있습니다. 잠시만 기다려주세요.
+                          </span>
+                          <span className="relative animate-[pulse_1.6s_ease-in-out_infinite]">
+                          루시드가 생각을 정리하고 있습니다. 잠시만 기다려주세요.
+                          </span>
+                        </div>
+                      </MessageContent>
+                    </div>
+                  );
+                }
+
                 return (
                   <div key={key}>
                     {/* <div className="text-xs text-red-500 font-mono p-2 border border-red-200 my-2">
@@ -130,19 +188,18 @@ const PurePreviewMessage = ({
                     </div> */}
                     <MessageContent
                       className={cn({
-                        "w-fit break-words rounded-2xl px-3 py-2 text-right text-white":
+                        "w-fit break-words rounded-xl px-2.5 py-1 text-left bg-[#B85C38] dark:bg-[#8B4513] text-white shadow-sm":
                           message.role === "user",
                         "bg-transparent px-0 py-0 text-left":
                           message.role === "assistant",
                       })}
                       data-testid="message-content"
-                      style={
-                        message.role === "user"
-                          ? { backgroundColor: "#B85C38" }
-                          : undefined
-                      }
                     >
-                      <Response>{sanitizeText(part.text)}</Response>
+                      {message.role === "user" ? (
+                        <div className="whitespace-pre-wrap">{sanitizeText(part.text)}</div>
+                      ) : (
+                        <Response isStreaming={isLoading}>{sanitizeText(part.text)}</Response>
+                      )}
                     </MessageContent>
                   </div>
                 );
@@ -271,6 +328,30 @@ const PurePreviewMessage = ({
               );
             }
 
+            // @ts-ignore - Custom type for sources
+            if (type === "sources") {
+              const sourcesPart = part as any;
+              return <SourcesCarousel key={key} sources={sourcesPart.sources} />;
+            }
+
+            // @ts-ignore - Custom type for corp sources
+            if (type === "corp-sources") {
+              const corpSourcesPart = part as any;
+              return <CorpSourcesCarousel key={key} sources={corpSourcesPart.sources} />;
+            }
+
+            // @ts-ignore - Custom type for youtube summary
+            if (type === "youtube-summary") {
+              const youtubePart = part as any;
+              return <YoutubeSummaryCard key={key} summary={youtubePart.summary} />;
+            }
+
+            // @ts-ignore - Custom type for chart data
+            if (type === "chart-data") {
+              const chartPart = part as any;
+              return <ChartDisplay key={key} chartData={chartPart.chartData} />;
+            }
+
             return null;
           })}
 
@@ -309,7 +390,7 @@ export const PreviewMessage = memo(
       return false;
     }
 
-    return false;
+    return true; // props가 모두 같으면 리렌더링 스킵
   }
 );
 

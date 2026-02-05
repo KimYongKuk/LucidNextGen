@@ -15,12 +15,42 @@ export default function Page(props: { params: Promise<{ id: string }> }) {
 
 async function ChatPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-
-  // Since we removed the DB, we cannot retrieve chat history.
-  // We will render the chat component with empty messages.
-  // In a real integration, you would fetch history from your backend here.
-
   const cookieStore = await cookies();
+
+  // SSO 쿠키에서 user_id 읽기
+  const userId = cookieStore.get("empno")?.value || "anonymous";
+
+  // Fetch chat history from backend
+  let initialMessages = [];
+  let workspaceId = null;
+  try {
+    // Use relative URL for server-side fetch to Next.js API routes
+    const apiUrl = `http://localhost:3000/api/messages?session_id=${id}&user_id=${userId}`;
+
+    // Forward cookies to the API route
+    const cookieHeader = cookieStore.getAll()
+      .map(c => `${c.name}=${c.value}`)
+      .join("; ");
+
+    const res = await fetch(apiUrl, {
+      cache: "no-store", // Always fetch latest messages
+      headers: {
+        Cookie: cookieHeader,
+      },
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      initialMessages = data.messages || [];
+      workspaceId = data.workspace_id || null;
+    } else {
+      console.error("Failed to load chat history:", res.status, res.statusText);
+    }
+  } catch (error) {
+    console.error("Failed to load chat history:", error);
+    // Fallback to empty messages on error
+  }
+
   const chatModelFromCookie = cookieStore.get("chat-model");
   const initialChatModel = chatModelFromCookie?.value || DEFAULT_CHAT_MODEL;
 
@@ -30,9 +60,9 @@ async function ChatPage({ params }: { params: Promise<{ id: string }> }) {
         autoResume={false}
         id={id}
         initialChatModel={initialChatModel}
-        initialMessages={[]} // History is not persisted in this UI-only version
-        initialVisibilityType="private"
+        initialMessages={initialMessages}
         isReadonly={false}
+        workspaceId={workspaceId}
       />
       <DataStreamHandler />
     </>

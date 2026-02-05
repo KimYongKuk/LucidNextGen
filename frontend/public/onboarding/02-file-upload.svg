@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="450" viewBox="0 0 800 450">
+  <defs>
+    <linearGradient id="bg2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#10b981;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#14b8a6;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <rect width="800" height="450" fill="url(#bg2)"/>
+  <rect x="200" y="80" width="400" height="250" rx="16" fill="white" fill-opacity="0.15" stroke="white" stroke-opacity="0.3" stroke-width="2" stroke-dasharray="10,5"/>
+  <circle cx="400" cy="180" r="40" fill="white" fill-opacity="0.2"/>
+  <path d="M400 155 L400 205 M375 180 L400 155 L425 180" stroke="white" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <text x="400" y="255" font-family="system-ui, sans-serif" font-size="16" fill="white" text-anchor="middle" opacity="0.9">파일을 드래그하거나 클릭하여 업로드</text>
+  <text x="400" y="275" font-family="system-ui, sans-serif" font-size="12" fill="white" text-anchor="middle" opacity="0.6" font-style="italic">"이 문서 요약해줘"</text>
+  <rect x="250" y="290" width="70" height="25" rx="4" fill="white" fill-opacity="0.2"/>
+  <rect x="330" y="290" width="70" height="25" rx="4" fill="white" fill-opacity="0.2"/>
+  <rect x="410" y="290" width="70" height="25" rx="4" fill="white" fill-opacity="0.2"/>
+  <rect x="490" y="290" width="70" height="25" rx="4" fill="white" fill-opacity="0.2"/>
+  <text x="285" y="307" font-family="system-ui, sans-serif" font-size="11" fill="white" text-anchor="middle">PDF</text>
+  <text x="365" y="307" font-family="system-ui, sans-serif" font-size="11" fill="white" text-anchor="middle">DOCX</text>
+  <text x="445" y="307" font-family="system-ui, sans-serif" font-size="11" fill="white" text-anchor="middle">XLSX</text>
+  <text x="525" y="307" font-family="system-ui, sans-serif" font-size="11" fill="white" text-anchor="middle">IMG</text>
+  <text x="400" y="420" font-family="system-ui, sans-serif" font-size="18" fill="white" text-anchor="middle" opacity="0.8">문서 및 이미지 업로드</text>
+</svg>

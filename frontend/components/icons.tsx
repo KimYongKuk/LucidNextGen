@@ -1211,3 +1211,39 @@ export const WarningIcon = ({ size = 16 }: { size?: number }) => {
     </svg>
   );
 };
+
+export const PinIcon = ({ size = 16 }: { size?: number }) => (
+  <svg
+    height={size}
+    strokeLinejoin="round"
+    style={{ color: "currentcolor" }}
+    viewBox="0 0 16 16"
+    width={size}
+  >
+    <path
+      clipRule="evenodd"
+      d="M10.5 3.5V2H11.25V0.5H4.75V2H5.5V3.5L4.5 9.5H2V11H7.25V15.5H8.75V11H14V9.5H11.5L10.5 3.5Z"
+      fill="currentColor"
+      fillRule="evenodd"
+    />
+  </svg>
+);
+
+export const MicrophoneIcon = ({ size = 16 }: { size?: number }) => (
+  <svg
+    height={size}
+    width={size}
+    viewBox="0 0 16 16"
+    fill="none"
+    style={{ color: "currentcolor" }}
+  >
+    <path
+      d="M8 1C6.89543 1 6 1.89543 6 3V8C6 9.10457 6.89543 10 8 10C9.10457 10 10 9.10457 10 8V3C10 1.89543 9.10457 1 8 1Z"
+      fill="currentColor"
+    />
+    <path
+      d="M4 7C4.27614 7 4.5 7.22386 4.5 7.5V8C4.5 9.933 6.067 11.5 8 11.5C9.933 11.5 11.5 9.933 11.5 8V7.5C11.5 7.22386 11.7239 7 12 7C12.2761 7 12.5 7.22386 12.5 7.5V8C12.5 10.3688 10.7178 12.3131 8.5 12.5V14H10.5C10.7761 14 11 14.2239 11 14.5C11 14.7761 10.7761 15 10.5 15H5.5C5.22386 15 5 14.7761 5 14.5C5 14.2239 5.22386 14 5.5 14H7.5V12.5C5.28224 12.3131 3.5 10.3688 3.5 8V7.5C3.5 7.22386 3.72386 7 4 7Z"
+      fill="currentColor"
+    />
+  </svg>
+);

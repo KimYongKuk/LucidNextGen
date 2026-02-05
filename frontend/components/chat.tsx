@@ -4,6 +4,7 @@
 // import { DefaultChatTransport } from "ai";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useSimpleChat } from "@/hooks/use-simple-chat";
+import { useSessionCleanup } from "@/hooks/use-session-cleanup";
 import { useEffect, useRef, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
@@ -20,40 +21,40 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useArtifactSelector } from "@/hooks/use-artifact";
 import { useAutoResume } from "@/hooks/use-auto-resume";
-import { useChatVisibility } from "@/hooks/use-chat-visibility";
 // import type { Vote } from "@/lib/db/schema";
 import { ChatSDKError } from "@/lib/errors";
-import type { Attachment, ChatMessage } from "@/lib/types";
-import { fetcher, fetchWithErrorHandlers, generateUUID } from "@/lib/utils";
+import type { Attachment, ChatMessage, Vote } from "@/lib/types";
+import {
+  fetcher,
+  fetchWithErrorHandlers,
+  generateUUID,
+  getUserId,
+} from "@/lib/utils";
+import { workspaceApi, type Workspace } from "@/lib/api/workspaces";
 import { Artifact } from "./artifact";
 import { useDataStream } from "./data-stream-provider";
 import { Messages } from "./messages";
 import { MultimodalInput } from "./multimodal-input";
 import { getChatHistoryPaginationKey } from "./sidebar-history";
 import { toast } from "./toast";
-import type { VisibilityType } from "./visibility-selector";
 
 export function Chat({
   id,
   initialMessages,
   initialChatModel,
-  initialVisibilityType,
   isReadonly,
   autoResume,
+  workspaceId,
 }: {
   id: string;
   initialMessages: ChatMessage[];
   initialChatModel: string;
-  initialVisibilityType: VisibilityType;
   isReadonly: boolean;
   autoResume: boolean;
+  workspaceId?: number | null;
 }) {
   const router = useRouter();
-
-  const { visibilityType } = useChatVisibility({
-    chatId: id,
-    initialVisibilityType,
-  });
+  const userId = getUserId() ?? "";
 
   const { mutate } = useSWRConfig();
 
@@ -78,6 +79,16 @@ export function Chat({
     currentModelIdRef.current = currentModelId;
   }, [currentModelId]);
 
+  const searchParams = useSearchParams();
+  const query = searchParams.get("query");
+  const workspaceIdParam = searchParams.get("workspace_id");
+  const workspaceIdFromUrl = workspaceIdParam ? parseInt(workspaceIdParam, 10) : null;
+
+  // workspace_id를 state로 저장하여 URL 변경에 영향받지 않도록 함
+  // (첫 메시지 전송 후 URL에서 query params가 제거되어도 workspace_id 유지)
+  const [stableWorkspaceId] = useState(() => workspaceId ?? workspaceIdFromUrl);
+  const effectiveWorkspaceId = stableWorkspaceId;
+
   const {
     messages,
     setMessages,
@@ -89,6 +100,7 @@ export function Chat({
   } = useSimpleChat({
     id,
     messages: initialMessages,
+    workspaceId: effectiveWorkspaceId,
     generateId: generateUUID,
     onData: (dataPart) => {
       console.log("[CHAT] onData received:", dataPart);
@@ -96,7 +108,16 @@ export function Chat({
     },
     onFinish: () => {
       console.log("[CHAT] onFinish called");
-      mutate(unstable_serialize(getChatHistoryPaginationKey));
+      mutate(
+        unstable_serialize((pageIndex, previousPageData) => {
+          const base = getChatHistoryPaginationKey(pageIndex, previousPageData);
+          if (!base) return null;
+
+          const url = new URL(base, "http://localhost");
+          url.searchParams.set("user_id", userId);
+          return url.pathname + url.search;
+        })
+      );
     },
     onError: (error) => {
       console.error("[CHAT] onError:", error);
@@ -118,9 +139,6 @@ export function Chat({
 
   console.log("[CHAT] Current messages:", messages.length, messages);
 
-  const searchParams = useSearchParams();
-  const query = searchParams.get("query");
-
   const [hasAppendedQuery, setHasAppendedQuery] = useState(false);
 
   useEffect(() => {
@@ -140,8 +158,19 @@ export function Chat({
     fetcher
   );
 
+  const { data: workspace } = useSWR<Workspace>(
+    effectiveWorkspaceId ? `/api/v1/workspaces/${effectiveWorkspaceId}` : null,
+    () => workspaceApi.get(effectiveWorkspaceId!)
+  );
+
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const isArtifactVisible = useArtifactSelector((state) => state.isVisible);
+
+  // 세션에 업로드된 문서 파일 추적 (이미지는 base64로 저장되므로 제외)
+  const [hasUploadedSessionFiles, setHasUploadedSessionFiles] = useState(false);
+
+  // 세션 파일 자동 정리 훅 (세션 전환, 브라우저 닫기 시)
+  useSessionCleanup(id, hasUploadedSessionFiles);
 
   useAutoResume({
     autoResume,
@@ -156,7 +185,6 @@ export function Chat({
         <ChatHeader
           chatId={id}
           isReadonly={isReadonly}
-          selectedVisibilityType={initialVisibilityType}
         />
 
         <Messages
@@ -169,6 +197,7 @@ export function Chat({
           setMessages={setMessages}
           status={status}
           votes={votes}
+          workspace={workspace}
         />
 
         <div className="sticky bottom-0 z-1 mx-auto flex w-full max-w-4xl gap-2 border-t-0 bg-background px-2 pb-3 md:px-4 md:pb-4">
@@ -178,9 +207,9 @@ export function Chat({
               chatId={id}
               input={input}
               messages={messages}
+              onFileUploaded={() => setHasUploadedSessionFiles(true)}
               onModelChange={setCurrentModelId}
               selectedModelId={currentModelId}
-              selectedVisibilityType={visibilityType}
               sendMessage={sendMessage}
               setAttachments={setAttachments}
               setInput={setInput}
@@ -200,7 +229,6 @@ export function Chat({
         messages={messages}
         regenerate={regenerate}
         selectedModelId={currentModelId}
-        selectedVisibilityType={visibilityType}
         sendMessage={sendMessage}
         setAttachments={setAttachments}
         setInput={setInput}

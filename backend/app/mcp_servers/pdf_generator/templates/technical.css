@@ -1,0 +1,312 @@
+/*
+ * Technical Document Style - 기술 문서용 CSS
+ * 테이블 정의서, API 문서, 시스템 설계서 등에 적합
+ */
+
+/* ========== 페이지 설정 ========== */
+@page {
+    size: A4;
+    margin: 20mm 15mm 25mm 15mm;
+
+    @bottom-center {
+        content: counter(page) " / " counter(pages);
+        font-size: 9pt;
+        color: #666;
+    }
+}
+
+@page :first {
+    margin-top: 15mm;
+}
+
+/* ========== 기본 스타일 ========== */
+* {
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Malgun Gothic', '맑은 고딕', 'Nanum Gothic', '나눔고딕',
+                 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 10pt;
+    line-height: 1.6;
+    color: #333;
+    background: white;
+}
+
+.document {
+    max-width: 100%;
+}
+
+/* ========== 제목 스타일 ========== */
+h1 {
+    font-size: 22pt;
+    font-weight: 700;
+    color: #1a365d;
+    text-align: center;
+    margin: 0 0 10mm 0;
+    padding-bottom: 5mm;
+    border-bottom: 3px solid #2b6cb0;
+    page-break-after: avoid;
+}
+
+h2 {
+    font-size: 14pt;
+    font-weight: 600;
+    color: #2b6cb0;
+    margin: 8mm 0 4mm 0;
+    padding-bottom: 2mm;
+    border-bottom: 2px solid #2b6cb0;
+    page-break-after: avoid;
+}
+
+h3 {
+    font-size: 12pt;
+    font-weight: 600;
+    color: #2b6cb0;
+    margin: 6mm 0 3mm 0;
+    page-break-after: avoid;
+}
+
+h4 {
+    font-size: 11pt;
+    font-weight: 600;
+    color: #4a5568;
+    margin: 4mm 0 2mm 0;
+    page-break-after: avoid;
+}
+
+/* ========== 본문 스타일 ========== */
+p {
+    margin: 0 0 3mm 0;
+    text-align: justify;
+}
+
+strong {
+    font-weight: 600;
+    color: #2d3748;
+}
+
+em {
+    font-style: italic;
+    color: #4a5568;
+}
+
+/* ========== 테이블 스타일 ========== */
+table, .data-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 4mm 0 6mm 0;
+    font-size: 9pt;
+    page-break-inside: auto;
+}
+
+table tr {
+    page-break-inside: avoid;
+    page-break-after: auto;
+}
+
+th {
+    background: linear-gradient(180deg, #4a5568 0%, #2d3748 100%);
+    color: white;
+    font-weight: 600;
+    text-align: left;
+    padding: 3mm 2mm;
+    border: 1px solid #2d3748;
+    font-size: 9pt;
+}
+
+td {
+    padding: 2.5mm 2mm;
+    border: 1px solid #e2e8f0;
+    vertical-align: top;
+}
+
+/* 줄무늬 행 */
+tr:nth-child(even) {
+    background-color: #f7fafc;
+}
+
+tr:nth-child(odd) {
+    background-color: #ffffff;
+}
+
+/* 호버 효과 (PDF에서는 적용 안됨, 웹 미리보기용) */
+tr:hover {
+    background-color: #edf2f7;
+}
+
+/* 특수 셀 스타일 */
+td:first-child {
+    text-align: center;
+    font-weight: 500;
+}
+
+/* PK, FK 등 키 표시 */
+td:contains("PK"), td:contains("FK") {
+    font-weight: 600;
+    color: #2b6cb0;
+}
+
+/* ========== 코드 블록 스타일 ========== */
+pre {
+    background: #1a202c;
+    color: #e2e8f0;
+    padding: 4mm;
+    border-radius: 2mm;
+    overflow-x: auto;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 8.5pt;
+    line-height: 1.5;
+    margin: 4mm 0;
+    page-break-inside: avoid;
+}
+
+code {
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 9pt;
+}
+
+/* 인라인 코드 */
+p code, li code, td code {
+    background: #edf2f7;
+    color: #2d3748;
+    padding: 0.5mm 1.5mm;
+    border-radius: 1mm;
+    font-size: 8.5pt;
+}
+
+/* 코드 하이라이팅 */
+.highlight {
+    background: #1a202c;
+    border-radius: 2mm;
+    padding: 4mm;
+    margin: 4mm 0;
+}
+
+.highlight pre {
+    background: transparent;
+    padding: 0;
+    margin: 0;
+}
+
+/* SQL 키워드 하이라이팅 */
+.highlight .k,  /* Keyword */
+.highlight .kd, /* Keyword Declaration */
+.highlight .kn, /* Keyword Namespace */
+.highlight .kp, /* Keyword Pseudo */
+.highlight .kr, /* Keyword Reserved */
+.highlight .kt  /* Keyword Type */
+{
+    color: #63b3ed;
+    font-weight: 600;
+}
+
+.highlight .s,  /* String */
+.highlight .s1, /* String Single */
+.highlight .s2  /* String Double */
+{
+    color: #68d391;
+}
+
+.highlight .c,  /* Comment */
+.highlight .c1, /* Comment Single */
+.highlight .cm  /* Comment Multiline */
+{
+    color: #718096;
+    font-style: italic;
+}
+
+.highlight .n,  /* Name */
+.highlight .na, /* Name Attribute */
+.highlight .nb, /* Name Builtin */
+.highlight .nc  /* Name Class */
+{
+    color: #f6e05e;
+}
+
+.highlight .mi, /* Number Integer */
+.highlight .mf  /* Number Float */
+{
+    color: #fc8181;
+}
+
+/* ========== 목록 스타일 ========== */
+ul, ol {
+    margin: 2mm 0 4mm 0;
+    padding-left: 6mm;
+}
+
+li {
+    margin: 1mm 0;
+}
+
+li::marker {
+    color: #2b6cb0;
+}
+
+/* ========== 구분선 ========== */
+hr {
+    border: none;
+    border-top: 1px solid #e2e8f0;
+    margin: 5mm 0;
+}
+
+/* ========== 인용 블록 ========== */
+blockquote {
+    border-left: 4px solid #2b6cb0;
+    padding-left: 4mm;
+    margin: 4mm 0;
+    color: #4a5568;
+    font-style: italic;
+    background: #f7fafc;
+    padding: 3mm 4mm;
+}
+
+/* ========== 푸터 ========== */
+.page-footer {
+    position: fixed;
+    bottom: 10mm;
+    right: 15mm;
+    font-size: 8pt;
+    color: #a0aec0;
+}
+
+.generated-date {
+    font-style: italic;
+}
+
+/* ========== ER 다이어그램 (ASCII) ========== */
+pre.er-diagram {
+    font-family: 'Consolas', 'Monaco', monospace;
+    background: #f7fafc;
+    color: #2d3748;
+    border: 1px solid #e2e8f0;
+    text-align: center;
+}
+
+/* ========== 페이지 나눔 제어 ========== */
+h1, h2, h3, h4 {
+    page-break-after: avoid;
+}
+
+table {
+    page-break-inside: auto;
+}
+
+.no-break {
+    page-break-inside: avoid;
+}
+
+.page-break {
+    page-break-before: always;
+}
+
+/* ========== 버전 정보 박스 ========== */
+.version-info {
+    background: #edf2f7;
+    border: 1px solid #e2e8f0;
+    border-radius: 2mm;
+    padding: 3mm;
+    margin-bottom: 5mm;
+    font-size: 9pt;
+}

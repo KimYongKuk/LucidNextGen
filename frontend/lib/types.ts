@@ -8,6 +8,34 @@ import type { updateDocument } from "./ai/tools/update-document";
 // import type { Suggestion } from "./db/schema";
 import type { AppUsage } from "./usage";
 
+export interface Vote {
+  chatId: string;
+  messageId: string;
+  isUpvoted: boolean;
+}
+
+export interface Document {
+  id: string;
+  title: string;
+  content: string;
+  kind: ArtifactKind;
+  createdAt: Date;
+  userId: string;
+}
+
+export interface User {
+  id: string;
+  email: string;
+  name?: string;
+  image?: string;
+  type?: "regular" | "admin";
+}
+
+export interface Session {
+  user?: User;
+  expires?: string;
+}
+
 export type DataPart = { type: "append-message"; message: string };
 
 export const messageMetadataSchema = z.object({
@@ -30,6 +58,34 @@ export type ChatTools = {
   requestSuggestions: requestSuggestionsTool;
 };
 
+export type SearchSource = {
+  url: string;
+  title: string;
+  score: number;
+};
+
+export type YoutubeSegment = {
+  start_time: number;
+  title: string;
+  content: string;
+};
+
+export type YoutubeSummary = {
+  video_id: string;
+  title: string;
+  original_link: string;
+  summary: string;
+  insight?: string;
+  keywords?: string[];
+  segments?: YoutubeSegment[];
+};
+
+export type CorpSource = {
+  filename: string;
+  category: string;  // "인사", "재경", "IT", "공통", "안전환경"
+  count: number;
+};
+
 export type CustomUIDataTypes = {
   textDelta: string;
   imageDelta: string;
@@ -43,16 +99,37 @@ export type CustomUIDataTypes = {
   clear: null;
   finish: null;
   usage: AppUsage;
+  searchSources: SearchSource[];
+  // Custom types for search results (non-data prefix)
+  sources: { sources: SearchSource[] };
+  youtubeSummary: YoutubeSummary;
+  "youtube-summary": { summary: YoutubeSummary };
+  corpSources: CorpSource[];
+  "corp-sources": { sources: CorpSource[] };
 };
 
 export type ChatMessage = UIMessage<
   MessageMetadata,
   CustomUIDataTypes,
   ChatTools
->;
+> & {
+  sources?: SearchSource[]; // History에서 복원된 출처
+  youtubeSummary?: YoutubeSummary; // History에서 복원된 유튜브 요약
+  corpSources?: CorpSource[]; // History에서 복원된 사내 문서 출처
+  createdAt?: Date;
+};
 
 export type Attachment = {
   name: string;
   url: string;
   contentType: string;
+  status?: 'uploading' | 'processing' | 'ready' | 'error';
+  error?: string;
 };
+
+// Anonymous feedback types
+export interface FeedbackMessage {
+  feedback_id: string;
+  message: string;
+  created_at: string;
+}

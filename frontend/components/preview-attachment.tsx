@@ -13,14 +13,19 @@ export const PreviewAttachment = ({
   isUploading?: boolean;
   onRemove?: () => void;
 }) => {
-  const { name, url, contentType } = attachment;
+  const { name, url, contentType, status, error } = attachment;
+  const isProcessing = isUploading || status === 'uploading' || status === 'processing';
+  const hasError = status === 'error';
 
   return (
     <div
-      className="group relative size-16 overflow-hidden rounded-lg border bg-muted"
+      className={`group relative size-16 overflow-hidden rounded-lg border ${
+        hasError ? 'border-red-500 bg-red-50 dark:bg-red-950' : 'bg-muted'
+      }`}
       data-testid="input-attachment-preview"
+      title={hasError ? error : undefined}
     >
-      {contentType?.startsWith("image") ? (
+      {contentType?.startsWith("image") && url && !url.startsWith('uploading-') ? (
         <Image
           alt={name ?? "An image attachment"}
           className="size-full object-cover"
@@ -30,11 +35,11 @@ export const PreviewAttachment = ({
         />
       ) : (
         <div className="flex size-full items-center justify-center text-muted-foreground text-xs">
-          File
+          {hasError ? '!' : 'File'}
         </div>
       )}
 
-      {isUploading && (
+      {isProcessing && (
         <div
           className="absolute inset-0 flex items-center justify-center bg-black/50"
           data-testid="input-attachment-loader"
@@ -43,7 +48,16 @@ export const PreviewAttachment = ({
         </div>
       )}
 
-      {onRemove && !isUploading && (
+      {hasError && (
+        <div
+          className="absolute inset-0 flex items-center justify-center bg-red-500/20"
+          data-testid="input-attachment-error"
+        >
+          <span className="text-red-600 dark:text-red-400 text-2xl font-bold">!</span>
+        </div>
+      )}
+
+      {onRemove && !isProcessing && (
         <Button
           className="absolute top-0.5 right-0.5 size-4 rounded-full p-0 opacity-0 transition-opacity group-hover:opacity-100"
           onClick={onRemove}

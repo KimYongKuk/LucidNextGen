@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="450" viewBox="0 0 800 450">
+  <defs>
+    <linearGradient id="bg9" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#3b82f6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#2563eb;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <rect width="800" height="450" fill="url(#bg9)"/>
+  <circle cx="400" cy="130" r="50" fill="none" stroke="white" stroke-width="4" stroke-opacity="0.5"/>
+  <line x1="436" y1="166" x2="470" y2="200" stroke="white" stroke-width="4" stroke-opacity="0.5" stroke-linecap="round"/>
+  <text x="400" y="215" font-family="system-ui, sans-serif" font-size="13" fill="white" text-anchor="middle" opacity="0.7">"오늘 환율 알려줘"</text>
+  <rect x="150" y="240" width="500" height="70" rx="8" fill="white" fill-opacity="0.15"/>
+  <circle cx="195" cy="275" r="20" fill="white" fill-opacity="0.2"/>
+  <rect x="230" y="258" width="180" height="12" rx="2" fill="white" fill-opacity="0.5"/>
+  <rect x="230" y="278" width="380" height="8" rx="2" fill="white" fill-opacity="0.3"/>
+  <text x="575" y="280" font-family="system-ui, sans-serif" font-size="12" fill="white" opacity="0.7">출처 →</text>
+  <rect x="150" y="320" width="500" height="70" rx="8" fill="white" fill-opacity="0.15"/>
+  <circle cx="195" cy="355" r="20" fill="white" fill-opacity="0.2"/>
+  <rect x="230" y="338" width="200" height="12" rx="2" fill="white" fill-opacity="0.5"/>
+  <rect x="230" y="358" width="350" height="8" rx="2" fill="white" fill-opacity="0.3"/>
+  <text x="575" y="360" font-family="system-ui, sans-serif" font-size="12" fill="white" opacity="0.7">출처 →</text>
+  <text x="400" y="420" font-family="system-ui, sans-serif" font-size="18" fill="white" text-anchor="middle" opacity="0.8">실시간 웹 검색</text>
+</svg>

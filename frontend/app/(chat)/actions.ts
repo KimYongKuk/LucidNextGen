@@ -2,7 +2,6 @@
 
 import { generateText, type UIMessage } from "ai";
 import { cookies } from "next/headers";
-import type { VisibilityType } from "@/components/visibility-selector";
 import { titlePrompt } from "@/lib/ai/prompts";
 import { myProvider } from "@/lib/ai/providers";
 import { getTextFromMessage } from "@/lib/utils";
@@ -29,15 +28,4 @@ export async function generateTitleFromUserMessage({
 export async function deleteTrailingMessages({ id }: { id: string }) {
   // Stubbed for UI only
   console.log("deleteTrailingMessages", id);
-}
-
-export async function updateChatVisibility({
-  chatId,
-  visibility,
-}: {
-  chatId: string;
-  visibility: VisibilityType;
-}) {
-  // Stubbed for UI only
-  console.log("updateChatVisibility", chatId, visibility);
 }

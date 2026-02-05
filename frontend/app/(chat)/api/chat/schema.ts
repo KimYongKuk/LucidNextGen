@@ -17,6 +17,7 @@ const partSchema = z.union([textPartSchema, filePartSchema]);
 export const postRequestBodySchema = z.object({
   messages: z.array(z.any()).optional(),
   message: z.any().optional(),
+  session_id: z.string().optional(),
 }).passthrough();
 
 export type PostRequestBody = z.infer<typeof postRequestBodySchema>;

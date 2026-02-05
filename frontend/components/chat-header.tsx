@@ -1,26 +1,29 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { memo } from "react";
+import { memo, useState } from "react";
 import { useWindowSize } from "usehooks-ts";
+import { useTheme } from "next-themes";
 import { SidebarToggle } from "@/components/sidebar-toggle";
 import { Button } from "@/components/ui/button";
-import { PlusIcon, VercelIcon } from "./icons";
+import { PlusIcon } from "./icons";
 import { useSidebar } from "./ui/sidebar";
-import { VisibilitySelector, type VisibilityType } from "./visibility-selector";
+import { HelpCircle, MessageSquare, Moon, Sun } from "lucide-react";
+import { useOnboarding } from "@/components/onboarding/onboarding-provider";
+import { FeedbackModal } from "@/components/feedback-modal";
 
 function PureChatHeader({
   chatId,
-  selectedVisibilityType,
   isReadonly,
 }: {
   chatId: string;
-  selectedVisibilityType: VisibilityType;
   isReadonly: boolean;
 }) {
   const router = useRouter();
   const { open } = useSidebar();
+  const { theme, setTheme } = useTheme();
+  const { openOnboarding } = useOnboarding();
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
 
   const { width: windowWidth } = useWindowSize();
 
@@ -42,13 +45,43 @@ function PureChatHeader({
         </Button>
       )}
 
-      {!isReadonly && (
-        <VisibilitySelector
-          chatId={chatId}
-          className="order-1 md:order-2"
-          selectedVisibilityType={selectedVisibilityType}
-        />
-      )}
+      <Button
+        className="order-3 ml-auto h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
+        onClick={() => setShowFeedbackModal(true)}
+        variant="ghost"
+        size="icon"
+        title="피드백"
+      >
+        <MessageSquare className="h-4 w-4" />
+        <span className="sr-only">피드백</span>
+      </Button>
+
+      <Button
+        className="order-4 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
+        onClick={openOnboarding}
+        variant="ghost"
+        size="icon"
+        title="사용 가이드"
+      >
+        <HelpCircle className="h-4 w-4" />
+        <span className="sr-only">사용 가이드</span>
+      </Button>
+
+      <Button
+        className="order-5 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
+        onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+        variant="outline"
+        size="icon"
+      >
+        <Sun className="h-4 w-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
+        <Moon className="absolute h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
+        <span className="sr-only">Toggle theme</span>
+      </Button>
+
+      <FeedbackModal
+        open={showFeedbackModal}
+        onOpenChange={setShowFeedbackModal}
+      />
 
       {/* <Button
         asChild
@@ -70,7 +103,6 @@ function PureChatHeader({
 export const ChatHeader = memo(PureChatHeader, (prevProps, nextProps) => {
   return (
     prevProps.chatId === nextProps.chatId &&
-    prevProps.selectedVisibilityType === nextProps.selectedVisibilityType &&
     prevProps.isReadonly === nextProps.isReadonly
   );
 });

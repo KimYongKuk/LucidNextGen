@@ -2,9 +2,9 @@ import equal from "fast-deep-equal";
 import { memo } from "react";
 import { toast } from "sonner";
 import { useSWRConfig } from "swr";
-import { useCopyToClipboard } from "usehooks-ts";
-// import type { Vote } from "@/lib/db/schema";
-import type { ChatMessage } from "@/lib/types";
+// import { useCopyToClipboard } from "usehooks-ts"; // 기존 훅 제거 (HTTPS 전용)
+import type { ChatMessage, Vote } from "@/lib/types";
+import { copyToClipboard } from "@/lib/clipboard"; // HTTPS + HTTP fallback 지원
 import { Action, Actions } from "./elements/actions";
 import { CopyIcon, PencilEditIcon, ThumbDownIcon, ThumbUpIcon } from "./icons";
 
@@ -22,7 +22,7 @@ export function PureMessageActions({
   setMode?: (mode: "view" | "edit") => void;
 }) {
   const { mutate } = useSWRConfig();
-  const [_, copyToClipboard] = useCopyToClipboard();
+  // const [_, copyToClipboard] = useCopyToClipboard(); // 기존 코드 제거
 
   if (isLoading) {
     return null;
@@ -34,14 +34,30 @@ export function PureMessageActions({
     .join("\n")
     .trim();
 
+  /**
+   * 메시지 복사 핸들러
+   *
+   * @description
+   * - HTTPS 환경: Clipboard API 사용
+   * - HTTP 환경: execCommand fallback 사용
+   * - 복사 성공/실패에 따라 toast 메시지 표시
+   */
   const handleCopy = async () => {
+    // 복사할 텍스트가 없는 경우
     if (!textFromParts) {
       toast.error("There's no text to copy!");
       return;
     }
 
-    await copyToClipboard(textFromParts);
-    toast.success("Copied to clipboard!");
+    // 클립보드 복사 실행 (fallback 포함)
+    const success = await copyToClipboard(textFromParts);
+
+    // 결과에 따른 피드백 표시
+    if (success) {
+      toast.success("Copied to clipboard!");
+    } else {
+      toast.error("Failed to copy to clipboard");
+    }
   };
 
   // User messages get edit (on hover) and copy actions

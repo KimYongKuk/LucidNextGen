@@ -69,6 +69,7 @@
   from {
     height: 0;
   }
+
   to {
     height: var(--radix-accordion-content-height);
   }
@@ -78,6 +79,7 @@
   from {
     height: var(--radix-accordion-content-height);
   }
+
   to {
     height: 0;
   }
@@ -87,7 +89,108 @@
   * {
     @apply border-border outline-ring/50;
   }
+
   body {
     @apply bg-background text-foreground;
+  }
+}
+
+@layer utilities {
+
+  /* 사이드바 스크롤바 스타일 커스터마이징 */
+  [data-sidebar="content"]::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  [data-sidebar="content"]::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  [data-sidebar="content"]::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--sidebar-foreground) / 0.2);
+    border-radius: 3px;
+  }
+
+  [data-sidebar="content"]::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--sidebar-foreground) / 0.4);
+  }
+
+  /* 코드 블록 스타일 */
+  pre {
+    @apply my-4 overflow-x-auto rounded-lg border border-border bg-muted p-4;
+  }
+
+  code {
+    @apply rounded bg-muted px-1.5 py-0.5 font-mono text-sm;
+  }
+
+  pre code {
+    @apply block bg-transparent p-0;
+  }
+
+  /* 인라인 코드 */
+  :not(pre) > code {
+    @apply text-foreground;
+  }
+
+  /* Prose (마크다운) 스타일 개선 */
+  .prose {
+    @apply text-foreground;
+  }
+
+  .prose h1 {
+    @apply text-2xl font-bold mt-6 mb-4;
+  }
+
+  .prose h2 {
+    @apply text-xl font-bold mt-5 mb-3;
+  }
+
+  .prose h3 {
+    @apply text-lg font-bold mt-4 mb-2;
+  }
+
+  .prose p {
+    @apply my-3 leading-7;
+  }
+
+  .prose ul, .prose ol {
+    @apply my-4 ml-6;
+  }
+
+  .prose li {
+    @apply my-1.5;
+  }
+
+  .prose strong {
+    @apply font-bold text-foreground;
+  }
+
+  .prose em {
+    @apply italic;
+  }
+
+  .prose blockquote {
+    @apply border-l-4 border-border pl-4 italic my-4;
+  }
+
+  .prose table {
+    @apply w-full my-4 border-collapse;
+  }
+
+  .prose th {
+    @apply border border-border bg-muted px-4 py-2 text-left font-bold;
+  }
+
+  .prose td {
+    @apply border border-border px-4 py-2;
+  }
+
+  .prose hr {
+    @apply my-6 border-border;
+  }
+
+  .prose a {
+    @apply text-blue-600 dark:text-blue-400 underline hover:text-blue-800 dark:hover:text-blue-300;
   }
 }

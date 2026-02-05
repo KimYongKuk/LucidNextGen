@@ -2,13 +2,14 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Toaster } from "sonner";
 import { ThemeProvider } from "@/components/theme-provider";
+import { OnboardingProvider } from "@/components/onboarding/onboarding-provider";
 
 import "./globals.css";
 
 
 export const metadata: Metadata = {
   // metadataBase: new URL("https://chat.vercel.ai"),
-  title: "Always On, Lucid",
+  title: "Lucid AI",
   description: "Chatbot Lucid AI by L&F",
 };
 
@@ -78,8 +79,10 @@ export default function RootLayout({
           disableTransitionOnChange
           enableSystem
         >
-          <Toaster position="top-center" />
-          {children}
+          <OnboardingProvider>
+            <Toaster position="top-center" />
+            {children}
+          </OnboardingProvider>
         </ThemeProvider>
       </body>
     </html>

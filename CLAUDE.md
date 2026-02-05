@@ -16,146 +16,228 @@ LF(Lucid Fund) 챗봇 시스템으로, Next.js 프론트엔드와 FastAPI 백엔
 - **빌드 도구**: Turbopack 지원
 
 ### Backend (FastAPI)
-- **프레임워크**: FastAPI 0.115.6 with Uvicorn 0.32.1
+- **프레임워크**: FastAPI 0.115.6 with Uvicorn 0.35.0
 - **언어**: Python 3.x
-- **데이터 검증**: Pydantic 2.11.0 with Pydantic Settings 2.7.0
-- **LLM/AI**: 
-  - LangChain 0.3.26 (AWS, Community, Core, Text Splitters, Chroma)
+- **데이터 검증**: Pydantic 2.11.9 with Pydantic Settings 2.7.0
+- **LLM/AI**:
+  - LangGraph 0.2.52 (Hierarchical Agent 아키텍처)
+  - LangChain AWS 0.2.20, LangChain Core 0.3.80
   - AWS Bedrock via Boto3 1.39.4
+- **MCP (Model Context Protocol)**:
+  - MCP 1.22.0, FastMCP 2.13.1
+  - LangChain MCP Adapters 0.1.14
 - **벡터 데이터베이스**: ChromaDB 1.0.15 with Sentence Transformers 5.0.0
-- **데이터베이스**: 
-  - SQLAlchemy 2.0.36
-  - PyMySQL 1.1.1, MySQL Connector Python 9.3.0, MariaDB
-- **자연어 SQL**: Vanna.ai with MySQL support
-- **문서 처리**: PyPDF2, python-docx, PyMuPDF, openpyxl
-- **인증**: Python-JOSE with Cryptography, Passlib with bcrypt
-- **기타**: python-dotenv, fastapi-cors, structlog
+- **데이터베이스**: SQLAlchemy 2.0.36, PyMySQL 1.1.1
+- **문서 처리**: PyPDF2, python-docx, PyMuPDF, python-pptx, openpyxl
+- **PDF/차트 생성**: fpdf2 2.8.3, matplotlib 3.9.0, pandas 2.2.0
+- **웹 검색**: Tavily Python 0.7.10
+- **기타**: python-dotenv, aiohttp, pycryptodome, apscheduler
 
 ## 프로젝트 구조
 
 ```
 LFChatbot_NextJS_FastAPI/
 ├── frontend/                     # Next.js 프론트엔드
-│   ├── src/
-│   │   ├── app/                 # App Router
-│   │   │   ├── globals.css      # 글로벌 스타일
-│   │   │   ├── layout.tsx       # 루트 레이아웃
-│   │   │   ├── page.tsx         # 메인 페이지
-│   │   │   └── login/           # 로그인 페이지
-│   │   ├── components/          # 재사용 가능한 컴포넌트
-│   │   │   ├── app-sidebar.tsx  # 사이드바
-│   │   │   ├── chat/            # 채팅 관련 컴포넌트
-│   │   │   ├── greeting.tsx     # 인사말 컴포넌트
-│   │   │   ├── header.tsx       # 헤더
-│   │   │   ├── mode-selector.tsx # 모드 선택기
-│   │   │   └── ui/              # UI 기본 컴포넌트
-│   │   ├── hooks/               # React 훅
-│   │   ├── lib/                 # 유틸리티 함수
-│   │   └── middleware.ts        # Next.js 미들웨어
-│   ├── public/                  # 정적 파일
-│   ├── package.json
-│   └── 설정 파일들 (next.config.ts, tailwind.config.ts, tsconfig.json)
+│   ├── app/                     # App Router (Next.js 13+)
+│   │   ├── (auth)/              # 인증 관련 라우트
+│   │   ├── (chat)/              # 채팅 관련 라우트
+│   │   │   ├── api/             # API 라우트
+│   │   │   │   ├── chat/        # 채팅 API
+│   │   │   │   ├── history/     # 채팅 기록 API
+│   │   │   │   └── suggestions/ # 제안 API
+│   │   │   └── chat/[id]/       # 동적 채팅 페이지
+│   │   ├── admin/               # 관리자 페이지
+│   │   └── globals.css          # 글로벌 스타일
+│   ├── components/              # 재사용 가능한 컴포넌트
+│   │   ├── app-sidebar.tsx      # 사이드바
+│   │   ├── chat.tsx             # 메인 채팅 컴포넌트
+│   │   ├── message.tsx          # 메시지 컴포넌트
+│   │   ├── multimodal-input.tsx # 입력 컴포넌트
+│   │   ├── chart-display.tsx    # 차트 렌더링 (recharts)
+│   │   ├── sidebar-workspaces.tsx  # 워크스페이스 사이드바
+│   │   ├── sources-carousel.tsx    # 웹 검색 소스 캐러셀
+│   │   ├── corp-sources-carousel.tsx # 사내 문서 소스 표시
+│   │   ├── chat-search-modal.tsx   # 채팅 검색 모달
+│   │   ├── youtube-modal.tsx       # YouTube 요약 모달
+│   │   ├── onboarding/          # 온보딩 시스템
+│   │   │   ├── onboarding-provider.tsx
+│   │   │   ├── onboarding-modal.tsx
+│   │   │   ├── onboarding-step.tsx
+│   │   │   └── onboarding-progress.tsx
+│   │   └── ui/                  # UI 기본 컴포넌트
+│   ├── hooks/                   # React 훅
+│   │   ├── use-simple-chat.ts   # 채팅 훅
+│   │   └── use-debounce.ts      # 디바운스 훅
+│   ├── lib/                     # 유틸리티
+│   │   ├── ai/                  # AI 관련 유틸
+│   │   ├── api/                 # API 클라이언트
+│   │   │   └── workspaces.ts    # 워크스페이스 API
+│   │   ├── onboarding/          # 온보딩 설정
+│   │   │   └── steps.ts         # 온보딩 단계 정의
+│   │   └── types.ts             # 타입 정의
+│   └── middleware.ts            # Next.js 미들웨어
 │
 ├── backend/                      # FastAPI 백엔드
 │   ├── app/
 │   │   ├── main.py              # FastAPI 앱 진입점
 │   │   ├── api/                 # API 라우터
-│   │   │   ├── api.py           # API 통합
-│   │   │   └── routes/          # 라우트 정의
+│   │   │   └── routes/
 │   │   │       ├── auth.py      # 인증
-│   │   │       ├── chat.py      # 채팅 (스트리밍 전용)
+│   │   │       ├── chat.py      # 채팅 (스트리밍)
 │   │   │       ├── upload.py    # 파일 업로드
-│   │   │       ├── vanna_sql.py # SQL 자연어 처리
-│   │   │       └── vector_db.py # 벡터 데이터베이스
+│   │   │       └── workspace.py # 워크스페이스
+│   │   ├── adapters/            # 외부 서비스 어댑터
+│   │   │   └── mcp_adapter.py   # MCP 서버 연결 어댑터
+│   │   ├── agents/              # LangGraph Agent 시스템
+│   │   │   ├── orchestrator.py  # 메인 오케스트레이터
+│   │   │   ├── intent_classifier.py  # 인텐트 분류기
+│   │   │   ├── state.py         # 상태 정의
+│   │   │   ├── a2a_streaming.py # 스트리밍 로직
+│   │   │   └── workers/         # 특화 Worker들
+│   │   │       ├── base_worker.py
+│   │   │       ├── direct_worker.py
+│   │   │       ├── web_search_worker.py
+│   │   │       ├── user_files_worker.py
+│   │   │       ├── corp_rag_worker.py
+│   │   │       ├── visualization_worker.py
+│   │   │       ├── youtube_worker.py
+│   │   │       ├── it_support_worker.py
+│   │   │       └── acct_support_worker.py
 │   │   ├── core/                # 핵심 설정
 │   │   │   ├── config.py        # 앱 설정
-│   │   │   └── database.py      # 데이터베이스 설정
-│   │   ├── models/              # Pydantic 모델
+│   │   │   └── model_config.py  # 모델 설정
+│   │   ├── mcp_servers/         # MCP 도구 서버들
+│   │   │   ├── pdf_generator/   # PDF 생성 MCP
+│   │   │   │   └── server.py
+│   │   │   ├── chart_generator/ # 차트 생성 MCP
+│   │   │   │   └── server.py
+│   │   │   ├── rag_server.py    # 사내 문서 RAG
+│   │   │   ├── youtube_tool.py  # YouTube 요약
+│   │   │   ├── works_it_mcp_server.py   # IT 지원 VOC
+│   │   │   └── works_acct_mcp_server.py # 회계 지원 VOC
 │   │   ├── services/            # 비즈니스 로직
 │   │   │   ├── bedrock_service.py       # AWS Bedrock 서비스
-│   │   │   ├── chat_history_service.py  # 채팅 기록 관리 (MySQL)
-│   │   │   ├── query_router.py          # 쿼리 라우팅 (Corp 모드)
-│   │   │   ├── user_upload_service.py   # 사용자 파일 업로드 및 벡터 검색
-│   │   │   ├── upload_embedding.py      # 임베딩 업로드
-│   │   │   ├── vanna_service.py         # Vanna SQL 서비스
-│   │   │   ├── vector_service.py        # 벡터 서비스 (사내 문서)
-│   │   │   └── web_search_service.py    # 웹 검색
+│   │   │   ├── chat_log_service.py      # 채팅 기록 관리 (MySQL)
+│   │   │   ├── chromadb_service.py      # ChromaDB 관리
+│   │   │   ├── pdf_vision_service.py    # PDF 비전 추출
+│   │   │   ├── workspace_service.py     # 워크스페이스 관리
+│   │   │   └── youtube_summary_service.py # YouTube 요약
 │   │   └── utils/               # 유틸리티
 │   ├── data/                    # 데이터 저장소
-│   │   ├── assets/              # 정적 자산
-│   │   ├── chatdata/            # 채팅 데이터 (ChromaDB)
-│   │   ├── chdata/              # 사내 문서 데이터
-│   │   ├── user_upload_data/    # 사용자 업로드 (ChromaDB)
-│   │   └── vanna_chromadb/      # Vanna ChromaDB
-│   ├── temp_uploads/            # 임시 업로드 파일
-│   ├── tests/                   # 테스트 코드
-│   ├── archived_code/           # Deprecated 코드 (마이크로서비스 등)
-│   ├── requirements.txt         # Python 의존성
-│   └── start_server.bat         # 서버 시작 스크립트
+│   │   ├── chromadb_user/       # 사용자 업로드 벡터DB
+│   │   ├── chromadb_admin/      # 관리자 문서 벡터DB
+│   │   ├── pdf_output/          # 생성된 PDF 파일
+│   │   └── chart_output/        # 생성된 차트 이미지
+│   ├── mcp_config.json          # MCP 서버 설정
+│   └── requirements.txt         # Python 의존성
 ```
 
 ## 아키텍처
 
-### 단일 통합 백엔드 구조 (Windows)
-ChromaDB 1.0.15가 Windows에서 **정상 작동**하므로, 마이크로서비스 없이 **단일 FastAPI 백엔드**로 통합되었습니다.
+### LangGraph Hierarchical Agent 구조
 
-**주요 구성 요소:**
-1. **Frontend (Next.js)** - 포트 3000
-   - React 19 기반 UI
-   - Vercel AI SDK를 통한 스트리밍 채팅
-   - Tailwind CSS + Shadcn UI
+```
+사용자 요청
+    ↓
+[Orchestrator]
+    ├── Intent Classification (Haiku - 빠른 분류)
+    ↓
+[Worker 선택 및 실행]
+    ├── DirectWorker: 일반 대화
+    ├── WebSearchWorker: 웹 검색 (Tavily)
+    ├── UserFilesWorker: 사용자 업로드 파일 검색
+    ├── CorpRAGWorker: 사내 문서 검색
+    ├── VisualizationWorker: PDF/차트 생성
+    ├── YouTubeWorker: YouTube 요약
+    ├── ITSupportWorker: IT VOC 검색
+    └── AcctSupportWorker: 회계 VOC 검색
+    ↓
+[MCP Tools] (각 Worker가 필터링된 도구 사용)
+    ↓
+스트리밍 응답
+```
 
-2. **Backend (FastAPI)** - 포트 8000
-   - 채팅 API (스트리밍 전용)
-   - 파일 업로드 및 벡터 검색
-   - AWS Bedrock 통합
-   - ChromaDB 직접 관리
-   - MySQL 채팅 이력 저장
+### MCP 서버 구성
 
-**기술 스택:**
-- ChromaDB 1.0.15 (Windows 네이티브)
-- Sentence Transformers (BGE-M3)
-- LangChain (문서 처리, 청킹)
-- AWS Bedrock (Claude 3.5 Sonnet)
-- Vanna.ai (자연어 SQL)
+| MCP 서버 | 도구 | 용도 |
+|----------|------|------|
+| tavily-mcp | tavily_search | 웹 검색 |
+| rag | search_hr/ac/it/safety_docs | 사내 문서 RAG |
+| youtube | youtube_summarize | YouTube 요약 |
+| works_it | search_it_voc, execute_it_voc_query | IT 지원 사례 |
+| works_acct | search_acct_voc, execute_acct_voc_query | 회계 지원 사례 |
+| pdf_generator | create_document_pdf, create_table_spec_pdf | PDF 생성 |
+| chart_generator | create_line/bar/pie/multi_chart | 차트 생성 |
+
+### Worker별 담당 도구
+
+| Worker | 도구 | 모델 |
+|--------|------|------|
+| DirectWorker | (없음) | Haiku |
+| WebSearchWorker | tavily_search | Haiku |
+| UserFilesWorker | search_user_files, search_workspace_docs | Haiku |
+| CorpRAGWorker | search_hr/ac/it/safety_docs | Haiku |
+| VisualizationWorker | PDF 도구 + 차트 도구 | Sonnet |
+| YouTubeWorker | youtube_summarize | Haiku |
+| ITSupportWorker | search_it_voc, execute_it_voc_query | Sonnet |
+| AcctSupportWorker | search_acct_voc, execute_acct_voc_query | Sonnet |
 
 ## 주요 기능
 
 ### 1. AI 채팅 시스템
-- AWS Bedrock을 통한 LLM 통합
-- **스트리밍 전용** 실시간 채팅 인터페이스
-- 채팅 기록 관리 및 저장 (MySQL)
-- 모드별 분기 처리:
+- AWS Bedrock (Claude 3.5 Sonnet/Haiku) 기반
+- 스트리밍 전용 실시간 채팅
+- 채팅 기록 관리 (MySQL)
+- 모드별 분기:
   - **Normal 모드**: 일반 지식 + 사용자 파일 + 웹검색
-  - **Corp 모드**: 사내 문서 검색 + DB 쿼리
+  - **Corp 모드**: 사내 문서 검색 + 지원 VOC
 
-### 2. 문서 처리 및 임베딩
-- PDF, DOCX, XLSX, TXT 문서 형식 지원
-- ChromaDB를 활용한 벡터 데이터베이스
+### 2. 문서 처리 및 RAG
+- PDF, DOCX, XLSX, PPTX, TXT 지원
+- ChromaDB 벡터 데이터베이스
 - Sentence Transformers (BGE-M3) 임베딩
-- **마이크로서비스 기반** 사용자 업로드 문서 처리
+- 워크스페이스별 문서 관리
 
-### 3. 자연어 SQL 쿼리
-- Vanna.ai를 활용한 자연어-SQL 변환
-- MySQL/MariaDB 연동
-- `[DB]` 접두사로 DB 쿼리 모드 활성화
+### 3. 시각화 및 문서 생성
+- **PDF 생성**: 마크다운 → PDF 변환 (기술 문서, 보고서)
+- **차트 생성**:
+  - 라인 차트 (트렌드)
+  - 막대 차트 (비교)
+  - 파이 차트 (비율)
+  - 복합 차트 (막대+라인, 누적, 영역)
 
-### 4. 인증 및 보안
-- JWT 기반 인증 시스템
-- CORS 설정
-- 보안 헤더 및 미들웨어
+### 4. YouTube 요약
+- 비디오 URL로 요약 생성
+- 타임스탬프별 세그먼트
+- 핵심 인사이트 추출
 
 ### 5. 웹 검색 통합
-- 키워드 기반 자동 웹검색 트리거
-- 검색 결과를 컨텍스트에 통합
-- 최신 정보 제공
+- Tavily API 기반 실시간 웹 검색
+- 검색 결과 출처 표시 (소스 캐러셀 UI)
+
+### 6. 워크스페이스 시스템
+- 독립적 작업 공간 생성 (UUID 기반)
+- 문서 업로드 및 벡터 검색 (ChromaDB `workspace_{uuid}` 컬렉션)
+- 커스텀 시스템 프롬프트 설정
+- 비동기 백그라운드 파일 업로드 (폴링 방식)
+
+### 7. 온보딩 시스템
+- 6단계 인터랙티브 가이드 (채팅, 파일업로드, 모드, PDF/차트, YouTube, 웹검색)
+- LocalStorage 기반 완료 상태 추적
+- 버전 관리로 업데이트 시 재표시
+- Framer Motion 애니메이션
+
+### 8. 채팅 검색
+- Cmd+K 스타일 검색 모달
+- 최근 7일 채팅 조회 / 검색어 기반 검색
+- 검색어 하이라이팅
 
 ## 개발 명령어
 
 ### Frontend
 ```bash
 cd frontend
-npm run dev          # 개발 서버 실행
+npm run dev          # 개발 서버 실행 (포트 3000)
 npm run dev-turbo    # Turbopack으로 개발 서버 실행
 npm run build        # 프로덕션 빌드
 npm run start        # 프로덕션 서버 실행
@@ -163,7 +245,6 @@ npm run lint         # ESLint 실행
 ```
 
 ### Backend
-
 ```bash
 cd backend
 pip install -r requirements.txt  # 의존성 설치
@@ -171,32 +252,18 @@ python app/main.py               # 개발 서버 실행 (포트 8000)
 start_server.bat                 # Windows용 서버 시작
 ```
 
-**참고:** ChromaDB 1.0.15는 Windows에서 정상 작동하므로 별도의 마이크로서비스가 필요 없습니다.
-
 ## 환경 설정
 - `.env` 파일을 통한 환경변수 관리
 - AWS Bedrock 인증 정보 설정
 - 데이터베이스 연결 정보 설정
-- ChromaDB 데이터 경로 설정
+- MCP 서버 설정 (`mcp_config.json`)
 
 ## 데이터베이스
-- **ChromaDB**: 벡터 임베딩 저장 (채팅, 사용자 업로드, Vanna용)
-- **MySQL/MariaDB**: 관계형 데이터 저장
-- **SQLite**: ChromaDB 메타데이터 저장
-
-## 테스트
-- Backend: pytest를 활용한 단위 테스트 및 통합 테스트
-- 테스트 코드 위치: `backend/tests/`
-- API 엔드포인트, 채팅 로직, 웹 검색, ChromaDB 통합 테스트 포함
-- 마이크로서비스 연결 테스트 포함
-
-**테스트 실행:**
-```bash
-cd backend
-pytest tests/ -v
-```
+- **ChromaDB**: 벡터 임베딩 저장 (사용자 업로드, 사내 문서)
+- **MySQL**: 채팅 기록, 워크스페이스 메타데이터
+- **SQLite**: ChromaDB 메타데이터
 
 ## 배포
-- Frontend: Vercel 또는 다른 Next.js 호스팅 플랫폼
+- Frontend: Vercel 또는 Next.js 호스팅 플랫폼
 - Backend: FastAPI 서버 (Uvicorn)
-- 데이터: ChromaDB 및 MySQL/MariaDB 인스턴스
+- 데이터: ChromaDB 및 MySQL 인스턴스

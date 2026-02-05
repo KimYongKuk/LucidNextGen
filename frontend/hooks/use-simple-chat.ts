@@ -2,26 +2,21 @@
 
 import { useState, useCallback, useRef } from 'react';
 import type { ChatMessage } from '@/lib/types';
+import { getUserId } from '@/lib/utils';
 
-// 동적 API URL 생성 함수
+// API URL 생성 함수 - 프론트엔드와 백엔드가 같은 서버에서 실행되므로 현재 호스트 사용
 const getApiUrl = () => {
   if (typeof window !== 'undefined') {
+    // 브라우저의 현재 호스트명을 사용 (localhost든 IP든 동일하게 처리)
     const currentHost = window.location.hostname;
-    const isLocalhost = currentHost === 'localhost' || currentHost === '127.0.0.1';
-
-    if (isLocalhost) {
-      return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-    } else {
-      const protocol = window.location.protocol;
-      return `${protocol}//${currentHost}:8000`;
-    }
+    return `http://${currentHost}:8000`;
   }
-  return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  return 'http://localhost:8000';
 };
 
 // 고유 ID 생성 함수
 const generateId = (): string => {
-  const uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+  const uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
     const r = Math.random() * 16 | 0;
     const v = c == 'x' ? r : (r & 0x3 | 0x8);
     return v.toString(16);
@@ -39,6 +34,7 @@ interface UseSimpleChatOptions {
   onFinish?: () => void;
   onError?: (error: Error) => void;
   generateId?: () => string;
+  workspaceId?: number | null;
 }
 
 export function useSimpleChat({
@@ -48,18 +44,20 @@ export function useSimpleChat({
   onFinish,
   onError,
   generateId: customGenerateId = generateId,
+  workspaceId,
 }: UseSimpleChatOptions) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [status, setStatus] = useState<'ready' | 'streaming' | 'submitted'>('ready');
   const abortControllerRef = useRef<AbortController | null>(null);
+  const userId = getUserId();
 
-  const sendMessage = useCallback(async (message: ChatMessage) => {
+  const sendMessage = useCallback(async (message: Omit<ChatMessage, 'id' | 'createdAt'>) => {
     // 사용자 메시지 추가
     const userMessage: ChatMessage = {
       ...message,
       id: customGenerateId(),
       createdAt: new Date(),
-    };
+    } as ChatMessage;
 
     setMessages(prev => [...prev, userMessage]);
     setStatus('streaming');
@@ -68,6 +66,7 @@ export function useSimpleChat({
     const assistantMessageId = customGenerateId();
 
     try {
+      let hasCompleted = false;
       // 메시지 content 추출
       const content = message.parts
         ?.filter((part: any) => part.type === 'text')
@@ -94,11 +93,11 @@ export function useSimpleChat({
           }
           return null;
         })
-        .filter(Boolean) || [];
+        .filter((img): img is { media_type: string; base64_data: string } => !!img && !!img.base64_data) || [];
 
       // 현재 메시지 히스토리 구성 (현재 사용자 메시지 제외)
-      // 최대 5회의 대화만 전송 (토큰 관리를 위해)
-      const MAX_CONVERSATION_TURNS = 5;
+      // 최대 10회의 대화만 전송 (토큰 관리를 위해)
+      const MAX_CONVERSATION_TURNS = 10;
       const MAX_HISTORY_MESSAGES = MAX_CONVERSATION_TURNS * 2; // user + assistant 쌍
 
       // 최근 메시지부터 최대 개수만큼만 선택
@@ -120,7 +119,10 @@ export function useSimpleChat({
       // 백엔드로 스트리밍 요청
       abortControllerRef.current = new AbortController();
 
-      const response = await fetch(`${getApiUrl()}/api/v1/chat/message/stream`, {
+      const baseUrl = getApiUrl();
+      const apiUrl = `${baseUrl}/api/v1/chat/message/stream`;
+
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -129,9 +131,10 @@ export function useSimpleChat({
           message: content,
           chat_mode: 'normal',
           session_id: sessionId,
-          user_id: 'anonymous',
+          user_id: userId,
           images: imageFiles.length > 0 ? imageFiles : null,
           message_history: messageHistory.length > 0 ? messageHistory : null,
+          workspace_id: workspaceId,
         }),
         signal: abortControllerRef.current.signal,
       });
@@ -154,6 +157,11 @@ export function useSimpleChat({
       const decoder = new TextDecoder();
       let buffer = '';
       let allChunks: string[] = [];
+      let currentToolStatus = ''; // 현재 표시 중인 Tool 상태 메시지 (임시)
+      let sources: any[] = []; // Tavily 검색 출처 (매 요청마다 초기화)
+      let youtubeSummary: any = null; // YouTube 요약 (매 요청마다 초기화)
+      let corpSources: any[] = []; // Corp 문서 출처 (매 요청마다 초기화)
+      let chartData: any = null; // 차트 데이터 (매 요청마다 초기화)
 
       if (reader) {
         try {
@@ -176,6 +184,7 @@ export function useSimpleChat({
                   if (jsonStr === '') continue;
 
                   const data = JSON.parse(jsonStr);
+                  console.log('[useSimpleChat] SSE data received:', data);
 
                   if (data.error) {
                     throw new Error(data.error);
@@ -186,18 +195,132 @@ export function useSimpleChat({
                     onData({ type: 'data-timing', data: data });
                   }
 
-                  // 콘텐츠 청크 처리
-                  if (data.type === 'content' && data.chunk) {
-                    allChunks.push(data.chunk);
+                  // 대기 상태 메시지 처리 (세마포어 대기)
+                  if (data.type === 'waiting') {
+                    const waitingMessage = data.message || '다른 사용자의 요청을 처리 중입니다. 잠시만 기다려주세요...';
+                    currentToolStatus = `\n\n__WAITING__:${waitingMessage}__END__\n\n`;
 
-                    // 실시간 UI 업데이트
+                    const currentContent = allChunks.join('') + currentToolStatus;
+                    setMessages(prev => prev.map(msg =>
+                      msg.id === assistantMessageId
+                        ? {
+                          ...msg,
+                          parts: [{ type: 'text', text: currentContent }]
+                        }
+                        : msg
+                    ));
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                  }
+
+                  // 대기 완료 메시지 처리
+                  if (data.type === 'waiting_complete') {
+                    console.log(`[useSimpleChat] Waited ${data.wait_time_ms}ms in queue`);
+                    // 대기 상태 메시지 제거
+                    currentToolStatus = '';
+                  }
+
+                  // 처리 시작 메시지
+                  if (data.type === 'processing_start') {
+                    // 대기 상태 메시지 제거
+                    currentToolStatus = '';
                     const currentContent = allChunks.join('');
                     setMessages(prev => prev.map(msg =>
                       msg.id === assistantMessageId
                         ? {
-                            ...msg,
-                            parts: [{ type: 'text', text: currentContent }]
-                          }
+                          ...msg,
+                          parts: [{ type: 'text', text: currentContent }]
+                        }
+                        : msg
+                    ));
+                  }
+
+                  // Tool 상태 메시지 처리 (애니메이션 적용 - 임시로만 표시)
+                  if (data.type === 'tool_status') {
+                    const toolMessage = data.message || '작업 중...';
+
+                    // Tool 상태를 임시 변수에 저장 (allChunks에는 저장하지 않음!)
+                    currentToolStatus = `\n\n__TOOL_STATUS__:${toolMessage}__END__\n\n`;
+
+                    // 실시간 UI 업데이트 (기존 컨텐츠 + 임시 Tool 상태)
+                    const currentContent = allChunks.join('') + currentToolStatus;
+                    setMessages(prev => prev.map(msg =>
+                      msg.id === assistantMessageId
+                        ? {
+                          ...msg,
+                          parts: [{ type: 'text', text: currentContent }]
+                        }
+                        : msg
+                    ));
+
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                  }
+
+                  // Tavily 검색 출처 처리 (저장만, 스트리밍 완료 후 표시)
+                  if (data.type === 'search_sources' && data.sources) {
+                    console.log('[useSimpleChat] Received search_sources:', data.sources);
+                    sources = data.sources;
+                    // 출처는 저장만 하고 스트리밍 완료 시 표시
+                  }
+
+                  // YouTube 요약 처리 (저장만, 스트리밍 완료 후 표시)
+                  if (data.type === 'youtube_summary' && data.summary) {
+                    console.log('[useSimpleChat] Received youtube_summary:', data.summary.title);
+                    youtubeSummary = data.summary;
+                    // YouTube 요약은 저장만 하고 스트리밍 완료 시 표시
+                  }
+
+                  // Corp 문서 출처 처리 (저장만, 스트리밍 완료 후 표시)
+                  if (data.type === 'corp_sources' && data.sources) {
+                    console.log('[useSimpleChat] Received corp_sources:', data.sources);
+                    corpSources = data.sources;
+                    // Corp 출처는 저장만 하고 스트리밍 완료 시 표시
+                  }
+
+                  // 차트 데이터 처리 (저장만, 스트리밍 완료 후 표시)
+                  if (data.type === 'chart_data' && data.chart) {
+                    console.log('[useSimpleChat] Received chart_data:', data.chart.chart_type, data.chart.title);
+                    chartData = data.chart;
+                    // 차트는 저장만 하고 스트리밍 완료 시 표시
+                  }
+
+                  // 모델 Fallback 알림 처리
+                  if (data.type === 'model_fallback') {
+                    const fallbackMessage = data.message || `${data.model}로 전환되었습니다.`;
+                    console.log(`[useSimpleChat] Model fallback: ${fallbackMessage}`);
+
+                    // Fallback 알림을 임시 상태로 표시 (tool_status와 유사)
+                    currentToolStatus = `\n\n__FALLBACK__:${fallbackMessage}__END__\n\n`;
+
+                    const currentContent = allChunks.join('') + currentToolStatus;
+                    setMessages(prev => prev.map(msg =>
+                      msg.id === assistantMessageId
+                        ? {
+                          ...msg,
+                          parts: [{ type: 'text', text: currentContent }]
+                        }
+                        : msg
+                    ));
+
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                  }
+
+                  // 콘텐츠 청크 처리
+                  if (data.type === 'content' && data.chunk) {
+                    allChunks.push(data.chunk);
+
+                    // Tool 상태 메시지가 있으면 제거 (실제 응답이 오기 시작하면 Tool 상태 삭제)
+                    if (currentToolStatus && data.chunk.trim()) {
+                      currentToolStatus = '';
+                    }
+
+                    // 실시간 UI 업데이트 - 기존처럼 단순하게 텍스트만 업데이트
+                    const currentContent = allChunks.join('');
+                    setMessages(prev => prev.map(msg =>
+                      msg.id === assistantMessageId
+                        ? {
+                          ...msg,
+                          parts: [{ type: 'text', text: currentContent }]
+                        }
                         : msg
                     ));
 
@@ -207,20 +330,58 @@ export function useSimpleChat({
                   // 완료 체크
                   if (data.complete) {
                     console.log('[useSimpleChat] Streaming completed');
-                    if (onFinish) {
-                      onFinish();
+                    hasCompleted = true;
+
+                    // 스트리밍 완료 후 최종 parts 구성 (텍스트 + 차트 + 출처 + Corp 출처 + YouTube 요약 순서)
+                    if (sources.length > 0 || corpSources.length > 0 || youtubeSummary || chartData) {
+                      const finalContent = allChunks.join('');
+                      const finalParts: any[] = [];
+
+                      finalParts.push({ type: 'text', text: finalContent });
+                      if (chartData) {
+                        finalParts.push({ type: 'chart-data', chartData });
+                      }
+                      if (sources.length > 0) {
+                        finalParts.push({ type: 'sources', sources });
+                      }
+                      if (corpSources.length > 0) {
+                        finalParts.push({ type: 'corp-sources', sources: corpSources });
+                      }
+                      if (youtubeSummary) {
+                        finalParts.push({ type: 'youtube-summary', summary: youtubeSummary });
+                      }
+
+                      setMessages(prev => prev.map(msg =>
+                        msg.id === assistantMessageId
+                          ? { ...msg, parts: finalParts }
+                          : msg
+                      ));
                     }
-                    return;
+
+                    break;
                   }
                 } catch (parseError) {
                   console.warn('JSON parsing failed:', line, parseError);
                 }
               }
+
+              if (hasCompleted) {
+                break;
+              }
+            }
+
+            if (hasCompleted) {
+              break;
             }
           }
         } finally {
           reader.releaseLock();
         }
+      }
+
+      if (onFinish) {
+        onFinish();
+        hasCompleted = true;
       }
 
     } catch (error) {
@@ -230,12 +391,12 @@ export function useSimpleChat({
       setMessages(prev => prev.map(msg =>
         msg.id === assistantMessageId
           ? {
-              ...msg,
-              parts: [{
-                type: 'text',
-                text: `오류가 발생했습니다: ${error instanceof Error ? error.message : '알 수 없는 오류'}`
-              }]
-            }
+            ...msg,
+            parts: [{
+              type: 'text',
+              text: `오류가 발생했습니다: ${error instanceof Error ? error.message : '알 수 없는 오류'}`
+            }]
+          }
           : msg
       ));
 
@@ -246,7 +407,7 @@ export function useSimpleChat({
       setStatus('ready');
       abortControllerRef.current = null;
     }
-  }, [sessionId, onData, onFinish, onError, customGenerateId]);
+  }, [sessionId, workspaceId, onData, onFinish, onError, customGenerateId]);
 
   const stop = useCallback(() => {
     if (abortControllerRef.current) {
@@ -256,7 +417,7 @@ export function useSimpleChat({
     }
   }, []);
 
-  const regenerate = useCallback(() => {
+  const regenerate = useCallback(async () => {
     // 마지막 사용자 메시지 다시 전송
     const lastUserMessage = messages.filter(m => m.role === 'user').pop();
     if (lastUserMessage) {
@@ -270,11 +431,11 @@ export function useSimpleChat({
       });
 
       // 재전송
-      sendMessage(lastUserMessage);
+      await sendMessage(lastUserMessage);
     }
   }, [messages, sendMessage]);
 
-  const resumeStream = useCallback(() => {
+  const resumeStream = useCallback(async () => {
     // 현재 구현에서는 resume 기능 불필요 (자동 완료)
     console.log('[useSimpleChat] resumeStream called (no-op)');
   }, []);

@@ -22,7 +22,7 @@ import { saveChatModelAsCookie } from "@/app/(chat)/actions";
 import { SelectItem } from "@/components/ui/select";
 import { chatModels } from "@/lib/ai/models";
 import type { Attachment, ChatMessage } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import { cn, getUserId } from "@/lib/utils";
 import {
   PromptInput,
   PromptInputModelSelect,
@@ -36,13 +36,13 @@ import {
   ArrowUpIcon,
   ChevronDownIcon,
   CpuIcon,
+  MicrophoneIcon,
   PaperclipIcon,
   StopIcon,
 } from "./icons";
 import { PreviewAttachment } from "./preview-attachment";
 import { SuggestedActions } from "./suggested-actions";
 import { Button } from "./ui/button";
-import type { VisibilityType } from "./visibility-selector";
 
 function PureMultimodalInput({
   chatId,
@@ -56,9 +56,9 @@ function PureMultimodalInput({
   setMessages,
   sendMessage,
   className,
-  selectedVisibilityType,
   selectedModelId,
   onModelChange,
+  onFileUploaded,
 }: {
   chatId: string;
   input: string;
@@ -69,11 +69,11 @@ function PureMultimodalInput({
   setAttachments: Dispatch<SetStateAction<Attachment[]>>;
   messages: UIMessage[];
   setMessages: UseChatHelpers<ChatMessage>["setMessages"];
-  sendMessage: UseChatHelpers<ChatMessage>["sendMessage"];
+  sendMessage: (message: any) => Promise<void>;
   className?: string;
-  selectedVisibilityType: VisibilityType;
   selectedModelId: string;
   onModelChange?: (modelId: string) => void;
+  onFileUploaded?: () => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { width } = useWindowSize();
@@ -122,7 +122,6 @@ function PureMultimodalInput({
   };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [uploadQueue, setUploadQueue] = useState<string[]>([]);
 
   const submitForm = useCallback(() => {
     window.history.pushState({}, "", `/chat/${chatId}`);
@@ -163,54 +162,184 @@ function PureMultimodalInput({
     resetHeight,
   ]);
 
+  // 최대 파일 크기 (10MB)
+  const MAX_FILE_SIZE = 10 * 1024 * 1024;
+
   const uploadFile = useCallback(async (file: File) => {
+    // 파일 크기 검증 (10MB)
+    if (file.size > MAX_FILE_SIZE) {
+      toast.error(`파일 크기가 10MB를 초과합니다: ${file.name} (${(file.size / (1024 * 1024)).toFixed(2)}MB)`);
+      return;
+    }
+
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("user_id", "anonymous");
-    formData.append("session_id", chatId); // 세션 ID 추가
+    formData.append("user_id", getUserId() ?? "");
+    formData.append("session_id", chatId);
+
+    // Create placeholder attachment with uploading status
+    const placeholderId = `uploading-${Date.now()}-${file.name}`;
+    const uploadingAttachment: Attachment = {
+      url: placeholderId,
+      name: file.name,
+      contentType: file.type,
+      status: 'uploading',
+    };
+
+    // Add to attachments immediately to show loading state
+    setAttachments(prev => [...prev, uploadingAttachment]);
 
     try {
-      // 이미지 파일인지 확인
       const isImage = file.type.startsWith('image/');
       const apiUrl = isImage
-        ? 'http://localhost:8000/api/v1/upload/image'
-        : 'http://localhost:8000/api/v1/upload/file';
+        ? '/api/v1/upload/image'
+        : '/api/v1/upload/file';
 
       const response = await fetch(apiUrl, {
         method: "POST",
         body: formData,
       });
 
-      if (response.ok) {
-        const data = await response.json();
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: Upload failed`);
+      }
 
-        if (isImage) {
-          // 이미지: base64 데이터를 data URL로 변환
-          const { media_type, base64_data, filename } = data;
-          return {
-            url: `data:${media_type};base64,${base64_data}`,
-            name: filename,
-            contentType: media_type,
-          };
-        } else {
-          // 일반 파일: 파일명 반환
+      const data = await response.json();
+
+      if (isImage) {
+        // Image: immediate base64 response
+        const { media_type, base64_data, filename } = data;
+        if (!base64_data) {
+          throw new Error("Image upload failed: empty base64 data");
+        }
+
+        // Update attachment with actual data
+        setAttachments(prev =>
+          prev.map(att =>
+            att.url === placeholderId
+              ? {
+                url: `data:${media_type};base64,${base64_data}`,
+                name: filename,
+                contentType: media_type,
+                status: 'ready',
+              }
+              : att
+          )
+        );
+
+        toast.success(`이미지 업로드 완료: ${filename}`);
+
+      } else {
+        // Document: handle background processing
+        if (data.status === "processing") {
+          // Update status to processing
+          setAttachments(prev =>
+            prev.map(att =>
+              att.url === placeholderId
+                ? {
+                  ...att,
+                  status: 'processing',
+                  url: data.file_id, // Use file_id as temporary URL for polling
+                  name: data.filename,
+                }
+                : att
+            )
+          );
+
+          // Poll for status
+          const fileId = data.file_id;
+          const pollInterval = setInterval(async () => {
+            try {
+              const statusRes = await fetch(`/api/v1/upload/status/${fileId}`);
+              if (!statusRes.ok) return; // Skip this poll if error
+
+              const statusData = await statusRes.json();
+
+              if (statusData.status === "completed") {
+                clearInterval(pollInterval);
+                setAttachments(prev =>
+                  prev.map(att =>
+                    att.url === fileId
+                      ? {
+                        ...att,
+                        status: 'ready',
+                        url: statusData.filename, // Final URL is filename for RAG
+                        name: statusData.filename,
+                      }
+                      : att
+                  )
+                );
+                // 문서 파일 업로드 완료 알림 (세션 정리용)
+                onFileUploaded?.();
+                toast.success(`파일 처리 완료: ${statusData.filename}`);
+              } else if (statusData.status === "failed") {
+                clearInterval(pollInterval);
+                throw new Error(statusData.message || "Processing failed");
+              }
+              // If processing, continue polling
+            } catch (err) {
+              clearInterval(pollInterval);
+              console.error("Polling error:", err);
+              setAttachments(prev =>
+                prev.map(att =>
+                  att.url === fileId
+                    ? {
+                      ...att,
+                      status: 'error',
+                      error: err instanceof Error ? err.message : 'Processing failed'
+                    }
+                    : att
+                )
+              );
+              toast.error(`파일 처리 실패: ${data.filename}`);
+            }
+          }, 2000); // Check every 2 seconds
+
+        } else if (data.status === "success") {
+          // Immediate success (fallback for small files if sync)
+          setAttachments(prev =>
+            prev.map(att =>
+              att.url === placeholderId
+                ? {
+                  url: data.filename,
+                  name: data.filename,
+                  contentType: file.type,
+                  status: 'ready',
+                }
+                : att
+            )
+          );
+          // 문서 파일 업로드 완료 알림 (세션 정리용)
+          onFileUploaded?.();
           toast.success(`파일 업로드 완료: ${data.filename}`);
-          return {
-            url: data.filename, // 파일명을 URL로 사용
-            name: data.filename,
-            contentType: file.type,
-          };
+        } else {
+          throw new Error(data.message || "Upload failed");
         }
       }
 
-      const errorData = await response.json();
-      const errorMessage = errorData.message || "Upload failed";
-      toast.error(errorMessage);
     } catch (error) {
       console.error("Upload error:", error);
-      toast.error("Failed to upload file, please try again!");
+
+      // Mark attachment as error
+      setAttachments(prev =>
+        prev.map(att =>
+          att.url === placeholderId
+            ? {
+              ...att,
+              status: 'error',
+              error: error instanceof Error ? error.message : 'Upload failed'
+            }
+            : att
+        )
+      );
+
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "파일 업로드 실패. 다시 시도해주세요."
+      );
     }
-  }, [chatId]);
+  }, [chatId, setAttachments, onFileUploaded]);
 
   const deleteSessionFiles = useCallback(async () => {
     try {
@@ -235,26 +364,17 @@ function PureMultimodalInput({
     async (event: ChangeEvent<HTMLInputElement>) => {
       const files = Array.from(event.target.files || []);
 
-      setUploadQueue(files.map((file) => file.name));
+      // Process files sequentially (better UX for multiple files)
+      for (const file of files) {
+        await uploadFile(file);
+      }
 
-      try {
-        const uploadPromises = files.map((file) => uploadFile(file));
-        const uploadedAttachments = await Promise.all(uploadPromises);
-        const successfullyUploadedAttachments = uploadedAttachments.filter(
-          (attachment) => attachment !== undefined
-        );
-
-        setAttachments((currentAttachments) => [
-          ...currentAttachments,
-          ...successfullyUploadedAttachments,
-        ]);
-      } catch (error) {
-        console.error("Error uploading files!", error);
-      } finally {
-        setUploadQueue([]);
+      // Reset file input
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
       }
     },
-    [setAttachments, uploadFile]
+    [uploadFile]
   );
 
   const handlePaste = useCallback(
@@ -275,34 +395,21 @@ function PureMultimodalInput({
       // Prevent default paste behavior for images
       event.preventDefault();
 
-      setUploadQueue((prev) => [...prev, "Pasted image"]);
-
       try {
-        const uploadPromises = imageItems
+        const imageFiles = imageItems
           .map((item) => item.getAsFile())
-          .filter((file): file is File => file !== null)
-          .map((file) => uploadFile(file));
+          .filter((file): file is File => file !== null);
 
-        const uploadedAttachments = await Promise.all(uploadPromises);
-        const successfullyUploadedAttachments = uploadedAttachments.filter(
-          (attachment) =>
-            attachment !== undefined &&
-            attachment.url !== undefined &&
-            attachment.contentType !== undefined
-        );
-
-        setAttachments((curr) => [
-          ...curr,
-          ...(successfullyUploadedAttachments as Attachment[]),
-        ]);
+        // Upload images sequentially
+        for (const file of imageFiles) {
+          await uploadFile(file);
+        }
       } catch (error) {
         console.error("Error uploading pasted images:", error);
         toast.error("Failed to upload pasted image(s)");
-      } finally {
-        setUploadQueue([]);
       }
     },
-    [setAttachments, uploadFile]
+    [uploadFile]
   );
 
   // Add paste event listener to textarea
@@ -319,11 +426,9 @@ function PureMultimodalInput({
   return (
     <div className={cn("relative flex w-full flex-col gap-4", className)}>
       {messages.length === 0 &&
-        attachments.length === 0 &&
-        uploadQueue.length === 0 && (
+        attachments.length === 0 && (
           <SuggestedActions
             chatId={chatId}
-            selectedVisibilityType={selectedVisibilityType}
             sendMessage={sendMessage}
           />
         )}
@@ -331,7 +436,7 @@ function PureMultimodalInput({
       <input
         className="-top-4 -left-4 pointer-events-none fixed size-0.5 opacity-0"
         multiple
-        accept=".pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.txt,image/*"
+        accept=".pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.txt,.html,.htm,.csv,image/*"
         onChange={handleFileChange}
         ref={fileInputRef}
         tabIndex={-1}
@@ -342,6 +447,15 @@ function PureMultimodalInput({
         className="rounded-xl border border-border bg-background p-3 shadow-xs transition-all duration-200 focus-within:border-border hover:border-muted-foreground/50"
         onSubmit={(event) => {
           event.preventDefault();
+          // 텍스트가 없으면 제출 안함
+          if (!input.trim()) {
+            return;
+          }
+          // 파일 업로드 중이면 제출 안함
+          if (attachments.some(att => att.status === 'uploading' || att.status === 'processing')) {
+            toast.error("파일 업로드가 완료될 때까지 기다려주세요.");
+            return;
+          }
           if (status !== "ready") {
             toast.error("Please wait for the model to finish its response!");
           } else {
@@ -349,15 +463,16 @@ function PureMultimodalInput({
           }
         }}
       >
-        {(attachments.length > 0 || uploadQueue.length > 0) && (
+        {attachments.length > 0 && (
           <div
-            className="flex flex-row items-end gap-2 overflow-x-scroll"
+            className="flex flex-row items-end gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
             data-testid="attachments-preview"
           >
             {attachments.map((attachment) => (
               <PreviewAttachment
                 attachment={attachment}
                 key={attachment.url}
+                isUploading={attachment.status === 'uploading' || attachment.status === 'processing'}
                 onRemove={async () => {
                   setAttachments((currentAttachments) =>
                     currentAttachments.filter((a) => a.url !== attachment.url)
@@ -368,23 +483,11 @@ function PureMultimodalInput({
 
                   // 파일 타입 확인 (이미지가 아닌 문서 파일만 백엔드에서 삭제)
                   const isDocument = !attachment.url.startsWith('data:');
-                  if (isDocument) {
+                  if (isDocument && attachment.status === 'ready') {
                     // 백엔드 세션 파일 삭제
                     await deleteSessionFiles();
                   }
                 }}
-              />
-            ))}
-
-            {uploadQueue.map((filename) => (
-              <PreviewAttachment
-                attachment={{
-                  url: "",
-                  name: filename,
-                  contentType: "",
-                }}
-                isUploading={true}
-                key={filename}
               />
             ))}
           </div>
@@ -392,15 +495,22 @@ function PureMultimodalInput({
         <div className="flex flex-row items-start gap-1 sm:gap-2">
           <PromptInputTextarea
             autoFocus
-            className="grow resize-none border-0! border-none! bg-transparent p-2 text-sm outline-none ring-0 [-ms-overflow-style:none] [scrollbar-width:none] placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 [&::-webkit-scrollbar]:hidden"
+            className="grow resize-none border-0! border-none! bg-transparent p-2 text-sm text-left! outline-none ring-0 [-ms-overflow-style:none] [scrollbar-width:none] placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 [&::-webkit-scrollbar]:hidden"
             data-testid="multimodal-input"
+            disabled={status !== "ready"}
             disableAutoResize={true}
             maxHeight={200}
             minHeight={44}
             onChange={handleInput}
-            placeholder="Lucid can make mistakes. Please double-check the response."
+            placeholder={
+              status === "streaming"
+                ? "Lucid can make mistakes. Please double-check the response."
+                : "Lucid can make mistakes. Please double-check the response."
+            }
+            readOnly={status !== "ready"}
             ref={textareaRef}
             rows={1}
+            style={{ textAlign: 'left', direction: 'ltr' }}
             value={input}
           />
         </div>
@@ -411,6 +521,10 @@ function PureMultimodalInput({
               selectedModelId={selectedModelId}
               status={status}
             />
+            <VoiceRecordButton
+              status={status}
+              onTranscript={(text) => setInput((prev) => prev + text)}
+            />
             {/* 모델 선택 UI 숨김 - 백엔드에서 모델 고정 사용 */}
             {/* <ModelSelectorCompact
               onModelChange={onModelChange}
@@ -418,13 +532,16 @@ function PureMultimodalInput({
             /> */}
           </PromptInputTools>
 
-          {status === "submitted" ? (
+          {status === "streaming" || status === "submitted" ? (
             <StopButton setMessages={setMessages} stop={stop} />
           ) : (
             <PromptInputSubmit
               className="size-8 rounded-full bg-primary text-primary-foreground transition-colors duration-200 hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground"
               data-testid="send-button"
-              disabled={!input.trim() || uploadQueue.length > 0}
+              disabled={
+                !input.trim() ||
+                attachments.some(att => att.status === 'uploading' || att.status === 'processing')
+              }
               status={status}
             >
               <ArrowUpIcon size={14} />
@@ -446,9 +563,6 @@ export const MultimodalInput = memo(
       return false;
     }
     if (!equal(prevProps.attachments, nextProps.attachments)) {
-      return false;
-    }
-    if (prevProps.selectedVisibilityType !== nextProps.selectedVisibilityType) {
       return false;
     }
     if (prevProps.selectedModelId !== nextProps.selectedModelId) {
@@ -569,3 +683,49 @@ function PureStopButton({
 }
 
 const StopButton = memo(PureStopButton);
+
+function PureVoiceRecordButton({
+  status,
+  onTranscript,
+}: {
+  status: UseChatHelpers<ChatMessage>["status"];
+  onTranscript: (text: string) => void;
+}) {
+  const [isRecording, setIsRecording] = useState(false);
+
+  const handleClick = () => {
+    if (isRecording) {
+      // 녹음 중지
+      setIsRecording(false);
+      toast.info("음성 녹음이 중지되었습니다.");
+      // TODO: 실제 음성 인식 구현 시 여기서 처리
+    } else {
+      // 녹음 시작
+      setIsRecording(true);
+      toast.info("음성 녹음을 시작합니다...");
+      // TODO: 실제 음성 인식 구현 시 여기서 처리
+    }
+  };
+
+  return (
+    <Button
+      className={cn(
+        "aspect-square h-8 rounded-lg p-1 transition-colors",
+        isRecording
+          ? "bg-red-500 text-white hover:bg-red-600 animate-pulse"
+          : "hover:bg-accent"
+      )}
+      data-testid="voice-record-button"
+      disabled={status !== "ready"}
+      onClick={(event) => {
+        event.preventDefault();
+        handleClick();
+      }}
+      variant="ghost"
+    >
+      <MicrophoneIcon size={14} />
+    </Button>
+  );
+}
+
+const VoiceRecordButton = memo(PureVoiceRecordButton);

@@ -19,7 +19,9 @@ export const fetcher = async (url: string) => {
   const response = await fetch(url);
 
   if (!response.ok) {
-    const { code, cause } = await response.json();
+    const errorData = await response.json();
+    const code = errorData.code || 'bad_request:api';
+    const cause = errorData.cause || errorData.detail || 'Unknown error';
     throw new ChatSDKError(code as ErrorCode, cause);
   }
 
@@ -34,7 +36,20 @@ export async function fetchWithErrorHandlers(
     const response = await fetch(input, init);
 
     if (!response.ok) {
-      const { code, cause } = await response.json();
+      // 에러 응답이 JSON이 아닐 수 있으므로 안전하게 처리
+      let errorData: any = {};
+      try {
+        const text = await response.text();
+        errorData = JSON.parse(text);
+      } catch {
+        // JSON 파싱 실패 시 텍스트 그대로 사용
+        errorData = {
+          code: 'server_error',
+          cause: `Server error: ${response.status} ${response.statusText}`,
+        };
+      }
+      const code = errorData.code || 'bad_request:api';
+      const cause = errorData.cause || errorData.detail || 'Unknown error';
       throw new ChatSDKError(code as ErrorCode, cause);
     }
 
@@ -61,6 +76,22 @@ export function generateUUID(): string {
     const v = c === 'x' ? r : (r & 0x3) | 0x8;
     return v.toString(16);
   });
+}
+
+/**
+ * Get user ID from SSO cookie (empno)
+ * SSO 인증 필수 - 쿠키 없으면 null 반환
+ */
+export function getUserId(): string | null {
+  if (typeof window !== 'undefined') {
+    // SSO 쿠키에서 empno 읽기
+    const cookies = document.cookie.split(';');
+    const empnoCookie = cookies.find(c => c.trim().startsWith('empno='));
+    if (empnoCookie) {
+      return empnoCookie.split('=')[1].trim();
+    }
+  }
+  return null;
 }
 
 type ResponseMessageWithoutId = CoreToolMessage | CoreAssistantMessage;
@@ -111,6 +142,6 @@ export function sanitizeText(text: string) {
 export function getTextFromMessage(message: ChatMessage | UIMessage): string {
   return message.parts
     .filter((part) => part.type === 'text')
-    .map((part) => (part as { type: 'text'; text: string}).text)
+    .map((part) => (part as { type: 'text'; text: string }).text)
     .join('');
 }
