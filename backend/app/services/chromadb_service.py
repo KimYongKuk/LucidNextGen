@@ -170,14 +170,89 @@ class ChromaDBService:
                 embedding_function=self.embedding_function
             )
         except ValueError as e:
-            # 기존 컬렉션이 다른 임베딩으로 만들어져 있을 때 충돌하므로 삭제 후 재생성
+            # 기존 컬렉션이 다른 임베딩으로 만들어져 있을 때 충돌
+            # 자동 삭제 대신 에러 발생 (데이터 손실 방지)
             if "embedding function already exists" in str(e).lower():
-                self.client.delete_collection(name)
-                return self.client.get_or_create_collection(
-                    name,
-                    embedding_function=self.embedding_function
+                print(f"[ChromaDB] ERROR: Collection '{name}' has incompatible embedding model.")
+                print(f"[ChromaDB] Manual migration required. Existing data will NOT be deleted automatically.")
+                raise ValueError(
+                    f"컬렉션 '{name}'의 임베딩 모델이 현재 설정과 호환되지 않습니다. "
+                    f"데이터 보호를 위해 자동 삭제하지 않습니다. 관리자에게 문의하세요."
                 )
             raise
+
+    def _extract_excel_sheets(self, file_path: str) -> List[Dict]:
+        """엑셀 파일에서 시트별 구조화된 데이터 추출
+
+        Returns:
+            [{"sheet_name": str, "header": str, "rows": List[str]}]
+        """
+        wb = openpyxl.load_workbook(file_path, data_only=True)
+        sheets_data = []
+
+        for sheet in wb.worksheets:
+            rows = []
+            for row in sheet.iter_rows(values_only=True):
+                row_text = " | ".join(str(cell) for cell in row if cell)
+                if row_text.strip():
+                    rows.append(row_text)
+
+            if not rows:
+                continue
+
+            sheets_data.append({
+                "sheet_name": sheet.title,
+                "header": rows[0],
+                "rows": rows,
+            })
+
+        return sheets_data
+
+    def _chunk_excel_sheets(self, sheets_data: List[Dict], chunk_size: int = 1000) -> List[Dict]:
+        """시트별 행 기반 청킹 (시트명 + 헤더 프리픽스 포함)
+
+        Returns:
+            [{"text": str, "sheet_name": str}]
+        """
+        chunks = []
+
+        for sheet in sheets_data:
+            sheet_name = sheet["sheet_name"]
+            header = sheet["header"]
+            rows = sheet["rows"]
+
+            prefix = f"[시트: {sheet_name}]\n{header}\n"
+            prefix_len = len(prefix)
+
+            # 데이터 행 (헤더 제외)
+            data_rows = rows[1:] if len(rows) > 1 else []
+
+            if not data_rows:
+                # 헤더만 있는 시트
+                chunks.append({"text": prefix.rstrip("\n"), "sheet_name": sheet_name})
+                
+
+            current_chunk_rows = []
+            current_len = prefix_len
+
+            for row in data_rows:
+                row_len = len(row) + 1  # +1 for newline
+
+                if current_len + row_len > chunk_size and current_chunk_rows:
+                    chunk_text = prefix + "\n".join(current_chunk_rows)
+                    chunks.append({"text": chunk_text, "sheet_name": sheet_name})
+                    current_chunk_rows = []
+                    current_len = prefix_len
+
+                current_chunk_rows.append(row)
+                current_len += row_len
+
+            # 마지막 청크
+            if current_chunk_rows:
+                chunk_text = prefix + "\n".join(current_chunk_rows)
+                chunks.append({"text": chunk_text, "sheet_name": sheet_name})
+
+        return chunks
 
     async def extract_text(self, file_path: str, filename: str) -> str:
         """파일에서 텍스트 추출 (PDF는 하이브리드 처리)"""
@@ -216,13 +291,46 @@ class ChromaDBService:
 
         elif ext in ['html', 'htm']:
             from bs4 import BeautifulSoup
+            import re, html as html_mod
             with open(file_path, 'r', encoding='utf-8') as f:
                 html_content = f.read()
             soup = BeautifulSoup(html_content, 'html.parser')
-            # Remove script and style tags
+
+            # Extract structured data from script tags (e.g. email backup metadata)
+            script_data_lines = []
+            folder_name = ""
+            for script_tag in soup.find_all('script'):
+                script_text = script_tag.string or ""
+                # Extract folder name
+                folder_match = re.search(r'folder\s*=\s*"([^"]*)"', script_text)
+                if folder_match:
+                    folder_name = folder_match.group(1)
+                # Match JS object literals like li[0] = {"subject":"...", "from":"...", ...}
+                entries = re.findall(r'\{[^{}]*"subject"\s*:\s*"[^"]*"[^{}]*\}', script_text)
+                for entry in entries:
+                    pairs = re.findall(r'"(\w+)"\s*:\s*"([^"]*)"', entry)
+                    if pairs:
+                        parts = []
+                        for key, val in pairs:
+                            if key in ('attach', 'html', 'size'):
+                                continue
+                            decoded = html_mod.unescape(val).strip()
+                            if decoded:
+                                parts.append(f"{key}: {decoded}")
+                        if parts:
+                            script_data_lines.append(" | ".join(parts))
+
+            # Remove script and style tags for body text
             for tag in soup(['script', 'style']):
                 tag.decompose()
-            return soup.get_text(separator='\n', strip=True)
+            body_text = soup.get_text(separator='\n', strip=True)
+
+            if script_data_lines:
+                # Return with special separator for row-based chunking
+                prefix = f"[메일함: {folder_name}] " if folder_name else ""
+                header = f"{prefix}메일 목록 ({len(script_data_lines)}건)"
+                return "<<EMAIL_LIST>>\n" + header + "\n" + "\n".join(script_data_lines) + "\n\n" + body_text
+            return body_text
 
         elif ext == 'csv':
             import pandas as pd
@@ -305,21 +413,57 @@ class ChromaDBService:
         _log_timing("Write temp file", t0)
 
         try:
-            # 텍스트 추출 (async)
-            t0 = time.time()
-            text = await self.extract_text(temp_path, filename)
-            _log_timing("Text extraction (total)", t0, f"{len(text)} chars")
+            ext = filename.lower().rsplit('.', 1)[-1]
 
-            # 청킹
-            t0 = time.time()
-            splitter = self.splitter
-            if chunk_size or chunk_overlap:
-                splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=chunk_size or self.splitter.chunk_size,
-                    chunk_overlap=chunk_overlap or self.splitter.chunk_overlap,
-                )
-            chunks = splitter.split_text(text)
-            _log_timing("Chunking", t0, f"{len(chunks)} chunks")
+            if ext in ['xlsx', 'xls']:
+                # ── 엑셀: 시트별 행 기반 청킹 (헤더 프리픽스) ──
+                t0 = time.time()
+                sheets_data = self._extract_excel_sheets(temp_path)
+                total_rows = sum(len(s["rows"]) for s in sheets_data)
+                _log_timing("Excel extraction", t0, f"{len(sheets_data)} sheets, {total_rows} rows")
+
+                t0 = time.time()
+                target_chunk_size = chunk_size or self.splitter._chunk_size
+                excel_chunks = self._chunk_excel_sheets(sheets_data, target_chunk_size)
+                chunks = [c["text"] for c in excel_chunks]
+                sheet_names = [c["sheet_name"] for c in excel_chunks]
+                _log_timing("Excel chunking (row-based)", t0, f"{len(chunks)} chunks")
+            else:
+                # ── 기존 방식: 텍스트 추출 → RecursiveCharacterTextSplitter ──
+                t0 = time.time()
+                text = await self.extract_text(temp_path, filename)
+                _log_timing("Text extraction (total)", t0, f"{len(text)} chars")
+
+                t0 = time.time()
+                # Email HTML: row-based chunking to prevent splitting email entries
+                if text.startswith("<<EMAIL_LIST>>\n"):
+                    text = text[len("<<EMAIL_LIST>>\n"):]
+                    lines = text.split("\n")
+                    header_line = lines[0] if lines else ""  # e.g. "[메일함: 보낸메일함] 메일 목록 (17건)"
+                    target = chunk_size or self.splitter._chunk_size
+                    chunks = []
+                    current_chunk_lines = []
+                    current_size = len(header_line) + 1
+                    for line in lines[1:]:
+                        line_size = len(line) + 1
+                        if current_chunk_lines and current_size + line_size > target:
+                            chunks.append(header_line + "\n" + "\n".join(current_chunk_lines))
+                            current_chunk_lines = []
+                            current_size = len(header_line) + 1
+                        current_chunk_lines.append(line)
+                        current_size += line_size
+                    if current_chunk_lines:
+                        chunks.append(header_line + "\n" + "\n".join(current_chunk_lines))
+                else:
+                    splitter = self.splitter
+                    if chunk_size or chunk_overlap:
+                        splitter = RecursiveCharacterTextSplitter(
+                            chunk_size=chunk_size or self.splitter._chunk_size,
+                            chunk_overlap=chunk_overlap or self.splitter._chunk_overlap,
+                        )
+                    chunks = splitter.split_text(text)
+                _log_timing("Chunking", t0, f"{len(chunks)} chunks")
+                sheet_names = None
 
             # ChromaDB에 저장 (세션별 또는 user별) - 스레드 풀에서 실행
             t0 = time.time()
@@ -334,7 +478,12 @@ class ChromaDBService:
             uploaded_at = datetime.now(timezone.utc).isoformat()
 
             ids = [f"{file_id}_{i}" for i in range(len(chunks))]
-            metadatas = [{"filename": filename, "file_id": file_id, "uploaded_at": uploaded_at} for _ in chunks]
+            metadatas = []
+            for i in range(len(chunks)):
+                meta = {"filename": filename, "file_id": file_id, "uploaded_at": uploaded_at}
+                if sheet_names and sheet_names[i]:
+                    meta["sheet_name"] = sheet_names[i]
+                metadatas.append(meta)
 
             # ✅ ChromaDB 쓰기를 별도 스레드에서 실행 (다른 요청 차단 안함)
             t0 = time.time()

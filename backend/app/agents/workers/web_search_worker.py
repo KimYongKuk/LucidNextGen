@@ -42,6 +42,15 @@ SELECTION RULES:
 1. 사용자가 "perplexity"를 언급하면 → perplexity_search
 2. 그 외 일반 검색 → tavily_search
 
+TAVILY SEARCH - DATE HANDLING (중요):
+- 사용자가 특정 날짜를 언급하면 start_date, end_date 파라미터를 사용하세요
+- 반드시 Today 날짜 기준으로 연도를 추론하세요
+- 예: Today가 2026년 2월 6일일 때:
+  - "2월 5일 뉴스" → start_date="2026-02-05", end_date="2026-02-05"
+  - "1월 뉴스" → start_date="2026-01-01", end_date="2026-01-31"
+  - "작년 12월" → start_date="2025-12-01", end_date="2025-12-31"
+- 날짜 형식은 반드시 YYYY-MM-DD를 사용하세요
+
 TOOL USAGE:
 1. Choose the appropriate tool based on the query
 2. Call the tool ONLY ONCE

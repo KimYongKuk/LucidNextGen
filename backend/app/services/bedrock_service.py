@@ -220,6 +220,52 @@ class BedrockService:
 
         raise Exception(f"모든 모델이 쓰로틀링으로 실패했습니다: {last_exception}")
 
+    async def generate_text_haiku(
+        self,
+        prompt: str,
+        max_tokens: int = 1000,
+        temperature: float = 0.3
+    ) -> str:
+        """
+        Haiku 모델로 텍스트 생성 (메모리 요약 등 저비용 작업용)
+
+        Fallback 없이 Haiku만 사용하여 비용 효율적인 텍스트 생성
+        """
+        haiku_model_id = os.getenv(
+            "BEDROCK_FALLBACK_MODEL_ID",
+            "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        )
+
+        try:
+            request_body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": prompt}]
+                    }
+                ]
+            }
+
+            print(f"[BEDROCK] generate_text_haiku: {haiku_model_id}")
+            response = self.client.invoke_model(
+                modelId=haiku_model_id,
+                body=json.dumps(request_body)
+            )
+
+            response_body = json.loads(response['body'].read())
+
+            if 'content' in response_body and len(response_body['content']) > 0:
+                return response_body['content'][0]['text']
+
+            return ""
+
+        except Exception as e:
+            print(f"[BEDROCK] generate_text_haiku error: {e}")
+            raise
+
     async def converse_with_tools(
         self,
         messages: List[Dict],

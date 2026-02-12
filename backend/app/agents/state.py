@@ -16,6 +16,7 @@ class Intent(str, Enum):
     IT_SUPPORT = "it_support"       # IT/보안 VOC
     ACCT_SUPPORT = "acct_support"   # 회계/재경 VOC
     VISUALIZATION = "visualization" # PDF 생성, 문서 변환, 시각화
+    PPT_GENERATION = "ppt_generation" # PPT 프레젠테이션 생성
     DIRECT = "direct"               # 일반 대화, 코딩, 번역 등
 
 
@@ -29,6 +30,7 @@ INTENT_TO_WORKER = {
     Intent.IT_SUPPORT: "ITSupportWorker",
     Intent.ACCT_SUPPORT: "AcctSupportWorker",
     Intent.VISUALIZATION: "VisualizationWorker",
+    Intent.PPT_GENERATION: "PPTWorker",
     Intent.DIRECT: "DirectResponseWorker",
 }
 
@@ -58,8 +60,8 @@ class RequestContext(TypedDict):
     """요청 컨텍스트 (chat.py에서 전달)"""
     session_id: Optional[str]
     user_id: str
-    workspace_id: Optional[int]
-    workspace_uuid: Optional[str]
+    workspace_id: Optional[str]  # UUID string
+    workspace_uuid: Optional[str]  # Deprecated: use workspace_id
     workspace_instructions: Optional[str]
     workspace_has_files: bool  # 워크스페이스에 문서가 있는지 여부
     has_files: bool  # 세션에 사용자 파일이 업로드되었는지 여부

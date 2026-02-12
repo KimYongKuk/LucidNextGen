@@ -37,7 +37,7 @@ class A2AChatRequest(BaseModel):
     user_id: str = "anonymous"
     images: Optional[List[ImageData]] = None
     message_history: Optional[List[MessageHistory]] = None
-    workspace_id: Optional[int] = None
+    workspace_id: Optional[str] = None  # UUID string
 
 
 @router.post("/v1/chat/a2a/stream")

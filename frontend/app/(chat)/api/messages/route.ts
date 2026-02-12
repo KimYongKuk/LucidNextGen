@@ -68,9 +68,32 @@ export async function GET(request: Request) {
           parts.push({ type: "sources", sources: msg.sources });
         }
 
-        // 4. Corp 문서 출처 (있는 경우)
+        // 4. Corp 문서 출처 (있는 경우) - 파일명별 집계 + 청크 배열 구성
         if (msg.corp_sources && msg.corp_sources.length > 0) {
-          parts.push({ type: "corp-sources", sources: msg.corp_sources });
+          const sourceMap: Record<string, any> = {};
+          for (const item of msg.corp_sources) {
+            const key = item.filename;
+            if (!sourceMap[key]) {
+              sourceMap[key] = {
+                filename: item.filename,
+                category: item.category,
+                similarity: item.similarity || 0,
+                count: 0,
+                chunks: [],
+              };
+            }
+            sourceMap[key].count += 1;
+            if (item.chunk_text) {
+              sourceMap[key].chunks.push({
+                text: item.chunk_text,
+                similarity: item.similarity || 0,
+              });
+            }
+            if ((item.similarity || 0) > sourceMap[key].similarity) {
+              sourceMap[key].similarity = item.similarity;
+            }
+          }
+          parts.push({ type: "corp-sources", sources: Object.values(sourceMap) });
         }
 
         // 5. 차트 데이터 (있는 경우)

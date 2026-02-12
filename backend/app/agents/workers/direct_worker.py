@@ -1,11 +1,11 @@
 """DirectResponseWorker - 도구 없이 직접 응답하는 Worker"""
 
-from typing import List, Dict, Any, AsyncIterator
+from typing import List, Dict, Any, AsyncIterator, Optional
 from langchain_aws import ChatBedrockConverse
 from langchain_core.messages import BaseMessage, SystemMessage
 
 from app.core.model_config import get_worker_config
-from .base_worker import BaseWorker
+from .base_worker import BaseWorker, BEDROCK_CONFIG
 
 
 class DirectResponseWorker(BaseWorker):
@@ -33,7 +33,7 @@ class DirectResponseWorker(BaseWorker):
 
     @property
     def system_prompt(self) -> str:
-        return """You are a helpful AI assistant.
+        return """You are 루시드AI(LucidAI), a helpful AI assistant.
 
 You handle general conversations, coding help, translations, and other tasks
 that don't require external tools.
@@ -44,6 +44,7 @@ GUIDELINES:
 3. For translations, maintain the original meaning
 4. For math/calculations, show your work
 5. Do not use emojis in responses unless explicitly requested by user
+6. When users ask about your capabilities or what you can do, refer to the 루시드AI feature list in the system context
 
 RESPONSE FORMAT:
 - Answer in Korean (unless asked otherwise)
@@ -56,6 +57,7 @@ RESPONSE FORMAT:
         messages: List[BaseMessage],
         context: Dict[str, Any],
         all_tools: List,  # 사용하지 않음
+        memory_context: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """
         도구 없이 직접 LLM 스트리밍
@@ -71,11 +73,15 @@ RESPONSE FORMAT:
             temperature=0.7,
             max_tokens=config.max_tokens,
             disable_streaming=False,
+            config=BEDROCK_CONFIG,
         )
 
-        # 시스템 프롬프트 적용
-        system_prompt = self.build_system_prompt(context)
+        # 시스템 프롬프트 적용 (메모리 컨텍스트 포함)
+        system_prompt = self.build_system_prompt(context, memory_context)
         full_messages = [SystemMessage(content=system_prompt)] + messages
+
+        if memory_context:
+            print(f"[{self.name}] Memory context injected: {len(memory_context.get('summary', ''))} chars")
 
         setup_time = int((time.time() - setup_start) * 1000)
         print(f"[{self.name}] [TIMING] Setup: {setup_time}ms")

@@ -9,6 +9,7 @@ from .url_fetch_worker import URLFetchWorker
 from .it_support_worker import ITSupportWorker
 from .acct_support_worker import AcctSupportWorker
 from .visualization_worker import VisualizationWorker
+from .ppt_worker import PPTWorker
 from .direct_worker import DirectResponseWorker
 
 # Worker Registry
@@ -21,6 +22,7 @@ WORKER_REGISTRY = {
     "ITSupportWorker": ITSupportWorker,
     "AcctSupportWorker": AcctSupportWorker,
     "VisualizationWorker": VisualizationWorker,
+    "PPTWorker": PPTWorker,
     "DirectResponseWorker": DirectResponseWorker,
 }
 
@@ -42,6 +44,7 @@ __all__ = [
     "ITSupportWorker",
     "AcctSupportWorker",
     "VisualizationWorker",
+    "PPTWorker",
     "DirectResponseWorker",
     "WORKER_REGISTRY",
     "get_worker",

@@ -27,7 +27,7 @@ LF(Lucid Fund) 챗봇 시스템으로, Next.js 프론트엔드와 FastAPI 백엔
   - MCP 1.22.0, FastMCP 2.13.1
   - LangChain MCP Adapters 0.1.14
 - **벡터 데이터베이스**: ChromaDB 1.0.15 with Sentence Transformers 5.0.0
-- **데이터베이스**: SQLAlchemy 2.0.36, PyMySQL 1.1.1
+- **데이터베이스**: SQLAlchemy 2.0.36, PyMySQL 1.1.1, DBUtils 3.1.0 (Connection Pool)
 - **문서 처리**: PyPDF2, python-docx, PyMuPDF, python-pptx, openpyxl
 - **PDF/차트 생성**: fpdf2 2.8.3, matplotlib 3.9.0, pandas 2.2.0
 - **웹 검색**: Tavily Python 0.7.10
@@ -71,6 +71,7 @@ LFChatbot_NextJS_FastAPI/
 │   ├── lib/                     # 유틸리티
 │   │   ├── ai/                  # AI 관련 유틸
 │   │   ├── api/                 # API 클라이언트
+│   │   │   ├── config.ts        # API URL 설정 (getApiUrl)
 │   │   │   └── workspaces.ts    # 워크스페이스 API
 │   │   ├── onboarding/          # 온보딩 설정
 │   │   │   └── steps.ts         # 온보딩 단계 정의
@@ -102,9 +103,11 @@ LFChatbot_NextJS_FastAPI/
 │   │   │       ├── visualization_worker.py
 │   │   │       ├── youtube_worker.py
 │   │   │       ├── it_support_worker.py
-│   │   │       └── acct_support_worker.py
+│   │   │       ├── acct_support_worker.py
+│   │   │       └── url_fetch_worker.py
 │   │   ├── core/                # 핵심 설정
 │   │   │   ├── config.py        # 앱 설정
+│   │   │   ├── database.py      # DB 연결 풀 (PooledDB)
 │   │   │   └── model_config.py  # 모델 설정
 │   │   ├── mcp_servers/         # MCP 도구 서버들
 │   │   │   ├── pdf_generator/   # PDF 생성 MCP
@@ -119,6 +122,7 @@ LFChatbot_NextJS_FastAPI/
 │   │   │   ├── bedrock_service.py       # AWS Bedrock 서비스
 │   │   │   ├── chat_log_service.py      # 채팅 기록 관리 (MySQL)
 │   │   │   ├── chromadb_service.py      # ChromaDB 관리
+│   │   │   ├── memory_service.py        # 워크스페이스 메모리 (롤링 요약)
 │   │   │   ├── pdf_vision_service.py    # PDF 비전 추출
 │   │   │   ├── workspace_service.py     # 워크스페이스 관리
 │   │   │   └── youtube_summary_service.py # YouTube 요약
@@ -128,6 +132,9 @@ LFChatbot_NextJS_FastAPI/
 │   │   ├── chromadb_admin/      # 관리자 문서 벡터DB
 │   │   ├── pdf_output/          # 생성된 PDF 파일
 │   │   └── chart_output/        # 생성된 차트 이미지
+│   ├── migrations/              # DB 마이그레이션
+│   │   ├── add_workspace_memory.sql  # 워크스페이스 메모리 테이블
+│   │   └── change_workspace_id_to_uuid.sql  # workspace_id UUID 마이그레이션
 │   ├── mcp_config.json          # MCP 서버 설정
 │   └── requirements.txt         # Python 의존성
 ```
@@ -140,21 +147,25 @@ LFChatbot_NextJS_FastAPI/
 사용자 요청
     ↓
 [Orchestrator]
-    ├── Intent Classification (Haiku - 빠른 분류)
+    ├── Phase 0: Workspace Memory 로드 (워크스페이스인 경우)
+    ├── Phase 1: Intent Classification (Haiku - 빠른 분류)
     ↓
-[Worker 선택 및 실행]
-    ├── DirectWorker: 일반 대화
+[Worker 선택 및 실행] (memory_context 전달)
+    ├── DirectWorker: 일반 대화 (Sonnet)
     ├── WebSearchWorker: 웹 검색 (Tavily)
     ├── UserFilesWorker: 사용자 업로드 파일 검색
     ├── CorpRAGWorker: 사내 문서 검색
     ├── VisualizationWorker: PDF/차트 생성
     ├── YouTubeWorker: YouTube 요약
+    ├── URLFetchWorker: URL 콘텐츠 추출 (뉴스, 블로그 등)
     ├── ITSupportWorker: IT VOC 검색
     └── AcctSupportWorker: 회계 VOC 검색
     ↓
 [MCP Tools] (각 Worker가 필터링된 도구 사용)
     ↓
 스트리밍 응답
+    ↓
+[백그라운드] 채팅 로그 저장 → 메모리 업데이트 트리거 (10메시지마다)
 ```
 
 ### MCP 서버 구성
@@ -162,6 +173,7 @@ LFChatbot_NextJS_FastAPI/
 | MCP 서버 | 도구 | 용도 |
 |----------|------|------|
 | tavily-mcp | tavily_search | 웹 검색 |
+| fetch | fetch | 웹 페이지 콘텐츠 추출 |
 | rag | search_hr/ac/it/safety_docs | 사내 문서 RAG |
 | youtube | youtube_summarize | YouTube 요약 |
 | works_it | search_it_voc, execute_it_voc_query | IT 지원 사례 |
@@ -173,12 +185,13 @@ LFChatbot_NextJS_FastAPI/
 
 | Worker | 도구 | 모델 |
 |--------|------|------|
-| DirectWorker | (없음) | Haiku |
+| DirectWorker | (없음) | Sonnet |
 | WebSearchWorker | tavily_search | Haiku |
 | UserFilesWorker | search_user_files, search_workspace_docs | Haiku |
 | CorpRAGWorker | search_hr/ac/it/safety_docs | Haiku |
 | VisualizationWorker | PDF 도구 + 차트 도구 | Sonnet |
 | YouTubeWorker | youtube_summarize | Haiku |
+| URLFetchWorker | fetch | Sonnet |
 | ITSupportWorker | search_it_voc, execute_it_voc_query | Sonnet |
 | AcctSupportWorker | search_acct_voc, execute_acct_voc_query | Sonnet |
 
@@ -215,19 +228,81 @@ LFChatbot_NextJS_FastAPI/
 - Tavily API 기반 실시간 웹 검색
 - 검색 결과 출처 표시 (소스 캐러셀 UI)
 
-### 6. 워크스페이스 시스템
+### 6. URL 콘텐츠 추출
+- 웹 페이지 URL에서 콘텐츠 추출 및 요약
+- 뉴스 기사, 블로그, GitHub 등 다양한 소스 지원
+- mcp-server-fetch 기반 마크다운 변환
+
+### 7. 워크스페이스 시스템
 - 독립적 작업 공간 생성 (UUID 기반)
 - 문서 업로드 및 벡터 검색 (ChromaDB `workspace_{uuid}` 컬렉션)
 - 커스텀 시스템 프롬프트 설정
-- 비동기 백그라운드 파일 업로드 (폴링 방식)
+- 비동기 백그라운드 파일 업로드 (폴링 방식, 5분 타임아웃)
+- **세션 보호**: 기존 workspace_id가 있는 세션은 덮어쓰기 방지 (COALESCE)
+- **폴링 cleanup**: 컴포넌트 언마운트 시 자동 정리 (메모리 누수 방지)
 
-### 7. 온보딩 시스템
+### 8. 워크스페이스 메모리 시스템
+워크스페이스 내 모든 세션의 대화 내용을 기억하는 롤링 요약 기반 장기 메모리 시스템.
+
+**아키텍처:**
+```
+[사용자 요청] → [Orchestrator]
+                    ↓
+            workspace_id 확인
+                    ↓
+    [MemoryService.get_memory_context()]
+                    ↓
+    memory_context (요약 + 핵심사실)
+                    ↓
+        [Worker.build_system_prompt()]
+                    ↓
+    시스템 프롬프트에 메모리 주입
+                    ↓
+            [LLM 응답 생성]
+                    ↓
+        [백그라운드: 채팅 로그 저장]
+                    ↓
+    10개 메시지마다 롤링 요약 갱신 (Haiku)
+```
+
+**핵심 특징:**
+- **롤링 요약 패턴**: 대화량과 무관하게 항상 고정 길이(~500자) 유지
+- **핵심 사실 추출**: 사용자 선호도, 프로젝트 정보 등 최대 10개 유지
+- **워크스페이스 범위**: 동일 워크스페이스 내 모든 세션에서 메모리 공유
+- **비동기 업데이트**: 백그라운드에서 요약 갱신 (응답 지연 없음)
+- **Haiku 모델 사용**: 비용 효율적인 요약 생성
+
+**설정 상수 (memory_service.py):**
+| 상수 | 값 | 설명 |
+|------|-----|------|
+| MEMORY_SUMMARY_THRESHOLD | 10 | N개 메시지마다 요약 업데이트 |
+| MEMORY_SUMMARY_MAX_LENGTH | 500 | 요약 최대 길이 (자) |
+| MEMORY_KEY_FACTS_LIMIT | 10 | 최대 핵심 사실 개수 |
+
+**데이터베이스 테이블:**
+```sql
+CREATE TABLE workspace_memory (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    workspace_id VARCHAR(36) NOT NULL,         -- UUID string
+    user_id VARCHAR(50) NOT NULL,
+    summary TEXT,                              -- 롤링 요약
+    key_facts JSON,                            -- 핵심 사실 배열
+    total_message_count INT DEFAULT 0,
+    last_summary_message_count INT DEFAULT 0,
+    last_summarized_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY idx_workspace_user (workspace_id, user_id)
+);
+```
+
+### 9. 온보딩 시스템
 - 6단계 인터랙티브 가이드 (채팅, 파일업로드, 모드, PDF/차트, YouTube, 웹검색)
 - LocalStorage 기반 완료 상태 추적
 - 버전 관리로 업데이트 시 재표시
 - Framer Motion 애니메이션
 
-### 8. 채팅 검색
+### 10. 채팅 검색
 - Cmd+K 스타일 검색 모달
 - 최근 7일 채팅 조회 / 검색어 기반 검색
 - 검색어 하이라이팅
@@ -259,9 +334,30 @@ start_server.bat                 # Windows용 서버 시작
 - MCP 서버 설정 (`mcp_config.json`)
 
 ## 데이터베이스
+
+### MySQL 연결 풀 (DBUtils.PooledDB)
+- `database.py`에서 PooledDB를 사용한 연결 풀 관리
+- 환경변수로 풀 크기 조정 가능:
+  - `DB_POOL_MAX_CONNECTIONS`: 최대 연결 수 (기본값: 20)
+  - `DB_POOL_MIN_CACHED`: 초기 유휴 연결 (기본값: 5)
+  - `DB_POOL_MAX_CACHED`: 최대 유휴 연결 (기본값: 10)
+
+### ChromaDB 데이터 보호
+- 임베딩 모델 충돌 시 **자동 삭제 방지** (데이터 손실 방지)
+- 모델 변경 시 수동 마이그레이션 필요 (관리자 확인 후 진행)
+
+### 저장소 구성
 - **ChromaDB**: 벡터 임베딩 저장 (사용자 업로드, 사내 문서)
-- **MySQL**: 채팅 기록, 워크스페이스 메타데이터
+- **MySQL**: 채팅 기록, 워크스페이스 메타데이터, 워크스페이스 메모리
 - **SQLite**: ChromaDB 메타데이터
+
+### MySQL 주요 테이블
+| 테이블 | 용도 |
+|--------|------|
+| chat_sessions | 채팅 세션 메타데이터 |
+| chat_log_new | 채팅 메시지 로그 |
+| workspaces | 워크스페이스 정보 |
+| workspace_memory | 워크스페이스별 롤링 요약 및 핵심 사실 |
 
 ## 배포
 - Frontend: Vercel 또는 Next.js 호스팅 플랫폼

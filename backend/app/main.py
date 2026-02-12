@@ -21,6 +21,7 @@ import logging
 
 from app.adapters.mcp_adapter import MCPAdapter
 from app.utils.pdf_cleanup import pdf_cleanup_scheduler
+from app.utils.chromadb_cleanup import session_cleanup_scheduler
 
 load_dotenv()
 
@@ -77,6 +78,10 @@ async def lifespan(app: FastAPI):
     print("[STARTUP] PDF Cleanup Scheduler starting...")
     pdf_cleanup_scheduler.start()
 
+    # ChromaDB 세션 컬렉션 자동 정리 스케줄러 시작
+    print("[STARTUP] Session Collection Cleanup Scheduler starting...")
+    session_cleanup_scheduler.start()
+
     startup_time = int((time.time() - startup_start) * 1000)
     print("="*70)
     print(f"[STARTUP] Server Ready! (Total time: {startup_time}ms)")
@@ -91,6 +96,7 @@ async def lifespan(app: FastAPI):
         try:
             print("\n[SHUTDOWN] Server shutting down...")
             pdf_cleanup_scheduler.stop()
+            session_cleanup_scheduler.stop()
             await close_mcp_adapter()
             print("[SHUTDOWN] Complete\n")
         except asyncio.CancelledError:

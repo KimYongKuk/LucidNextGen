@@ -250,6 +250,13 @@ class MCPAdapter:
         print("[MCP] Fetching tools from MCP servers...")
         tools = await self._client.get_tools()
 
+        # 직접 호출 RAG 도구 추가 (MCP 프로세스 오버헤드 제거)
+        from app.agents.tools.rag_direct_tools import get_direct_rag_tools
+        direct_rag_tools = get_direct_rag_tools()
+        tools = list(tools)  # 리스트로 변환 (불변 객체일 수 있음)
+        tools.extend(direct_rag_tools)
+        print(f"[MCP] Added {len(direct_rag_tools)} direct RAG tools")
+
         # 글로벌 캐시 업데이트
         MCPAdapter._global_tools_cache = tools
         MCPAdapter._cache_timestamp = now

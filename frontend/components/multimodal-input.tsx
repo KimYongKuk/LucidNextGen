@@ -23,6 +23,7 @@ import { SelectItem } from "@/components/ui/select";
 import { chatModels } from "@/lib/ai/models";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import { cn, getUserId } from "@/lib/utils";
+import { getApiUrl } from "@/lib/api/config";
 import {
   PromptInput,
   PromptInputModelSelect,
@@ -59,6 +60,7 @@ function PureMultimodalInput({
   selectedModelId,
   onModelChange,
   onFileUploaded,
+  workspaceId,
 }: {
   chatId: string;
   input: string;
@@ -74,9 +76,14 @@ function PureMultimodalInput({
   selectedModelId: string;
   onModelChange?: (modelId: string) => void;
   onFileUploaded?: () => void;
+  workspaceId?: string | null;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { width } = useWindowSize();
+
+  // 폴링 cleanup을 위한 refs
+  const pollIntervalsRef = useRef<Set<NodeJS.Timeout>>(new Set());
+  const pollAbortControllerRef = useRef<AbortController | null>(null);
 
   const adjustHeight = useCallback(() => {
     if (textareaRef.current) {
@@ -116,6 +123,18 @@ function PureMultimodalInput({
   useEffect(() => {
     setLocalStorageInput(input);
   }, [input, setLocalStorageInput]);
+
+  // 응답 완료 후 입력 필드에 포커스
+  const prevStatusRef = useRef(status);
+  useEffect(() => {
+    // streaming/submitted → ready 로 바뀌면 포커스
+    if (prevStatusRef.current !== 'ready' && status === 'ready') {
+      if (width && width > 768) {
+        textareaRef.current?.focus();
+      }
+    }
+    prevStatusRef.current = status;
+  }, [status, width]);
 
   const handleInput = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(event.target.value);
@@ -246,17 +265,50 @@ function PureMultimodalInput({
             )
           );
 
-          // Poll for status
+          // Poll for status with cleanup support
           const fileId = data.file_id;
+          const controller = new AbortController();
+          pollAbortControllerRef.current = controller;
+          let retryCount = 0;
+          const maxRetries = 150; // 5분 (2초 × 150)
+
           const pollInterval = setInterval(async () => {
+            // 중단 신호 확인
+            if (controller.signal.aborted) {
+              clearInterval(pollInterval);
+              pollIntervalsRef.current.delete(pollInterval);
+              return;
+            }
+
+            // 최대 재시도 초과
+            if (retryCount >= maxRetries) {
+              clearInterval(pollInterval);
+              pollIntervalsRef.current.delete(pollInterval);
+              setAttachments(prev =>
+                prev.map(att =>
+                  att.url === fileId
+                    ? { ...att, status: 'error', error: 'Processing timeout' }
+                    : att
+                )
+              );
+              toast.error(`파일 처리 시간 초과: ${data.filename}`);
+              return;
+            }
+
             try {
-              const statusRes = await fetch(`/api/v1/upload/status/${fileId}`);
-              if (!statusRes.ok) return; // Skip this poll if error
+              const statusRes = await fetch(`/api/v1/upload/status/${fileId}`, {
+                signal: controller.signal
+              });
+              if (!statusRes.ok) {
+                retryCount++;
+                return; // Skip this poll if error
+              }
 
               const statusData = await statusRes.json();
 
               if (statusData.status === "completed") {
                 clearInterval(pollInterval);
+                pollIntervalsRef.current.delete(pollInterval);
                 setAttachments(prev =>
                   prev.map(att =>
                     att.url === fileId
@@ -274,11 +326,20 @@ function PureMultimodalInput({
                 toast.success(`파일 처리 완료: ${statusData.filename}`);
               } else if (statusData.status === "failed") {
                 clearInterval(pollInterval);
+                pollIntervalsRef.current.delete(pollInterval);
                 throw new Error(statusData.message || "Processing failed");
               }
               // If processing, continue polling
+              retryCount++;
             } catch (err) {
+              // AbortError는 정상적인 취소이므로 무시
+              if (err instanceof Error && err.name === 'AbortError') {
+                clearInterval(pollInterval);
+                pollIntervalsRef.current.delete(pollInterval);
+                return;
+              }
               clearInterval(pollInterval);
+              pollIntervalsRef.current.delete(pollInterval);
               console.error("Polling error:", err);
               setAttachments(prev =>
                 prev.map(att =>
@@ -294,6 +355,9 @@ function PureMultimodalInput({
               toast.error(`파일 처리 실패: ${data.filename}`);
             }
           }, 2000); // Check every 2 seconds
+
+          // 인터벌 추적
+          pollIntervalsRef.current.add(pollInterval);
 
         } else if (data.status === "success") {
           // Immediate success (fallback for small files if sync)
@@ -343,8 +407,9 @@ function PureMultimodalInput({
 
   const deleteSessionFiles = useCallback(async () => {
     try {
+      const baseUrl = getApiUrl();
       const response = await fetch(
-        `http://localhost:8000/api/v1/upload/session/${chatId}`,
+        `${baseUrl}/api/v1/upload/session/${chatId}`,
         {
           method: "DELETE",
         }
@@ -423,10 +488,22 @@ function PureMultimodalInput({
     return () => textarea.removeEventListener("paste", handlePaste);
   }, [handlePaste]);
 
+  // 컴포넌트 언마운트 시 모든 폴링 정리
+  useEffect(() => {
+    return () => {
+      // 모든 폴링 인터벌 정리
+      pollIntervalsRef.current.forEach(interval => clearInterval(interval));
+      pollIntervalsRef.current.clear();
+      // AbortController로 진행 중인 fetch 취소
+      pollAbortControllerRef.current?.abort();
+    };
+  }, []);
+
   return (
     <div className={cn("relative flex w-full flex-col gap-4", className)}>
       {messages.length === 0 &&
-        attachments.length === 0 && (
+        attachments.length === 0 &&
+        !workspaceId && (
           <SuggestedActions
             chatId={chatId}
             sendMessage={sendMessage}
@@ -497,7 +574,7 @@ function PureMultimodalInput({
             autoFocus
             className="grow resize-none border-0! border-none! bg-transparent p-2 text-sm text-left! outline-none ring-0 [-ms-overflow-style:none] [scrollbar-width:none] placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 [&::-webkit-scrollbar]:hidden"
             data-testid="multimodal-input"
-            disabled={status !== "ready"}
+            disabled={false}
             disableAutoResize={true}
             maxHeight={200}
             minHeight={44}
@@ -507,7 +584,7 @@ function PureMultimodalInput({
                 ? "Lucid can make mistakes. Please double-check the response."
                 : "Lucid can make mistakes. Please double-check the response."
             }
-            readOnly={status !== "ready"}
+            readOnly={false}
             ref={textareaRef}
             rows={1}
             style={{ textAlign: 'left', direction: 'ltr' }}

@@ -53,8 +53,8 @@ export default async function proxy(request: NextRequest) {
     }
 
     // 3. Admin 페이지 권한 체크
-    const ADMIN_USERS = ['A2304013']
-    if (pathname.startsWith('/admin') && !ADMIN_USERS.includes(empno)) {
+    const adminUsers = (process.env.NEXT_PUBLIC_ADMIN_USERS || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (pathname.startsWith('/admin') && !adminUsers.includes(empno)) {
       return NextResponse.redirect(new URL('/unauthorized', request.url))
     }
   }

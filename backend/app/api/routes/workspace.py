@@ -101,42 +101,61 @@ async def create_workspace(
         logger.error(f"Failed to create workspace: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/v1/workspaces/{workspace_id}", response_model=WorkspaceResponse)
+@router.get("/v1/workspaces/{workspace_uuid}", response_model=WorkspaceResponse)
 async def get_workspace(
-    workspace_id: int,
+    workspace_uuid: str,
+    user_id: str = Query(..., description="User ID for ownership verification"),
     service: WorkspaceService = Depends(get_workspace_service)
 ):
-    """ID로 워크스페이스 조회"""
-    workspace = service.get_workspace(workspace_id)
+    """UUID로 워크스페이스 조회 (소유권 검증)"""
+    workspace = service.get_workspace_by_uuid(workspace_uuid)
     if not workspace:
         raise HTTPException(status_code=404, detail="Workspace not found")
+    if workspace["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
     return workspace
 
-@router.put("/v1/workspaces/{workspace_id}")
+@router.put("/v1/workspaces/{workspace_uuid}")
 async def update_workspace(
-    workspace_id: int,
+    workspace_uuid: str,
     update_data: WorkspaceUpdate,
+    user_id: str = Query(..., description="User ID for ownership verification"),
     service: WorkspaceService = Depends(get_workspace_service)
 ):
-    """워크스페이스 메타데이터 업데이트"""
+    """워크스페이스 메타데이터 업데이트 (소유권 검증)"""
+    # 소유권 검증
+    workspace = service.get_workspace_by_uuid(workspace_uuid)
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    if workspace["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
     success = service.update_workspace(
-        workspace_id=workspace_id,
+        workspace_id=workspace["id"],
         name=update_data.name,
         description=update_data.description,
         instructions=update_data.instructions
     )
     if not success:
         raise HTTPException(status_code=404, detail="Workspace not found or no changes made")
-    
+
     return {"status": "success", "message": "Workspace updated"}
 
-@router.delete("/v1/workspaces/{workspace_id}")
+@router.delete("/v1/workspaces/{workspace_uuid}")
 async def delete_workspace(
-    workspace_id: int,
+    workspace_uuid: str,
+    user_id: str = Query(..., description="User ID for ownership verification"),
     service: WorkspaceService = Depends(get_workspace_service)
 ):
-    """워크스페이스 및 파일 삭제"""
-    success = service.delete_workspace(workspace_id)
+    """워크스페이스 및 파일 삭제 (소유권 검증)"""
+    # 소유권 검증
+    workspace = service.get_workspace_by_uuid(workspace_uuid)
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    if workspace["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    success = service.delete_workspace(workspace["id"])
     if not success:
         raise HTTPException(status_code=404, detail="Workspace not found")
     return {"status": "success", "message": "Workspace deleted"}
@@ -214,19 +233,24 @@ async def get_workspace_upload_status(file_id: str):
     return status
 
 
-@router.post("/v1/workspaces/{workspace_id}/upload")
+@router.post("/v1/workspaces/{workspace_uuid}/upload")
 async def upload_workspace_file(
-    workspace_id: int,
+    workspace_uuid: str,
     background_tasks: BackgroundTasks,
+    user_id: str = Query(..., description="User ID for ownership verification"),
     file: UploadFile = File(...),
     service: WorkspaceService = Depends(get_workspace_service)
 ):
-    """워크스페이스에 파일 업로드 (비동기 백그라운드 처리)"""
+    """워크스페이스에 파일 업로드 (비동기 백그라운드 처리, 소유권 검증)"""
     try:
-        # 워크스페이스 존재 확인
-        workspace = service.get_workspace(workspace_id)
+        # 워크스페이스 존재 및 소유권 확인
+        workspace = service.get_workspace_by_uuid(workspace_uuid)
         if not workspace:
             raise HTTPException(status_code=404, detail="Workspace not found")
+        if workspace["user_id"] != user_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        workspace_id = workspace["id"]
 
         # 1. 파일 내용 읽기 (메모리)
         file_content = await file.read()
@@ -277,22 +301,38 @@ async def upload_workspace_file(
         logger.error(f"Failed to start upload to workspace {workspace_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/v1/workspaces/{workspace_id}/files", response_model=List[FileResponse])
+@router.get("/v1/workspaces/{workspace_uuid}/files", response_model=List[FileResponse])
 async def list_workspace_files(
-    workspace_id: int,
+    workspace_uuid: str,
+    user_id: str = Query(..., description="User ID for ownership verification"),
     service: WorkspaceService = Depends(get_workspace_service)
 ):
-    """워크스페이스의 파일 목록 조회"""
-    return service.list_files(workspace_id)
+    """워크스페이스의 파일 목록 조회 (소유권 검증)"""
+    # 소유권 검증
+    workspace = service.get_workspace_by_uuid(workspace_uuid)
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    if workspace["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
-@router.delete("/v1/workspaces/{workspace_id}/files/{file_id}")
+    return service.list_files(workspace["id"])
+
+@router.delete("/v1/workspaces/{workspace_uuid}/files/{file_id}")
 async def delete_workspace_file(
-    workspace_id: int,
+    workspace_uuid: str,
     file_id: str,
+    user_id: str = Query(..., description="User ID for ownership verification"),
     service: WorkspaceService = Depends(get_workspace_service)
 ):
-    """워크스페이스에서 파일 삭제"""
-    success = service.delete_file(workspace_id, file_id)
+    """워크스페이스에서 파일 삭제 (소유권 검증)"""
+    # 소유권 검증
+    workspace = service.get_workspace_by_uuid(workspace_uuid)
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    if workspace["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    success = service.delete_file(workspace["id"], file_id)
     if not success:
         raise HTTPException(status_code=404, detail="File not found")
     return {"status": "success", "message": "File deleted"}

@@ -3,16 +3,7 @@
 import { useState, useCallback, useRef } from 'react';
 import type { ChatMessage } from '@/lib/types';
 import { getUserId } from '@/lib/utils';
-
-// API URL 생성 함수 - 프론트엔드와 백엔드가 같은 서버에서 실행되므로 현재 호스트 사용
-const getApiUrl = () => {
-  if (typeof window !== 'undefined') {
-    // 브라우저의 현재 호스트명을 사용 (localhost든 IP든 동일하게 처리)
-    const currentHost = window.location.hostname;
-    return `http://${currentHost}:8000`;
-  }
-  return 'http://localhost:8000';
-};
+import { getApiUrl } from '@/lib/api/config';
 
 // 고유 ID 생성 함수
 const generateId = (): string => {
@@ -34,7 +25,7 @@ interface UseSimpleChatOptions {
   onFinish?: () => void;
   onError?: (error: Error) => void;
   generateId?: () => string;
-  workspaceId?: number | null;
+  workspaceId?: string | null;  // UUID string
 }
 
 export function useSimpleChat({
@@ -96,8 +87,8 @@ export function useSimpleChat({
         .filter((img): img is { media_type: string; base64_data: string } => !!img && !!img.base64_data) || [];
 
       // 현재 메시지 히스토리 구성 (현재 사용자 메시지 제외)
-      // 최대 10회의 대화만 전송 (토큰 관리를 위해)
-      const MAX_CONVERSATION_TURNS = 10;
+      // 최대 15회의 대화만 전송 (토큰 관리 + 워크스페이스 메모리로 이전 대화 보완)
+      const MAX_CONVERSATION_TURNS = 15;
       const MAX_HISTORY_MESSAGES = MAX_CONVERSATION_TURNS * 2; // user + assistant 쌍
 
       // 최근 메시지부터 최대 개수만큼만 선택
@@ -184,7 +175,6 @@ export function useSimpleChat({
                   if (jsonStr === '') continue;
 
                   const data = JSON.parse(jsonStr);
-                  console.log('[useSimpleChat] SSE data received:', data);
 
                   if (data.error) {
                     throw new Error(data.error);
@@ -214,7 +204,6 @@ export function useSimpleChat({
 
                   // 대기 완료 메시지 처리
                   if (data.type === 'waiting_complete') {
-                    console.log(`[useSimpleChat] Waited ${data.wait_time_ms}ms in queue`);
                     // 대기 상태 메시지 제거
                     currentToolStatus = '';
                   }
@@ -257,28 +246,24 @@ export function useSimpleChat({
 
                   // Tavily 검색 출처 처리 (저장만, 스트리밍 완료 후 표시)
                   if (data.type === 'search_sources' && data.sources) {
-                    console.log('[useSimpleChat] Received search_sources:', data.sources);
                     sources = data.sources;
                     // 출처는 저장만 하고 스트리밍 완료 시 표시
                   }
 
                   // YouTube 요약 처리 (저장만, 스트리밍 완료 후 표시)
                   if (data.type === 'youtube_summary' && data.summary) {
-                    console.log('[useSimpleChat] Received youtube_summary:', data.summary.title);
                     youtubeSummary = data.summary;
                     // YouTube 요약은 저장만 하고 스트리밍 완료 시 표시
                   }
 
                   // Corp 문서 출처 처리 (저장만, 스트리밍 완료 후 표시)
                   if (data.type === 'corp_sources' && data.sources) {
-                    console.log('[useSimpleChat] Received corp_sources:', data.sources);
                     corpSources = data.sources;
                     // Corp 출처는 저장만 하고 스트리밍 완료 시 표시
                   }
 
                   // 차트 데이터 처리 (저장만, 스트리밍 완료 후 표시)
                   if (data.type === 'chart_data' && data.chart) {
-                    console.log('[useSimpleChat] Received chart_data:', data.chart.chart_type, data.chart.title);
                     chartData = data.chart;
                     // 차트는 저장만 하고 스트리밍 완료 시 표시
                   }
@@ -286,8 +271,6 @@ export function useSimpleChat({
                   // 모델 Fallback 알림 처리
                   if (data.type === 'model_fallback') {
                     const fallbackMessage = data.message || `${data.model}로 전환되었습니다.`;
-                    console.log(`[useSimpleChat] Model fallback: ${fallbackMessage}`);
-
                     // Fallback 알림을 임시 상태로 표시 (tool_status와 유사)
                     currentToolStatus = `\n\n__FALLBACK__:${fallbackMessage}__END__\n\n`;
 
@@ -329,7 +312,6 @@ export function useSimpleChat({
 
                   // 완료 체크
                   if (data.complete) {
-                    console.log('[useSimpleChat] Streaming completed');
                     hasCompleted = true;
 
                     // 스트리밍 완료 후 최종 parts 구성 (텍스트 + 차트 + 출처 + Corp 출처 + YouTube 요약 순서)
@@ -437,7 +419,6 @@ export function useSimpleChat({
 
   const resumeStream = useCallback(async () => {
     // 현재 구현에서는 resume 기능 불필요 (자동 완료)
-    console.log('[useSimpleChat] resumeStream called (no-op)');
   }, []);
 
   return {

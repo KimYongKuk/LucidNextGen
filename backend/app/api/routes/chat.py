@@ -49,7 +49,7 @@ class ChatRequest(BaseModel):
     user_id: str = "anonymous"
     images: Optional[List[ImageData]] = None
     message_history: Optional[List[MessageHistory]] = None
-    workspace_id: Optional[int] = None
+    workspace_id: Optional[str] = None  # UUID string
 
 
 # ============================================================================
@@ -64,7 +64,7 @@ async def _save_chat_log_background(
     session_id: str,
     chat_mode: str,
     metadata: dict,
-    workspace_id: Optional[int],
+    workspace_id: Optional[str],  # UUID string
 ):
     """Background task for saving chat log (prevents streaming delay)"""
     try:
@@ -80,6 +80,29 @@ async def _save_chat_log_background(
             workspace_id=workspace_id,
         )
         print(f"[BACKGROUND] Chat log saved successfully")
+
+        # ============ 워크스페이스 메모리 업데이트 트리거 ============
+        print(f"[BACKGROUND] workspace_id={workspace_id}, user_id={user_id}")
+        if workspace_id:
+            try:
+                from app.services.memory_service import get_memory_service
+                memory_service = get_memory_service()
+
+                if await memory_service.should_update_summary(workspace_id, user_id):
+                    # 비동기 백그라운드 실행 (응답 지연 없음)
+                    asyncio.create_task(
+                        memory_service.update_summary(workspace_id, user_id)
+                    )
+                    print(f"[BACKGROUND] Triggered memory update for workspace {workspace_id}")
+                else:
+                    print(f"[BACKGROUND] Memory update not needed yet for workspace {workspace_id}")
+            except Exception as mem_e:
+                print(f"[BACKGROUND] Memory update error (non-fatal): {mem_e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print(f"[BACKGROUND] No workspace_id, skipping memory update")
+
     except Exception as e:
         print(f"[BACKGROUND] Failed to save chat log: {e}")
         import traceback
@@ -98,7 +121,7 @@ def build_system_prompt(
     has_files: bool,
     session_id: Optional[str],
     message_history: Optional[list] = None,
-    workspace_id: Optional[int] = None,
+    workspace_id: Optional[str] = None,  # UUID string
     workspace_context: Optional[dict] = None
 ) -> str:
     """
@@ -438,14 +461,14 @@ async def chat_stream(
                     is_a2a_route = True  # A2A 경로 플래그 설정
                     print("[CHAT_STREAM] Route: A2A Hierarchical Agent")
 
-                    # 워크스페이스 컨텍스트 조회
+                    # 워크스페이스 컨텍스트 조회 (workspace_id is now UUID)
                     workspace_context = None
                     if request.workspace_id:
                         from app.services.workspace_service import get_workspace_service
                         workspace_service = get_workspace_service()
-                        workspace_data = workspace_service.get_workspace(request.workspace_id)
+                        workspace_data = workspace_service.get_workspace_by_uuid(request.workspace_id)
                         if workspace_data:
-                            workspace_has_files = workspace_service.has_files(request.workspace_id)
+                            workspace_has_files = workspace_service.has_files(workspace_data["id"])
                             workspace_context = {
                                 "uuid": workspace_data.get("uuid"),
                                 "name": workspace_data.get("name"),
@@ -521,14 +544,14 @@ async def chat_stream(
                 # ============================================================
                 print("[CHAT_STREAM] Route: Legacy Single Agent")
 
-                # 워크스페이스 컨텍스트 조회 (A2A와 동일)
+                # 워크스페이스 컨텍스트 조회 (A2A와 동일, workspace_id is UUID)
                 workspace_context = None
                 if request.workspace_id:
                     from app.services.workspace_service import get_workspace_service
                     workspace_service = get_workspace_service()
-                    workspace_data = workspace_service.get_workspace(request.workspace_id)
+                    workspace_data = workspace_service.get_workspace_by_uuid(request.workspace_id)
                     if workspace_data:
-                        workspace_has_files = workspace_service.has_files(request.workspace_id)
+                        workspace_has_files = workspace_service.has_files(workspace_data["id"])
                         workspace_context = {
                             "uuid": workspace_data.get("uuid"),
                             "name": workspace_data.get("name"),
@@ -870,7 +893,7 @@ async def list_chat_sessions(
     chat_mode: Optional[str] = Query(None),
     limit: int = Query(20, ge=1, le=100),
     cursor: Optional[str] = Query(None),
-    workspace_id: Optional[int] = Query(None),
+    workspace_id: Optional[str] = Query(None),  # UUID string
     chat_log: ChatLogService = Depends(get_chat_log_service),
 ):
     """사용자 세션 목록 조회 (최근 7일/전체, 커서 페이지네이션)"""
@@ -960,10 +983,16 @@ async def get_session_messages(
             user_id=user_id,
             limit=limit,
         )
+
+        # 세션 정보에서 workspace_id 가져오기
+        session_info = chat_log.get_session(session_id)
+        workspace_id = session_info.get("workspace_id") if session_info else None
+
         return {
             "session_id": session_id,
             "messages": messages,
             "total_count": len(messages),
+            "workspace_id": workspace_id,
             "status": "ok",
         }
     except Exception as e:

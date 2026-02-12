@@ -26,6 +26,22 @@ const PDFDownloadLink = ({ filename }: { filename: string }) => {
   );
 };
 
+// PPT 다운로드 링크 컴포넌트
+const PPTDownloadLink = ({ filename }: { filename: string }) => {
+  const downloadUrl = `/api/v1/ppt/download/${encodeURIComponent(filename)}`;
+
+  return (
+    <a
+      href={downloadUrl}
+      download={filename}
+      className="inline-flex items-center gap-1.5 text-orange-600 dark:text-orange-400 hover:underline text-sm"
+    >
+      <FileDown className="w-4 h-4" />
+      {filename} 다운로드
+    </a>
+  );
+};
+
 // PDF 경로에서 파일명 추출 및 다운로드 링크로 변환
 const processPDFContent = (content: string): { processedContent: string; pdfFiles: string[] } => {
   const pdfFiles: string[] = [];
@@ -98,6 +114,61 @@ const processPDFContent = (content: string): { processedContent: string; pdfFile
     .replace(/📄\s*파일:\s*[^\n]+\.pdf\n?/gi, '');
 
   return { processedContent, pdfFiles };
+};
+
+// PPT 경로에서 파일명 추출 및 다운로드 링크로 변환
+const processPPTContent = (content: string): { processedContent: string; pptFiles: string[] } => {
+  const pptFiles: string[] = [];
+
+  const cleanFilename = (filename: string): string => {
+    let cleaned = filename
+      .trim()
+      .replace(/^[`'"*_\s]+|[`'"*_\s]+$/g, '')
+      .replace(/[`'"]/g, '')
+      .replace(/\*{2,}/g, '')
+      .replace(/_{2,}/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .replace(/\s+\.pptx$/i, '.pptx')
+      .trim();
+    const parts = cleaned.split(/[\\\/]/);
+    return parts[parts.length - 1] || cleaned;
+  };
+
+  // 패턴 1: "파일명: xxx.pptx"
+  const filenamePattern = /\*?\*?파일명\*?\*?:\s*`?([^\n`]+\.pptx)`?/gi;
+  // 패턴 2: "파일: xxx.pptx"
+  const filePattern = /(?:📊\s*)?\*?\*?파일\*?\*?:\s*`?([^\n`]+\.pptx)`?/gi;
+  // 패턴 3: "ppt_output/xxx.pptx"
+  const pathPattern = /ppt_output[/\\]([^\s\n`'"]+\.pptx)/gi;
+  // 패턴 4: 전체 경로
+  const fullPathPattern = /[A-Z]:[\\\/].*?[\\\/]ppt_output[\\\/]([^\s\n`'"]+\.pptx)/gi;
+
+  let match;
+  while ((match = filenamePattern.exec(content)) !== null) {
+    const filename = cleanFilename(match[1]);
+    if (filename && !pptFiles.includes(filename)) pptFiles.push(filename);
+  }
+  while ((match = filePattern.exec(content)) !== null) {
+    const rawFilename = cleanFilename(match[1]);
+    const justFilename = rawFilename.split(/[\\\/]/).pop() || rawFilename;
+    if (justFilename && !pptFiles.includes(justFilename)) pptFiles.push(justFilename);
+  }
+  while ((match = pathPattern.exec(content)) !== null) {
+    const filename = cleanFilename(match[1]);
+    if (filename && !pptFiles.includes(filename)) pptFiles.push(filename);
+  }
+  while ((match = fullPathPattern.exec(content)) !== null) {
+    const filename = cleanFilename(match[1]);
+    if (filename && !pptFiles.includes(filename)) pptFiles.push(filename);
+  }
+
+  let processedContent = content
+    .replace(/\*?\*?파일명\*?\*?:\s*[^\n]+\.pptx\n?/gi, '')
+    .replace(/\*?\*?파일 위치\*?\*?:\s*[^\n]*ppt_output[^\n]*\n?/gi, '')
+    .replace(/\*?\*?저장 위치\*?\*?:\s*[^\n]*ppt_output[^\n]*\n?/gi, '')
+    .replace(/\*?\*?경로\*?\*?:\s*[^\n]*ppt_output[^\n]*\n?/gi, '');
+
+  return { processedContent, pptFiles };
 };
 
 // 타이핑 효과 컴포넌트 (무한 반복)
@@ -228,7 +299,9 @@ export const Response = memo(
     }
 
     // PDF 파일 감지 및 처리
-    const { processedContent: markdownContent, pdfFiles } = processPDFContent(content || "");
+    const { processedContent: pdfProcessed, pdfFiles } = processPDFContent(content || "");
+    // PPT 파일 감지 및 처리
+    const { processedContent: markdownContent, pptFiles } = processPPTContent(pdfProcessed);
 
     // 마크다운 렌더링
     return (
@@ -276,6 +349,15 @@ export const Response = memo(
           <div className="mt-3 flex flex-col gap-1">
             {pdfFiles.map((filename, idx) => (
               <PDFDownloadLink key={idx} filename={filename} />
+            ))}
+          </div>
+        )}
+
+        {/* PPT 다운로드 링크 */}
+        {pptFiles.length > 0 && (
+          <div className="mt-3 flex flex-col gap-1">
+            {pptFiles.map((filename, idx) => (
+              <PPTDownloadLink key={idx} filename={filename} />
             ))}
           </div>
         )}

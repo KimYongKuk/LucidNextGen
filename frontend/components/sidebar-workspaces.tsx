@@ -54,8 +54,8 @@ export function SidebarWorkspaces() {
     };
 
     const handleWorkspaceClick = (workspace: Workspace) => {
-        // Navigate to new chat with workspace context
-        router.push(`/?workspace_id=${workspace.id}`);
+        // Navigate to new chat with workspace context (using UUID for security)
+        router.push(`/?workspace_id=${workspace.uuid}`);
         router.refresh();
     };
 
@@ -82,9 +82,9 @@ export function SidebarWorkspaces() {
                         <SidebarGroupContent>
                             <SidebarMenu>
                                 {workspaces?.map((workspace) => (
-                                    <SidebarMenuItem key={workspace.id}>
+                                    <SidebarMenuItem key={workspace.uuid}>
                                         <SidebarMenuButton
-                                            isActive={currentWorkspaceId === String(workspace.id)}
+                                            isActive={currentWorkspaceId === workspace.uuid}
                                             onClick={() => handleWorkspaceClick(workspace)}
                                             className="group/item"
                                         >
@@ -117,10 +117,10 @@ export function SidebarWorkspaces() {
                 onOpenChange={setIsModalOpen}
                 workspace={selectedWorkspace}
                 onSaved={() => mutate()}
-                onDeleted={(deletedId) => {
+                onDeleted={(deletedUuid) => {
                     mutate();
                     // 현재 선택된 워크스페이스가 삭제된 경우 메인 화면으로 이동
-                    if (currentWorkspaceId === String(deletedId)) {
+                    if (currentWorkspaceId === deletedUuid) {
                         router.push("/");
                     }
                 }}

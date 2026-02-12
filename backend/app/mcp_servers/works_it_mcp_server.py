@@ -17,11 +17,6 @@ from fastmcp import FastMCP
 
 mcp = FastMCP("IT VOC Knowledge Base Server v1")
 
-# 메타데이터 경로
-METADATA_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "..", "metadata", "MCP_GW_WORKS_IT.md"
-)
-
 # PostgreSQL 연결 정보 (TIMS DB)
 DATABASE_URL = "postgres://ai_reader:Aitf1234$$@192.168.100.5:5432/tims"
 
@@ -41,16 +36,6 @@ async def get_db_pool() -> asyncpg.Pool:
         )
         print("IT VOC DB 연결 풀 생성 완료", file=sys.stderr)
     return _db_pool
-
-
-@mcp.tool()
-async def get_it_voc_guide() -> str:
-    """IT/보안 VOC 스키마 가이드. execute_it_voc_query 전에 먼저 호출."""
-    try:
-        with open(METADATA_PATH, 'r', encoding='utf-8') as f:
-            return f.read()
-    except FileNotFoundError:
-        return "메타데이터 파일을 찾을 수 없습니다: MCP_GW_WORKS_IT.md"
 
 
 @mcp.tool()
@@ -219,8 +204,6 @@ async def execute_it_voc_query(sql_query: str) -> str:
 
 if __name__ == "__main__":
     print("IT VOC Knowledge Base MCP Server v1 시작...", file=sys.stderr)
-    print(f"메타데이터: {METADATA_PATH}", file=sys.stderr)
-    print("", file=sys.stderr)
     print("이 서버는 IT/보안 지원요청 해결 사례를 검색합니다.", file=sys.stderr)
     print("v_works_app_934_data 뷰를 통해 과거 VOC를 조회합니다.", file=sys.stderr)
     print("", file=sys.stderr)

@@ -83,6 +83,10 @@ backend/data/chromadb/
 # 생성된 출력물
 backend/data/pdf_output/
 backend/data/chart_output/
+backend/data/ppt_output/
+
+# 이메일 백업 참조
+backend/email_backup_reference/
 
 # 기타 데이터
 backend/chdata/

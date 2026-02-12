@@ -94,6 +94,15 @@ export function getUserId(): string | null {
   return null;
 }
 
+export function isAdminUser(userId: string | null): boolean {
+  if (!userId) return false;
+  const adminUsers = (process.env.NEXT_PUBLIC_ADMIN_USERS || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+  return adminUsers.includes(userId);
+}
+
 type ResponseMessageWithoutId = CoreToolMessage | CoreAssistantMessage;
 type ResponseMessage = ResponseMessageWithoutId & { id: string };
 

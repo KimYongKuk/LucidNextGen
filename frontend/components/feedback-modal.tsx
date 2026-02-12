@@ -238,7 +238,7 @@ export function FeedbackModal({ open, onOpenChange }: FeedbackModalProps) {
         <DialogHeader className="px-6 py-4 border-b border-white/10">
           <DialogTitle className="text-white flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-amber-400" />
-            <span>Feedback</span>
+            <span>익명 피드백</span>
             <span className="text-sm font-normal text-white/50 ml-2">
               {feedbacks.length > 0 && `${currentIndex + 1} / ${feedbacks.length}`}
             </span>

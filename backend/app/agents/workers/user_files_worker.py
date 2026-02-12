@@ -1,6 +1,6 @@
 """UserFilesWorker - 사용자 파일 및 워크스페이스 문서 검색 Worker"""
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from .base_worker import BaseWorker
 
 
@@ -79,12 +79,17 @@ RESPONSE FORMAT:
 - When using tool results, reference specific file names and sections
 - Be professional without emojis"""
 
-    def build_system_prompt(self, context: Dict[str, Any]) -> str:
+    def build_system_prompt(
+        self,
+        context: Dict[str, Any],
+        memory_context: Optional[Dict[str, Any]] = None
+    ) -> str:
         """
         컨텍스트를 반영한 시스템 프롬프트 생성 (동적 우선순위 적용)
 
         Args:
             context: 세션, 워크스페이스, has_files 등 컨텍스트 정보
+            memory_context: 워크스페이스 메모리 (요약, 핵심 사실)
         """
         session_id = context.get("session_id")
         workspace_uuid = context.get("workspace_uuid")

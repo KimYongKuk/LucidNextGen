@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { Toaster } from "sonner";
 import { ThemeProvider } from "@/components/theme-provider";
 import { OnboardingProvider } from "@/components/onboarding/onboarding-provider";
+import { WhatsNewProvider } from "@/components/whats-new/whats-new-provider";
 
 import "./globals.css";
 
@@ -49,6 +50,34 @@ const THEME_COLOR_SCRIPT = `\
   updateThemeColor();
 })();`;
 
+// 복사 시 다크 테마 배경색이 클립보드에 포함되지 않도록 하는 스크립트
+const CLEAN_COPY_SCRIPT = `\
+(function() {
+  document.addEventListener('copy', function(e) {
+    var sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    var range = sel.getRangeAt(0);
+    var container = document.createElement('div');
+    container.appendChild(range.cloneContents());
+    var els = container.querySelectorAll('*');
+    for (var i = 0; i < els.length; i++) {
+      var s = els[i].style;
+      if (s) {
+        s.removeProperty('background-color');
+        s.removeProperty('background');
+        s.removeProperty('color');
+      }
+      els[i].removeAttribute('bgcolor');
+    }
+    var html = container.innerHTML;
+    if (html) {
+      e.clipboardData.setData('text/html', html);
+      e.clipboardData.setData('text/plain', sel.toString());
+      e.preventDefault();
+    }
+  });
+})();`;
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -71,6 +100,12 @@ export default function RootLayout({
             __html: THEME_COLOR_SCRIPT,
           }}
         />
+        <script
+          // biome-ignore lint/security/noDangerouslySetInnerHtml: "Required"
+          dangerouslySetInnerHTML={{
+            __html: CLEAN_COPY_SCRIPT,
+          }}
+        />
       </head>
       <body className="antialiased">
         <ThemeProvider
@@ -80,8 +115,10 @@ export default function RootLayout({
           enableSystem
         >
           <OnboardingProvider>
-            <Toaster position="top-center" />
-            {children}
+            <WhatsNewProvider>
+              <Toaster position="top-center" />
+              {children}
+            </WhatsNewProvider>
           </OnboardingProvider>
         </ThemeProvider>
       </body>

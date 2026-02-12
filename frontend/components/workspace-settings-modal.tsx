@@ -45,7 +45,7 @@ interface WorkspaceSettingsModalProps {
     onOpenChange: (open: boolean) => void;
     workspace?: Workspace | null; // If null, create mode
     onSaved?: () => void;
-    onDeleted?: (workspaceId: number) => void;
+    onDeleted?: (workspaceUuid: string) => void;
 }
 
 export function WorkspaceSettingsModal({
@@ -58,6 +58,18 @@ export function WorkspaceSettingsModal({
     const [activeTab, setActiveTab] = useState<"general" | "knowledge">("general");
     const [isLoading, setIsLoading] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
+
+    // Radix UI bug workaround: nested AlertDialog inside Dialog can leave
+    // pointer-events: none stuck on document.body after close
+    const forceCleanupPointerEvents = () => {
+        setTimeout(() => {
+            document.body.style.pointerEvents = '';
+        }, 0);
+        // Double-check after animations complete
+        setTimeout(() => {
+            document.body.style.pointerEvents = '';
+        }, 300);
+    };
 
     // Form State
     const [name, setName] = useState("");
@@ -79,7 +91,7 @@ export function WorkspaceSettingsModal({
                 setName(workspace.name);
                 setDescription(workspace.description || "");
                 setInstructions(workspace.instructions || "");
-                loadFiles(workspace.id);
+                loadFiles(workspace.uuid);
             } else {
                 // Reset for create mode
                 setName("");
@@ -91,9 +103,10 @@ export function WorkspaceSettingsModal({
         }
     }, [open, workspace]);
 
-    const loadFiles = async (workspaceId: number) => {
+    const loadFiles = async (workspaceUuid: string) => {
         try {
-            const data = await workspaceApi.listFiles(workspaceId);
+            const userId = getUserId() ?? "";
+            const data = await workspaceApi.listFiles(workspaceUuid, userId);
             setFiles(data);
         } catch (error) {
             console.error("Failed to load files:", error);
@@ -113,13 +126,13 @@ export function WorkspaceSettingsModal({
 
             if (workspace) {
                 // Update
-                await workspaceApi.update(workspace.id, {
+                await workspaceApi.update(workspace.uuid, userId, {
                     name,
                     description,
                     instructions,
                 });
                 // Invalidate workspace cache to update Chat component
-                mutate(`/api/v1/workspaces/${workspace.id}`);
+                mutate(`/api/v1/workspaces/${workspace.uuid}`);
                 toast.success("Workspace updated successfully");
             } else {
                 // Create
@@ -157,13 +170,15 @@ export function WorkspaceSettingsModal({
         setUploadProgress("");
 
         try {
+            const userId = getUserId() ?? "";
             // Upload files sequentially with polling
             for (let i = 0; i < fileList.length; i++) {
                 const file = fileList[i];
                 setUploadProgress(`Uploading ${file.name} (${i + 1}/${fileList.length})...`);
 
                 await workspaceApi.uploadFileWithPolling(
-                    workspace.id,
+                    workspace.uuid,
+                    userId,
                     file,
                     (status: UploadStatus) => {
                         // Progress callback
@@ -174,7 +189,7 @@ export function WorkspaceSettingsModal({
                 );
             }
             toast.success("Files uploaded successfully");
-            loadFiles(workspace.id);
+            loadFiles(workspace.uuid);
         } catch (error) {
             console.error("Failed to upload files:", error);
             toast.error(error instanceof Error ? error.message : "Failed to upload files");
@@ -196,14 +211,16 @@ export function WorkspaceSettingsModal({
         if (!workspace || !fileToDelete) return;
 
         try {
-            await workspaceApi.deleteFile(workspace.id, fileToDelete);
+            const userId = getUserId() ?? "";
+            await workspaceApi.deleteFile(workspace.uuid, userId, fileToDelete);
             toast.success("File deleted");
-            loadFiles(workspace.id);
+            loadFiles(workspace.uuid);
         } catch (error) {
             console.error("Failed to delete file:", error);
             toast.error("Failed to delete file");
         } finally {
             setFileToDelete(null);
+            forceCleanupPointerEvents();
         }
     };
 
@@ -216,23 +233,33 @@ export function WorkspaceSettingsModal({
 
         setIsLoading(true);
         try {
-            const deletedId = workspace.id;
-            await workspaceApi.delete(deletedId);
+            const userId = getUserId() ?? "";
+            const deletedUuid = workspace.uuid;
+            await workspaceApi.delete(deletedUuid, userId);
             toast.success("Workspace deleted successfully");
-            onSaved?.();
-            onDeleted?.(deletedId);
+
+            // Close both dialogs and force cleanup pointer-events
+            setShowWorkspaceDeleteAlert(false);
             onOpenChange(false);
+            forceCleanupPointerEvents();
+
+            onSaved?.();
+            onDeleted?.(deletedUuid);
         } catch (error) {
             console.error("Failed to delete workspace:", error);
             toast.error("Failed to delete workspace");
+            setShowWorkspaceDeleteAlert(false);
+            forceCleanupPointerEvents();
         } finally {
             setIsLoading(false);
-            setShowWorkspaceDeleteAlert(false);
         }
     };
 
     return (
-        <Dialog open={open} onOpenChange={onOpenChange}>
+        <Dialog open={open} onOpenChange={(newOpen) => {
+            onOpenChange(newOpen);
+            if (!newOpen) forceCleanupPointerEvents();
+        }}>
             <DialogContent className="sm:max-w-[800px] h-[600px] flex flex-col p-0 gap-0">
                 <DialogHeader className="p-6 pb-4 border-b">
                     <DialogTitle>{workspace ? "Workspace 설정" : "Workspace 생성"}</DialogTitle>
@@ -426,8 +453,13 @@ export function WorkspaceSettingsModal({
                 </DialogFooter>
             </DialogContent>
 
-            <AlertDialog open={!!fileToDelete} onOpenChange={(open) => !open && setFileToDelete(null)}>
-                <AlertDialogContent>
+            <AlertDialog open={!!fileToDelete} onOpenChange={(open) => {
+                if (!open) {
+                    setFileToDelete(null);
+                    forceCleanupPointerEvents();
+                }
+            }}>
+                <AlertDialogContent onCloseAutoFocus={(e) => e.preventDefault()}>
                     <AlertDialogHeader>
                         <AlertDialogTitle>Delete File?</AlertDialogTitle>
                         <AlertDialogDescription>
@@ -443,8 +475,11 @@ export function WorkspaceSettingsModal({
                 </AlertDialogContent>
             </AlertDialog>
 
-            <AlertDialog open={showWorkspaceDeleteAlert} onOpenChange={setShowWorkspaceDeleteAlert}>
-                <AlertDialogContent>
+            <AlertDialog open={showWorkspaceDeleteAlert} onOpenChange={(open) => {
+                setShowWorkspaceDeleteAlert(open);
+                if (!open) forceCleanupPointerEvents();
+            }}>
+                <AlertDialogContent onCloseAutoFocus={(e) => e.preventDefault()}>
                     <AlertDialogHeader>
                         <AlertDialogTitle>Delete Workspace?</AlertDialogTitle>
                         <AlertDialogDescription>

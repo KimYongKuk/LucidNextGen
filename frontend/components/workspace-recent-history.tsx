@@ -25,11 +25,9 @@ interface ChatSession {
 export function WorkspaceRecentHistory({ workspace }: WorkspaceRecentHistoryProps) {
     const userId = getUserId() ?? "";
 
-    console.log("[WorkspaceRecentHistory] workspace:", workspace);
     const url = userId && workspace
-        ? `/api/v1/chat/sessions?user_id=${userId}&workspace_id=${workspace.id}&limit=4`
+        ? `/api/v1/chat/sessions?user_id=${userId}&workspace_id=${workspace.uuid}&limit=4`
         : null;
-    console.log("[WorkspaceRecentHistory] SWR URL:", url);
 
     const { data, isLoading } = useSWR<{ sessions: ChatSession[] }>(
         url,

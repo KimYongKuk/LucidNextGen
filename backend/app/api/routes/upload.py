@@ -14,6 +14,8 @@ from app.services.chromadb_service import (
 
 # PDF 출력 디렉토리
 PDF_OUTPUT_DIR = FilePath(__file__).parent.parent.parent.parent / "data" / "pdf_output"
+# PPT 출력 디렉토리
+PPT_OUTPUT_DIR = FilePath(__file__).parent.parent.parent.parent / "data" / "ppt_output"
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -682,4 +684,39 @@ async def download_pdf(filename: str):
         raise
     except Exception as e:
         logger.error(f"Failed to download PDF: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/v1/ppt/download/{filename:path}")
+async def download_ppt(filename: str):
+    """PPT 파일 다운로드"""
+    from urllib.parse import quote, unquote
+
+    try:
+        decoded_filename = unquote(filename)
+
+        if ".." in decoded_filename:
+            raise HTTPException(status_code=400, detail="Invalid filename")
+
+        safe_filename = decoded_filename.replace("/", "").replace("\\", "")
+
+        file_path = PPT_OUTPUT_DIR / safe_filename
+
+        if not file_path.exists():
+            logger.error(f"PPT not found: {file_path}")
+            raise HTTPException(status_code=404, detail=f"PPT not found: {safe_filename}")
+
+        encoded_filename = quote(safe_filename)
+
+        return FileResponse(
+            path=str(file_path),
+            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            headers={
+                "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to download PPT: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

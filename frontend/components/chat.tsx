@@ -51,7 +51,7 @@ export function Chat({
   initialChatModel: string;
   isReadonly: boolean;
   autoResume: boolean;
-  workspaceId?: number | null;
+  workspaceId?: string | null;
 }) {
   const router = useRouter();
   const userId = getUserId() ?? "";
@@ -82,11 +82,12 @@ export function Chat({
   const searchParams = useSearchParams();
   const query = searchParams.get("query");
   const workspaceIdParam = searchParams.get("workspace_id");
-  const workspaceIdFromUrl = workspaceIdParam ? parseInt(workspaceIdParam, 10) : null;
+  // workspace_id is now UUID string (not numeric ID)
+  const workspaceUuidFromUrl = workspaceIdParam || null;
 
   // workspace_id를 state로 저장하여 URL 변경에 영향받지 않도록 함
   // (첫 메시지 전송 후 URL에서 query params가 제거되어도 workspace_id 유지)
-  const [stableWorkspaceId] = useState(() => workspaceId ?? workspaceIdFromUrl);
+  const [stableWorkspaceId] = useState(() => workspaceId ?? workspaceUuidFromUrl);
   const effectiveWorkspaceId = stableWorkspaceId;
 
   const {
@@ -103,11 +104,9 @@ export function Chat({
     workspaceId: effectiveWorkspaceId,
     generateId: generateUUID,
     onData: (dataPart) => {
-      console.log("[CHAT] onData received:", dataPart);
       setDataStream((ds) => (ds ? [...ds, dataPart] : []));
     },
     onFinish: () => {
-      console.log("[CHAT] onFinish called");
       mutate(
         unstable_serialize((pageIndex, previousPageData) => {
           const base = getChatHistoryPaginationKey(pageIndex, previousPageData);
@@ -137,8 +136,6 @@ export function Chat({
     },
   });
 
-  console.log("[CHAT] Current messages:", messages.length, messages);
-
   const [hasAppendedQuery, setHasAppendedQuery] = useState(false);
 
   useEffect(() => {
@@ -159,8 +156,8 @@ export function Chat({
   );
 
   const { data: workspace } = useSWR<Workspace>(
-    effectiveWorkspaceId ? `/api/v1/workspaces/${effectiveWorkspaceId}` : null,
-    () => workspaceApi.get(effectiveWorkspaceId!)
+    effectiveWorkspaceId ? `/api/v1/workspaces/${effectiveWorkspaceId}?user_id=${userId}` : null,
+    () => workspaceApi.get(effectiveWorkspaceId!, userId)
   );
 
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -185,6 +182,7 @@ export function Chat({
         <ChatHeader
           chatId={id}
           isReadonly={isReadonly}
+          workspace={workspace}
         />
 
         <Messages
@@ -216,6 +214,7 @@ export function Chat({
               setMessages={setMessages}
               status={status}
               stop={stop}
+              workspaceId={effectiveWorkspaceId}
             />
           )}
         </div>

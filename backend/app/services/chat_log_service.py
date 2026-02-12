@@ -22,7 +22,7 @@ class ChatLogService:
         chat_mode: str = "normal",
         category_text: str = "temp",
         metadata: Optional[dict] = None,
-        workspace_id: Optional[int] = None,
+        workspace_id: Optional[str] = None,  # UUID string
     ) -> bool:
         """
         Save chat log - ALL IN ONE TRANSACTION, NO EXTERNAL CALLS.
@@ -58,12 +58,14 @@ class ChatLogService:
 
                 # Step 2: 먼저 UPDATE 시도 (기존 세션이면 성공)
                 print("[STEP 2] Attempting UPDATE on chat_sessions...")
-                
-                # workspace_id가 있으면 함께 업데이트
+
+                # workspace_id가 있으면 함께 업데이트 (단, 기존 값이 있으면 유지)
                 if workspace_id is not None:
                     cursor.execute("""
                         UPDATE chat_sessions
-                        SET updated_at = %s, message_count = message_count + 1, workspace_id = %s
+                        SET updated_at = %s,
+                            message_count = message_count + 1,
+                            workspace_id = COALESCE(workspace_id, %s)
                         WHERE session_id = %s
                     """, (now, workspace_id, session))
                 else:
@@ -177,7 +179,7 @@ class ChatLogService:
         range_scope: str = "recent7",
         limit: int = 100,
         cursor: Optional[str] = None,
-        workspace_id: Optional[int] = None,
+        workspace_id: Optional[str] = None,  # UUID string
     ):
         """Session listing with date range filter and cursor pagination."""
 

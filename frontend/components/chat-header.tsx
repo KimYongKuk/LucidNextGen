@@ -8,22 +8,31 @@ import { SidebarToggle } from "@/components/sidebar-toggle";
 import { Button } from "@/components/ui/button";
 import { PlusIcon } from "./icons";
 import { useSidebar } from "./ui/sidebar";
-import { HelpCircle, MessageSquare, Moon, Sun } from "lucide-react";
+import { Folder, HelpCircle, MessageSquare, Moon, Sun, Sparkles, Shield, X } from "lucide-react";
+import Link from "next/link";
+import { getUserId, isAdminUser } from "@/lib/utils";
 import { useOnboarding } from "@/components/onboarding/onboarding-provider";
+import { useWhatsNew } from "@/components/whats-new/whats-new-provider";
 import { FeedbackModal } from "@/components/feedback-modal";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import type { Workspace } from "@/lib/api/workspaces";
 
 function PureChatHeader({
   chatId,
   isReadonly,
+  workspace,
 }: {
   chatId: string;
   isReadonly: boolean;
+  workspace?: Workspace | null;
 }) {
   const router = useRouter();
   const { open } = useSidebar();
   const { theme, setTheme } = useTheme();
   const { openOnboarding } = useOnboarding();
+  const { openWhatsNew, hasUnseenAnnouncements } = useWhatsNew();
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const isAdmin = isAdminUser(getUserId());
 
   const { width: windowWidth } = useWindowSize();
 
@@ -35,7 +44,11 @@ function PureChatHeader({
         <Button
           className="order-2 ml-auto h-8 px-2 md:order-1 md:ml-0 md:h-fit md:px-2"
           onClick={() => {
-            router.push("/");
+            if (workspace) {
+              router.push(`/?workspace_id=${workspace.uuid}`);
+            } else {
+              router.push("/");
+            }
             router.refresh();
           }}
           variant="outline"
@@ -43,6 +56,31 @@ function PureChatHeader({
           <PlusIcon />
           <span className="md:sr-only">New Chat</span>
         </Button>
+      )}
+
+      {workspace && (
+        <div className="order-2 flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-300 md:order-1 md:ml-0">
+          <Folder className="h-3 w-3 shrink-0 text-blue-500 dark:text-blue-400" />
+          <span className="max-w-[120px] truncate md:max-w-[200px]">
+            {workspace.name}
+          </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => {
+                  router.push("/");
+                  router.refresh();
+                }}
+                className="ml-0.5 rounded-full p-0.5 hover:bg-muted transition-colors"
+                aria-label="워크스페이스 나가기"
+                type="button"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>워크스페이스 나가기</TooltipContent>
+          </Tooltip>
+        </div>
       )}
 
       <Button
@@ -56,8 +94,37 @@ function PureChatHeader({
         <span className="sr-only">피드백</span>
       </Button>
 
+      {isAdmin && (
+        <Button
+          asChild
+          className="order-4 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
+          variant="ghost"
+          size="icon"
+          title="관리자"
+        >
+          <Link href="/admin">
+            <Shield className="h-4 w-4" />
+            <span className="sr-only">관리자</span>
+          </Link>
+        </Button>
+      )}
+
       <Button
-        className="order-4 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
+        className="relative order-5 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
+        onClick={openWhatsNew}
+        variant="ghost"
+        size="icon"
+        title="새 기능"
+      >
+        <Sparkles className="h-4 w-4" />
+        {hasUnseenAnnouncements && (
+          <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-blue-500" />
+        )}
+        <span className="sr-only">새 기능</span>
+      </Button>
+
+      <Button
+        className="order-6 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
         onClick={openOnboarding}
         variant="ghost"
         size="icon"
@@ -68,7 +135,7 @@ function PureChatHeader({
       </Button>
 
       <Button
-        className="order-5 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
+        className="order-7 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
         onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
         variant="outline"
         size="icon"
@@ -103,6 +170,7 @@ function PureChatHeader({
 export const ChatHeader = memo(PureChatHeader, (prevProps, nextProps) => {
   return (
     prevProps.chatId === nextProps.chatId &&
-    prevProps.isReadonly === nextProps.isReadonly
+    prevProps.isReadonly === nextProps.isReadonly &&
+    prevProps.workspace?.uuid === nextProps.workspace?.uuid
   );
 });

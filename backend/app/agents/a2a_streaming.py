@@ -14,28 +14,44 @@ from app.agents.state import RequestContext
 # Heartbeat 설정 - 긴 작업 중 사용자 피드백 제공
 # ============================================================================
 HEARTBEAT_INTERVAL = 5.0  # 초
-HEARTBEAT_MESSAGES = [
-    "📝 문서를 작성하고 있습니다...",
-    "📝 내용을 정리하고 있습니다...",
-    "📝 거의 완료되었습니다...",
-    "📝 마무리 중입니다...",
+
+# 기본 하트비트 메시지 (PDF, 차트 등)
+DEFAULT_HEARTBEAT_MESSAGES = [
+    "📝 정보를 바탕으로 문서를 요약하고 있습니다...",
+    "📝 내용을 깔끔하게 정리하고 있습니다...",
+]
+
+# PPT 전용 하트비트 메시지
+PPT_HEARTBEAT_MESSAGES = [
+    "📊 PPT 슬라이드를 구성하고 있습니다...",
+    "📊 PPT 생성은 슬라이드 수에 따라 시간이 더 소요될 수 있습니다.",
+    "📊 텍스트, 테이블, 차트 등 슬라이드 요소를 배치하고 있습니다...",
+    "📊 템플릿 스타일을 적용하고 있습니다...",
+    "📊 거의 완성되어 가고 있습니다. 조금만 더 기다려주세요!",
 ]
 
 # Heartbeat를 활성화할 도구 목록 (긴 작업이 예상되는 도구)
 HEARTBEAT_TOOLS = [
     "create_document_pdf",
     "create_table_spec_pdf",
+    "create_presentation",
     "create_line_chart",
     "create_bar_chart",
     "create_pie_chart",
     "create_multi_chart",
 ]
 
+# 도구별 하트비트 메시지 매핑
+TOOL_HEARTBEAT_MESSAGES = {
+    "create_presentation": PPT_HEARTBEAT_MESSAGES,
+}
+
 
 async def heartbeat_producer(
     event_queue: asyncio.Queue,
     interval: float,
     stop_event: asyncio.Event,
+    messages: list = None,
 ):
     """
     백그라운드에서 주기적 heartbeat 메시지를 이벤트 큐에 넣음
@@ -44,7 +60,9 @@ async def heartbeat_producer(
         event_queue: 통합 이벤트 큐 (orchestrator + heartbeat)
         interval: heartbeat 간격 (초)
         stop_event: 중지 시그널
+        messages: 사용할 하트비트 메시지 목록 (없으면 기본 메시지)
     """
+    heartbeat_messages = messages or DEFAULT_HEARTBEAT_MESSAGES
     idx = 0
     while not stop_event.is_set():
         try:
@@ -54,7 +72,7 @@ async def heartbeat_producer(
         except asyncio.TimeoutError:
             # 타임아웃 = interval 경과 → heartbeat 전송
             if not stop_event.is_set():
-                msg = HEARTBEAT_MESSAGES[idx % len(HEARTBEAT_MESSAGES)]
+                msg = heartbeat_messages[idx % len(heartbeat_messages)]
                 await event_queue.put({"_source": "heartbeat", "message": msg, "index": idx})
                 idx += 1
 
@@ -103,6 +121,8 @@ TOOL_STATUS_MESSAGES = {
     "search_ac_docs": "💰 재경 문서를 검색하고 있습니다. 조금만 기다려주세요!",
     "search_it_docs": "💻 IT 문서를 검색하고 있습니다. 조금만 기다려주세요!",
     "search_safety_docs": "⚠️ 안전환경 문서를 검색하고 있습니다. 조금만 기다려주세요!",
+    # 조직도 검색 도구
+    "execute_org_chart_query": "🏢 조직도에서 검색하고 있습니다. 조금만 기다려주세요!",
     # PDF 생성 도구
     "create_document_pdf": "📄 PDF 문서를 생성하고 있습니다. 조금만 기다려주세요!",
     "create_table_spec_pdf": "📋 테이블 정의서 PDF를 생성하고 있습니다. 조금만 기다려주세요!",
@@ -112,6 +132,10 @@ TOOL_STATUS_MESSAGES = {
     "create_bar_chart": "📊 막대 차트를 생성하고 있습니다. 조금만 기다려주세요!",
     "create_pie_chart": "🥧 파이 차트를 생성하고 있습니다. 조금만 기다려주세요!",
     "create_multi_chart": "📉 복합 차트를 생성하고 있습니다. 조금만 기다려주세요!",
+    # PPT 생성 도구
+    "create_presentation": "📊 PPT 프레젠테이션을 생성하고 있습니다. 조금만 기다려주세요!",
+    "list_ppt_templates": "📋 PPT 템플릿 정보를 조회하고 있습니다.",
+    "list_generated_ppts": "📂 생성된 PPT 목록을 조회하고 있습니다.",
 }
 
 
@@ -119,7 +143,7 @@ async def stream_a2a_response(
     message: str,
     user_id: str,
     session_id: Optional[str],
-    workspace_id: Optional[int],
+    workspace_id: Optional[str],  # UUID string
     workspace_context: Optional[Dict],
     has_files: bool,
     chat_mode: str,
@@ -143,8 +167,10 @@ async def stream_a2a_response(
     chunk_count = 0
     first_chunk_time = None
     tool_calls_made = []
+    tool_call_counts: Dict[str, int] = {}  # 도구별 호출 횟수 (루프 감지용)
     tool_end_time = None  # 도구 완료 시간 (지연 분석용)
     last_content_time = None  # 마지막 콘텐츠 청크 시간 (지연 분석용)
+    MAX_SAME_TOOL_CALLS = 10  # 같은 도구 최대 호출 횟수
 
     # 통합 이벤트 큐 (orchestrator + heartbeat 이벤트 병합)
     event_queue: asyncio.Queue = asyncio.Queue()
@@ -214,10 +240,21 @@ async def stream_a2a_response(
                 tool_input = event.get("data", {}).get("input", {})
                 tool_start_ms = int((time.time() - start_time) * 1000)
                 print(f"[TIMING] Tool '{tool_name}' started at {tool_start_ms}ms")
+
+                # 도구 호출 횟수 카운트 (루프 감지)
+                tool_call_counts[tool_name] = tool_call_counts.get(tool_name, 0) + 1
+                if tool_call_counts[tool_name] > MAX_SAME_TOOL_CALLS:
+                    print(f"[LOOP DETECTED] Tool '{tool_name}' called {tool_call_counts[tool_name]} times, breaking loop")
+                    yield f"data: {json.dumps({'type': 'tool_status', 'tool': tool_name, 'message': f'⚠️ {tool_name} 도구가 {tool_call_counts[tool_name]}회 반복 호출되어 중단합니다. 결과를 확인해주세요.'})}\n\n"
+                    # 루프 감지 시 더 이상 진행하지 않음 - orchestrator 취소
+                    if not orchestrator_task.done():
+                        orchestrator_task.cancel()
+                    break
+
                 # SQL 쿼리 도구인 경우 쿼리 내용 로깅
-                if tool_name == "execute_it_voc_query" and tool_input:
+                if tool_name in ("execute_it_voc_query", "execute_org_chart_query", "execute_acct_voc_query") and tool_input:
                     sql_query = tool_input.get("sql_query", str(tool_input))
-                    print(f"[SQL QUERY] {sql_query}")
+                    print(f"[SQL QUERY - {tool_name}] {sql_query}")
                 if tool_name not in tool_calls_made:
                     tool_calls_made.append(tool_name)
                     status_msg = TOOL_STATUS_MESSAGES.get(tool_name, f"🔧 {tool_name} 실행 중...")
@@ -226,8 +263,9 @@ async def stream_a2a_response(
                 # HEARTBEAT_TOOLS에 해당하면 하트비트 시작 (도구 실행 중 사용자 피드백)
                 if tool_name in HEARTBEAT_TOOLS and not heartbeat_active:
                     heartbeat_stop_event.clear()
+                    tool_messages = TOOL_HEARTBEAT_MESSAGES.get(tool_name)
                     heartbeat_task = asyncio.create_task(
-                        heartbeat_producer(event_queue, HEARTBEAT_INTERVAL, heartbeat_stop_event)
+                        heartbeat_producer(event_queue, HEARTBEAT_INTERVAL, heartbeat_stop_event, messages=tool_messages)
                     )
                     heartbeat_active = True
                     print(f"[HEARTBEAT] Started for tool '{tool_name}'")
@@ -248,25 +286,38 @@ async def stream_a2a_response(
                     print(f"[HEARTBEAT] Stopped (tool '{tool_name}' completed)")
 
                 # 응답 생성 중 상태 메시지
-                yield f"data: {json.dumps({'type': 'tool_status', 'tool': tool_name, 'message': '✨ 검색 완료! 응답 생성 중... 잠시만 기다려주세요.', 'status': 'generating'})}\n\n"
+                yield f"data: {json.dumps({'type': 'tool_status', 'tool': tool_name, 'message': '✨취합 완료! 응답 생성 중... 잠시만 기다려주세요.', 'status': 'generating'})}\n\n"
 
-                # Corp 문서 출처 수집 (검색된 모든 문서)
+                # Corp 문서 출처 수집 (검색된 모든 문서 + 청크 텍스트)
                 if tool_name in CORP_RAG_TOOLS:
                     output_str = str(tool_output.content if hasattr(tool_output, 'content') else tool_output)
-                    # 유사도 정보 포함된 새 패턴: [인사 문서 1: filename (유사도: 0.72)]
-                    pattern = r'\[(인사|재경|IT|안전환경) 문서 \d+: (.+?) \(유사도: ([\d.]+)\)\]'
-                    matches = re.findall(pattern, output_str)
-                    if not matches:
-                        # 유사도 없는 기존 패턴 폴백
-                        pattern = r'\[(인사|재경|IT|안전환경) 문서 \d+: (.+?)\]\n'
-                        matches = [(cat, fn, "0") for cat, fn in re.findall(pattern, output_str)]
-                    for category, filename, similarity in matches:
-                        all_searched_corp_sources.append({
-                            "filename": filename.strip(),
-                            "category": category,
-                            "tool": tool_name,
-                            "similarity": float(similarity) if similarity else 0
-                        })
+                    # 헤더 + 청크 내용까지 캡처하는 패턴
+                    pattern_with_content = r'\[(인사|재경|IT|안전환경) 문서 (\d+): (.+?) \(유사도: ([\d.]+)\)\]\n(.*?)(?=\n\[(?:인사|재경|IT|안전환경) 문서 \d+:|$)'
+                    matches = re.findall(pattern_with_content, output_str, re.DOTALL)
+                    if matches:
+                        for category, doc_num, filename, similarity, chunk_text in matches:
+                            all_searched_corp_sources.append({
+                                "filename": filename.strip(),
+                                "category": category,
+                                "tool": tool_name,
+                                "similarity": float(similarity) if similarity else 0,
+                                "chunk_text": chunk_text.strip()
+                            })
+                    else:
+                        # 폴백: 헤더만 추출 (청크 내용 없음)
+                        pattern_header = r'\[(인사|재경|IT|안전환경) 문서 \d+: (.+?) \(유사도: ([\d.]+)\)\]'
+                        header_matches = re.findall(pattern_header, output_str)
+                        if not header_matches:
+                            pattern_legacy = r'\[(인사|재경|IT|안전환경) 문서 \d+: (.+?)\]\n'
+                            header_matches = [(cat, fn, "0") for cat, fn in re.findall(pattern_legacy, output_str)]
+                        for category, filename, similarity in header_matches:
+                            all_searched_corp_sources.append({
+                                "filename": filename.strip(),
+                                "category": category,
+                                "tool": tool_name,
+                                "similarity": float(similarity) if similarity else 0,
+                                "chunk_text": ""
+                            })
 
                 # Tavily 출처 수집
                 if "tavily" in tool_name.lower():
@@ -374,6 +425,11 @@ async def stream_a2a_response(
                             print(f"[HEARTBEAT] Started heartbeat task")
 
                     if content:
+                        # <search> 태그 제거 (모델이 도구 대신 텍스트로 출력하는 경우 방지)
+                        content = re.sub(r'<search>.*?</search>\s*', '', content)
+                        if not content:
+                            continue
+
                         # Note: Heartbeat는 on_tool_end에서만 중지됨
                         # tool_use arguments 생성 중에는 content가 없으므로 하트비트 유지
 
@@ -435,9 +491,18 @@ async def stream_a2a_response(
                     "filename": item["filename"],
                     "category": item["category"],
                     "similarity": item.get("similarity", 0),
-                    "count": 0
+                    "count": 0,
+                    "chunks": []
                 }
             source_map[key]["count"] += 1
+            if item.get("chunk_text"):
+                source_map[key]["chunks"].append({
+                    "text": item["chunk_text"],
+                    "similarity": item.get("similarity", 0)
+                })
+            # 최고 유사도 유지
+            if item.get("similarity", 0) > source_map[key]["similarity"]:
+                source_map[key]["similarity"] = item["similarity"]
         yield f"data: {json.dumps({'type': 'corp_sources', 'sources': list(source_map.values())}, ensure_ascii=False)}\n\n"
 
     total_time = int((time.time() - start_time) * 1000)

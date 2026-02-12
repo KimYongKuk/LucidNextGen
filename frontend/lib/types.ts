@@ -80,10 +80,17 @@ export type YoutubeSummary = {
   segments?: YoutubeSegment[];
 };
 
+export type CorpSourceChunk = {
+  text: string;
+  similarity: number;
+};
+
 export type CorpSource = {
   filename: string;
   category: string;  // "인사", "재경", "IT", "공통", "안전환경"
   count: number;
+  similarity?: number;
+  chunks?: CorpSourceChunk[];
 };
 
 export type CustomUIDataTypes = {

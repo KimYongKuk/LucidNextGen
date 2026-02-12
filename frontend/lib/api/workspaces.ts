@@ -34,7 +34,7 @@ export interface WorkspaceFile {
 export interface UploadStatus {
     status: 'pending' | 'processing' | 'completed' | 'failed' | 'unknown';
     filename: string;
-    workspace_id?: number;
+    workspace_id?: string;  // UUID string
     message: string;
     progress: number;
     result?: any;
@@ -57,13 +57,13 @@ export const workspaceApi = {
         return response.json();
     },
 
-    get: async (id: number): Promise<Workspace> => {
-        const response = await fetchWithErrorHandlers(`${BASE_URL}/${id}`);
+    get: async (uuid: string, userId: string): Promise<Workspace> => {
+        const response = await fetchWithErrorHandlers(`${BASE_URL}/${uuid}?user_id=${userId}`);
         return response.json();
     },
 
-    update: async (id: number, data: WorkspaceUpdate): Promise<any> => {
-        const response = await fetchWithErrorHandlers(`${BASE_URL}/${id}`, {
+    update: async (uuid: string, userId: string, data: WorkspaceUpdate): Promise<any> => {
+        const response = await fetchWithErrorHandlers(`${BASE_URL}/${uuid}?user_id=${userId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data),
@@ -71,18 +71,18 @@ export const workspaceApi = {
         return response.json();
     },
 
-    delete: async (id: number): Promise<any> => {
-        const response = await fetchWithErrorHandlers(`${BASE_URL}/${id}`, {
+    delete: async (uuid: string, userId: string): Promise<any> => {
+        const response = await fetchWithErrorHandlers(`${BASE_URL}/${uuid}?user_id=${userId}`, {
             method: 'DELETE',
         });
         return response.json();
     },
 
-    uploadFile: async (id: number, file: File): Promise<any> => {
+    uploadFile: async (uuid: string, userId: string, file: File): Promise<any> => {
         const formData = new FormData();
         formData.append('file', file);
 
-        const response = await fetchWithErrorHandlers(`${BASE_URL}/${id}/upload`, {
+        const response = await fetchWithErrorHandlers(`${BASE_URL}/${uuid}/upload?user_id=${userId}`, {
             method: 'POST',
             body: formData,
         });
@@ -96,18 +96,20 @@ export const workspaceApi = {
 
     /**
      * 파일 업로드 후 완료까지 폴링
-     * @param id 워크스페이스 ID
+     * @param uuid 워크스페이스 UUID
+     * @param userId 사용자 ID (소유권 검증)
      * @param file 업로드할 파일
      * @param onProgress 진행 상태 콜백 (optional)
      * @returns 완료된 업로드 결과
      */
     uploadFileWithPolling: async (
-        id: number,
+        uuid: string,
+        userId: string,
         file: File,
         onProgress?: (status: UploadStatus) => void
     ): Promise<any> => {
         // 1. 업로드 시작 (즉시 반환)
-        const startResult = await workspaceApi.uploadFile(id, file);
+        const startResult = await workspaceApi.uploadFile(uuid, userId, file);
         const fileId = startResult.file_id;
 
         if (!fileId) {
@@ -144,13 +146,13 @@ export const workspaceApi = {
         throw new Error('Upload timeout - processing took too long');
     },
 
-    listFiles: async (id: number): Promise<WorkspaceFile[]> => {
-        const response = await fetchWithErrorHandlers(`${BASE_URL}/${id}/files`);
+    listFiles: async (uuid: string, userId: string): Promise<WorkspaceFile[]> => {
+        const response = await fetchWithErrorHandlers(`${BASE_URL}/${uuid}/files?user_id=${userId}`);
         return response.json();
     },
 
-    deleteFile: async (id: number, fileId: string): Promise<any> => {
-        const response = await fetchWithErrorHandlers(`${BASE_URL}/${id}/files/${fileId}`, {
+    deleteFile: async (uuid: string, userId: string, fileId: string): Promise<any> => {
+        const response = await fetchWithErrorHandlers(`${BASE_URL}/${uuid}/files/${fileId}?user_id=${userId}`, {
             method: 'DELETE',
         });
         return response.json();

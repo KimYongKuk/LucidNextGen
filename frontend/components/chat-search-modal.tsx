@@ -26,7 +26,7 @@ type Chat = {
   updatedAt: string;
   chatMode: string;
   isPinned?: boolean;
-  workspace_id?: number;
+  workspace_id?: string;  // UUID string
 };
 
 interface ChatSearchModalProps {

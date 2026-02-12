@@ -19,7 +19,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
-import { ChevronDown, ChevronRight, Eye, Trash2, FolderOpen, RefreshCw, Search, Shield } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronRight, Eye, Trash2, FolderOpen, RefreshCw, Search, Shield } from "lucide-react";
+import Link from "next/link";
 import { adminWorkspaceApi, ChunkData, ChunkSearchResult } from "@/lib/api/admin-workspaces";
 import { Workspace, WorkspaceFile } from "@/lib/api/workspaces";
 import {
@@ -1526,8 +1527,13 @@ export default function AdminPage() {
     <div className="min-h-screen bg-background text-foreground">
       <div className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-8 sm:px-6 lg:px-8">
         <div className="flex flex-col gap-2">
-          <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
-            Admin
+          <div className="flex items-center gap-2">
+            <Button asChild variant="ghost" size="sm">
+              <Link href="/">
+                <ArrowLeft className="mr-1 h-4 w-4" />
+                채팅으로
+              </Link>
+            </Button>
           </div>
           <div className="flex items-center justify-between gap-4">
             <div>

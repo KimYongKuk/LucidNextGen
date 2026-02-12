@@ -1,0 +1,398 @@
+{
+  "template_name": "PPT_Public",
+  "template_file": "PPT_Public.pptx",
+  "slide_width_inches": 13.33,
+  "slide_height_inches": 7.5,
+  "layouts": [
+    {
+      "index": 0,
+      "name": "표지",
+      "shapes": [
+        {
+          "type": "GROUP",
+          "name": "그룹 12",
+          "left": 3.54,
+          "top": 2.83,
+          "width": 6.25,
+          "height": 0.9,
+          "sub_shape_count": 2
+        },
+        {
+          "type": "TEXT_BOX",
+          "name": "TextBox 15",
+          "left": 3.81,
+          "top": 4.35,
+          "width": 5.59,
+          "height": 0.19,
+          "text": "본 문서는 엘앤에프 지적 재산이며, 승인없이 사외유출시는 법적 책임이 있습니다."
+        },
+        {
+          "type": "GROUP",
+          "name": "그룹 16",
+          "left": 6.01,
+          "top": 6.33,
+          "width": 1.31,
+          "height": 0.39,
+          "sub_shape_count": 2
+        },
+        {
+          "type": "PICTURE",
+          "name": "그림 10",
+          "left": 0.37,
+          "top": 0.27,
+          "width": 0.59,
+          "height": 0.59
+        },
+        {
+          "type": "TEXT_BOX",
+          "name": "TextBox 9",
+          "left": 1.05,
+          "top": 0.39,
+          "width": 3.65,
+          "height": 0.34,
+          "text": "Lead the Change, Charge the Future"
+        }
+      ],
+      "placeholders": []
+    },
+    {
+      "index": 1,
+      "name": "목차",
+      "shapes": [
+        {
+          "type": "AUTO_SHAPE",
+          "name": "직사각형 14",
+          "left": 0.0,
+          "top": 0.58,
+          "width": 13.33,
+          "height": 6.56
+        },
+        {
+          "type": "TEXT_BOX",
+          "name": "TextBox 15",
+          "left": 10.69,
+          "top": 3.58,
+          "width": 4.68,
+          "height": 0.34,
+          "text": "We INNOVATE the future For Sustainable Earth"
+        },
+        {
+          "type": "PICTURE",
+          "name": "그림 7",
+          "left": 8.2,
+          "top": 2.98,
+          "width": 4.16,
+          "height": 4.16
+        }
+      ],
+      "placeholders": []
+    },
+    {
+      "index": 2,
+      "name": "간지",
+      "shapes": [
+        {
+          "type": "AUTO_SHAPE",
+          "name": "직사각형 7",
+          "left": 0.0,
+          "top": 2.16,
+          "width": 13.33,
+          "height": 3.18
+        },
+        {
+          "type": "TEXT_BOX",
+          "name": "TextBox 2",
+          "left": 5.06,
+          "top": 5.05,
+          "width": 3.21,
+          "height": 0.27,
+          "text": "We INNOVATE the future For Sustainable Earth"
+        },
+        {
+          "type": "PICTURE",
+          "name": "그림 3",
+          "left": 11.14,
+          "top": 3.29,
+          "width": 2.01,
+          "height": 2.01
+        }
+      ],
+      "placeholders": []
+    },
+    {
+      "index": 3,
+      "name": "내용",
+      "shapes": [
+        {
+          "type": "AUTO_SHAPE",
+          "name": "Rectangle 5",
+          "left": 5.93,
+          "top": 7.23,
+          "width": 1.47,
+          "height": 0.27,
+          "text": "‹#› / 14"
+        },
+        {
+          "type": "LINE",
+          "name": "직선 연결선 3",
+          "left": 0.27,
+          "top": 7.21,
+          "width": 12.79,
+          "height": 0.0
+        },
+        {
+          "type": "PICTURE",
+          "name": "그림 4",
+          "left": 0.27,
+          "top": 7.28,
+          "width": 0.61,
+          "height": 0.18
+        }
+      ],
+      "placeholders": []
+    },
+    {
+      "index": 4,
+      "name": "E.O.D",
+      "shapes": [
+        {
+          "type": "TEXT_BOX",
+          "name": "TextBox 20",
+          "left": 5.47,
+          "top": 3.58,
+          "width": 2.39,
+          "height": 0.34,
+          "text": "End Of Document"
+        },
+        {
+          "type": "GROUP",
+          "name": "그룹 30",
+          "left": 6.01,
+          "top": 6.9,
+          "width": 1.31,
+          "height": 0.39,
+          "sub_shape_count": 2
+        }
+      ],
+      "placeholders": []
+    }
+  ],
+  "content_areas": {
+    "표지": {
+      "description": "표지 슬라이드 - 제목, 날짜, 소속 배치 영역",
+      "title_area": {
+        "left": 1.67,
+        "top": 2.83,
+        "width": 10.0,
+        "height": 0.9
+      },
+      "date_area": {
+        "left": 4.5,
+        "top": 5.0,
+        "width": 4.33,
+        "height": 0.35
+      },
+      "author_area": {
+        "left": 4.5,
+        "top": 5.6,
+        "width": 4.33,
+        "height": 0.35
+      }
+    },
+    "목차": {
+      "description": "목차 슬라이드 - 대목차/소목차 나열",
+      "title_area": {
+        "left": 0.75,
+        "top": 1.0,
+        "width": 3.0,
+        "height": 0.5
+      },
+      "items_area": {
+        "left": 0.75,
+        "top": 2.0,
+        "width": 5.5,
+        "height": 4.5
+      }
+    },
+    "간지": {
+      "description": "섹션 간지 슬라이드 - 대목차 강조 표시",
+      "title_area": {
+        "left": 0.7,
+        "top": 2.5,
+        "width": 6.5,
+        "height": 1.1
+      },
+      "subtitle_area": {
+        "left": 0.7,
+        "top": 3.8,
+        "width": 6.5,
+        "height": 2.5
+      }
+    },
+    "내용": {
+      "description": "메인 콘텐츠 슬라이드 - 자유 배치",
+      "header": {
+        "doc_title": {
+          "left": 0.37,
+          "top": 0.3,
+          "width": 3.0,
+          "height": 0.12,
+          "font_size": 7,
+          "description": "문서 제목 (표지 타이틀)"
+        },
+        "breadcrumb": {
+          "left": 0.33,
+          "top": 0.44,
+          "width": 2.0,
+          "height": 0.15,
+          "font_size": 9,
+          "color": "accent2_orange",
+          "description": "목차 경로 (예: Ⅲ. 공정기술 전략 회의)"
+        },
+        "main_title": {
+          "left": 0.37,
+          "top": 0.69,
+          "width": 12.0,
+          "height": 0.42,
+          "font_size": 25,
+          "bold": true,
+          "description": "슬라이드 메인 제목"
+        }
+      },
+      "body_area": {
+        "left": 0.37,
+        "top": 1.15,
+        "width": 12.6,
+        "height": 5.95,
+        "description": "본문 영역 (텍스트, 테이블, 차트 등)"
+      },
+      "footer_line_y": 7.21
+    },
+    "E.O.D": {
+      "description": "끝 슬라이드 - End Of Document",
+      "title_area": {
+        "left": 4.0,
+        "top": 3.0,
+        "width": 5.0,
+        "height": 1.0
+      }
+    }
+  },
+  "style_guide": {
+    "font_family": "맑은 고딕",
+    "theme_colors": {
+      "dk1_text": "windowText",
+      "lt1_background": "window",
+      "dk2_dark_gray": "44546A",
+      "lt2_light_gray": "E7E6E6",
+      "accent1_blue": "4472C4",
+      "accent2_orange": "ED7D31",
+      "accent3_gray": "A5A5A5",
+      "accent4_gold": "FFC000",
+      "accent5_light_blue": "5B9BD5",
+      "accent6_green": "70AD47"
+    },
+    "font_sizes": {
+      "cover_title": {
+        "pt": 40,
+        "bold": true,
+        "usage": "표지 보고서명"
+      },
+      "cover_date": {
+        "pt": 14,
+        "usage": "표지 날짜"
+      },
+      "cover_author": {
+        "pt": 11,
+        "usage": "표지 소속/작성자"
+      },
+      "toc_heading": {
+        "pt": 30,
+        "bold": true,
+        "usage": "목차 CONTENTS"
+      },
+      "toc_major": {
+        "pt": 15,
+        "bold": true,
+        "color": "accent2_orange",
+        "usage": "목차 대분류"
+      },
+      "toc_minor": {
+        "pt": 15,
+        "usage": "목차 소분류"
+      },
+      "section_title": {
+        "pt": 40,
+        "bold": true,
+        "color": "white",
+        "usage": "간지 대목차"
+      },
+      "section_subtitle": {
+        "pt": 20,
+        "color": "white",
+        "usage": "간지 소목차"
+      },
+      "content_doc_title": {
+        "pt": 7,
+        "usage": "내용 슬라이드 상단 문서명"
+      },
+      "content_breadcrumb": {
+        "pt": 9,
+        "color": "accent2_orange",
+        "usage": "내용 슬라이드 목차 경로"
+      },
+      "content_main_title": {
+        "pt": 25,
+        "bold": true,
+        "usage": "내용 슬라이드 메인 제목"
+      },
+      "content_subtitle": {
+        "pt": 15,
+        "usage": "내용 슬라이드 부제/헤드 메시지"
+      },
+      "content_section_title": {
+        "pt": 12,
+        "bold": true,
+        "color": "accent2_orange",
+        "usage": "내용 섹션 타이틀"
+      },
+      "content_body": {
+        "pt": 10,
+        "usage": "본문 텍스트"
+      },
+      "content_body_large": {
+        "pt": 12,
+        "bold": true,
+        "usage": "본문 강조 텍스트"
+      },
+      "eod_title": {
+        "pt": 20,
+        "bold": true,
+        "usage": "마무리 텍스트"
+      }
+    },
+    "table_style": {
+      "header_fill": "182F54",
+      "header_font_color": "FFFFFF",
+      "header_font_size": 10,
+      "header_bold": true,
+      "body_font_size": 10,
+      "body_alt_fill": "E7EAEE",
+      "dark_navy_header": "182F54"
+    },
+    "footer_tab": {
+      "description": "내용 슬라이드 우측 상단에 문서 유형 표시 탭",
+      "font_size": 11,
+      "bold": true,
+      "color": "white",
+      "background": "accent1_blue"
+    }
+  },
+  "analysis_notes": {
+    "placeholder_based": false,
+    "description": "이 템플릿은 placeholder가 아닌 일반 Shape으로 구성됨. 레이아웃은 배경 장식(로고, 선, 페이지 번호 등)을 제공하고, 콘텐츠는 새로운 Shape(TextBox, Table, Chart, Image)을 content_areas 영역에 추가하는 방식으로 생성.",
+    "primary_content_layout": "내용 (index 3)",
+    "total_existing_slides": 14,
+    "table_count_in_existing": 11
+  }
+}

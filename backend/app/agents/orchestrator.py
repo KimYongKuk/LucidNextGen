@@ -48,6 +48,24 @@ class Orchestrator:
         start_time = time.time()
 
         # ============================================================
+        # Phase 0: Load Workspace Memory (if applicable)
+        # ============================================================
+        memory_context = None
+        workspace_id = context.get("workspace_id")
+        if workspace_id:
+            try:
+                from app.services.memory_service import get_memory_service
+                memory_service = get_memory_service()
+                memory_context = await memory_service.get_memory_context(
+                    workspace_id=workspace_id,
+                    user_id=context.get("user_id", "anonymous")
+                )
+                if memory_context and memory_context.get("summary"):
+                    print(f"[ORCHESTRATOR] Loaded workspace memory: {len(memory_context.get('summary', ''))} chars")
+            except Exception as e:
+                print(f"[ORCHESTRATOR] Memory load error (non-fatal): {e}")
+
+        # ============================================================
         # Phase 1: Intent Classification (Haiku, ~0.3-0.5초)
         # ============================================================
         classify_start = time.time()
@@ -93,7 +111,7 @@ class Orchestrator:
         print(f"[ORCHESTRATOR] [TIMING] Entering worker.stream_response()")
 
         first_event = True
-        async for event in worker.stream_response(messages, context, all_tools):
+        async for event in worker.stream_response(messages, context, all_tools, memory_context):
             if first_event:
                 first_event_time = int((time.time() - worker_start) * 1000)
                 print(f"[ORCHESTRATOR] [TIMING] First event from worker: {first_event_time}ms")

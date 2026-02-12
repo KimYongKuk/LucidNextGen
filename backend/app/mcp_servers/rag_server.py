@@ -33,7 +33,7 @@ DEFAULT_ADMIN_USER = "admin"
 # 임계값 이하의 결과는 필터링되어 반환되지 않음
 MIN_RELEVANCE_CORP = 0.5      # 사내 문서: 관련 없는 문서 필터링
 MIN_RELEVANCE_USER = 0.1      # 사용자 파일: 매우 느슨하게 (분석해줘 등 일반 쿼리도 허용)
-MIN_RELEVANCE_WORKSPACE = 0.4 # 워크스페이스: 중간
+MIN_RELEVANCE_WORKSPACE = 0.25 # 워크스페이스: 구조화 데이터(엑셀 등) 허용
 
 
 # ================================
