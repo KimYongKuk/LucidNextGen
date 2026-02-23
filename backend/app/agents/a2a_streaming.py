@@ -136,6 +136,15 @@ TOOL_STATUS_MESSAGES = {
     "create_presentation": "📊 PPT 프레젠테이션을 생성하고 있습니다. 조금만 기다려주세요!",
     "list_ppt_templates": "📋 PPT 템플릿 정보를 조회하고 있습니다.",
     "list_generated_ppts": "📂 생성된 PPT 목록을 조회하고 있습니다.",
+    # 메일 조회 도구
+    "get_inbox_mail": "📬 받은편지함을 조회하고 있습니다. 조금만 기다려주세요!",
+    "get_sent_mail": "📤 보낸편지함을 조회하고 있습니다. 조금만 기다려주세요!",
+    "search_mail": "🔍 메일을 검색하고 있습니다. 조금만 기다려주세요!",
+    "get_mail_folders": "📁 메일함 목록을 조회하고 있습니다. 조금만 기다려주세요!",
+    "get_unread_mail": "📩 안 읽은 메일을 조회하고 있습니다. 조금만 기다려주세요!",
+    # 전자결재 조회 도구
+    "get_user_approval_info": "👤 사용자 결재 정보를 확인하고 있습니다. 조금만 기다려주세요!",
+    "execute_approval_query": "📋 전자결재 문서를 조회하고 있습니다. 조금만 기다려주세요!",
 }
 
 
@@ -188,6 +197,9 @@ async def stream_a2a_response(
         "workspace_uuid": workspace_context.get("uuid") if workspace_context else None,
         "workspace_instructions": workspace_context.get("instructions") if workspace_context else None,
         "workspace_has_files": workspace_context.get("has_files", False) if workspace_context else False,
+        "workspace_name": workspace_context.get("name") if workspace_context else None,
+        "workspace_description": workspace_context.get("description") if workspace_context else None,
+        "workspace_file_names": workspace_context.get("file_names", []) if workspace_context else [],
         "has_files": has_files,
         "chat_mode": chat_mode,
     }
@@ -252,7 +264,7 @@ async def stream_a2a_response(
                     break
 
                 # SQL 쿼리 도구인 경우 쿼리 내용 로깅
-                if tool_name in ("execute_it_voc_query", "execute_org_chart_query", "execute_acct_voc_query") and tool_input:
+                if tool_name in ("execute_it_voc_query", "execute_org_chart_query", "execute_acct_voc_query", "execute_approval_query") and tool_input:
                     sql_query = tool_input.get("sql_query", str(tool_input))
                     print(f"[SQL QUERY - {tool_name}] {sql_query}")
                 if tool_name not in tool_calls_made:
@@ -278,6 +290,13 @@ async def stream_a2a_response(
                 tool_end_time = time.time()
                 tool_end_ms = int((tool_end_time - start_time) * 1000)
                 print(f"[TIMING] Tool '{tool_name}' completed at {tool_end_ms}ms")
+
+                # 도구 결과 디버깅 로그
+                try:
+                    output_str = tool_output.content if hasattr(tool_output, 'content') else str(tool_output)
+                    print(f"[TOOL_OUTPUT] {tool_name}: {output_str[:300]}")
+                except Exception:
+                    print(f"[TOOL_OUTPUT] {tool_name}: (cannot read output)")
 
                 # HEARTBEAT_TOOLS 도구 완료 시 하트비트 중지
                 if tool_name in HEARTBEAT_TOOLS and heartbeat_active:
@@ -407,7 +426,11 @@ async def stream_a2a_response(
                                 elif isinstance(item, str):
                                     content += item
                         # tool_use 블록이 별도 속성으로 올 수 있음
-                        if hasattr(msg_chunk, "tool_use") or hasattr(msg_chunk, "tool_calls"):
+                        # Note: hasattr(msg_chunk, "tool_calls")는 AIMessageChunk에서 항상 True
+                        # (기본 빈 리스트 필드) → 실제 값이 있는지 확인해야 함
+                        if hasattr(msg_chunk, "tool_use"):
+                            has_tool_use = True
+                        elif hasattr(msg_chunk, "tool_calls") and msg_chunk.tool_calls:
                             has_tool_use = True
 
                     # tool_use 블록 생성 감지 시 상태 메시지 전송 및 heartbeat 시작

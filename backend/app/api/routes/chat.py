@@ -469,13 +469,23 @@ async def chat_stream(
                         workspace_data = workspace_service.get_workspace_by_uuid(request.workspace_id)
                         if workspace_data:
                             workspace_has_files = workspace_service.has_files(workspace_data["id"])
+                            # 워크스페이스에 파일이 있으면 파일명 목록도 로드 (인텐트 분류용)
+                            file_names = []
+                            if workspace_has_files:
+                                try:
+                                    files = workspace_service.list_files(workspace_data["id"])
+                                    file_names = [f["filename"] for f in files]
+                                except Exception:
+                                    pass
                             workspace_context = {
                                 "uuid": workspace_data.get("uuid"),
                                 "name": workspace_data.get("name"),
+                                "description": workspace_data.get("description"),
                                 "instructions": workspace_data.get("instructions"),
                                 "has_files": workspace_has_files,
+                                "file_names": file_names,
                             }
-                            print(f"[CHAT_STREAM] Workspace context loaded: {workspace_data.get('name')} (has_files={workspace_has_files})")
+                            print(f"[CHAT_STREAM] Workspace context loaded: {workspace_data.get('name')} (has_files={workspace_has_files}, files={file_names})")
 
                     # 메시지 히스토리 변환
                     msg_history = None

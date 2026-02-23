@@ -1,19 +1,18 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { memo, useState } from "react";
+import { memo } from "react";
 import { useWindowSize } from "usehooks-ts";
 import { useTheme } from "next-themes";
 import { SidebarToggle } from "@/components/sidebar-toggle";
 import { Button } from "@/components/ui/button";
 import { PlusIcon } from "./icons";
 import { useSidebar } from "./ui/sidebar";
-import { Folder, HelpCircle, MessageSquare, Moon, Sun, Sparkles, Shield, X } from "lucide-react";
+import { Folder, HelpCircle, Moon, Sun, Sparkles, Shield, X } from "lucide-react";
 import Link from "next/link";
 import { getUserId, isAdminUser } from "@/lib/utils";
 import { useOnboarding } from "@/components/onboarding/onboarding-provider";
 import { useWhatsNew } from "@/components/whats-new/whats-new-provider";
-import { FeedbackModal } from "@/components/feedback-modal";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import type { Workspace } from "@/lib/api/workspaces";
 
@@ -31,7 +30,6 @@ function PureChatHeader({
   const { theme, setTheme } = useTheme();
   const { openOnboarding } = useOnboarding();
   const { openWhatsNew, hasUnseenAnnouncements } = useWhatsNew();
-  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const isAdmin = isAdminUser(getUserId());
 
   const { width: windowWidth } = useWindowSize();
@@ -83,21 +81,10 @@ function PureChatHeader({
         </div>
       )}
 
-      <Button
-        className="order-3 ml-auto h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
-        onClick={() => setShowFeedbackModal(true)}
-        variant="ghost"
-        size="icon"
-        title="피드백"
-      >
-        <MessageSquare className="h-4 w-4" />
-        <span className="sr-only">피드백</span>
-      </Button>
-
       {isAdmin && (
         <Button
           asChild
-          className="order-4 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
+          className="order-3 ml-auto h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
           variant="ghost"
           size="icon"
           title="관리자"
@@ -110,7 +97,7 @@ function PureChatHeader({
       )}
 
       <Button
-        className="relative order-5 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
+        className="relative order-4 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
         onClick={openWhatsNew}
         variant="ghost"
         size="icon"
@@ -124,7 +111,7 @@ function PureChatHeader({
       </Button>
 
       <Button
-        className="order-6 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
+        className="order-5 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
         onClick={openOnboarding}
         variant="ghost"
         size="icon"
@@ -135,7 +122,7 @@ function PureChatHeader({
       </Button>
 
       <Button
-        className="order-7 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
+        className="order-6 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
         onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
         variant="outline"
         size="icon"
@@ -144,11 +131,6 @@ function PureChatHeader({
         <Moon className="absolute h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
         <span className="sr-only">Toggle theme</span>
       </Button>
-
-      <FeedbackModal
-        open={showFeedbackModal}
-        onOpenChange={setShowFeedbackModal}
-      />
 
       {/* <Button
         asChild

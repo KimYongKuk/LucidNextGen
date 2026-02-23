@@ -17,6 +17,8 @@ class Intent(str, Enum):
     ACCT_SUPPORT = "acct_support"   # 회계/재경 VOC
     VISUALIZATION = "visualization" # PDF 생성, 문서 변환, 시각화
     PPT_GENERATION = "ppt_generation" # PPT 프레젠테이션 생성
+    MAIL = "mail"                   # 메일 조회, 메일 검색
+    APPROVAL = "approval"           # 전자결재 조회, 기안/결재/참조/부서문서
     DIRECT = "direct"               # 일반 대화, 코딩, 번역 등
 
 
@@ -31,6 +33,8 @@ INTENT_TO_WORKER = {
     Intent.ACCT_SUPPORT: "AcctSupportWorker",
     Intent.VISUALIZATION: "VisualizationWorker",
     Intent.PPT_GENERATION: "PPTWorker",
+    Intent.MAIL: "MailWorker",
+    Intent.APPROVAL: "ApprovalWorker",
     Intent.DIRECT: "DirectResponseWorker",
 }
 
@@ -64,5 +68,8 @@ class RequestContext(TypedDict):
     workspace_uuid: Optional[str]  # Deprecated: use workspace_id
     workspace_instructions: Optional[str]
     workspace_has_files: bool  # 워크스페이스에 문서가 있는지 여부
+    workspace_name: Optional[str]  # 워크스페이스 이름 (인텐트 분류용)
+    workspace_description: Optional[str]  # 워크스페이스 설명 (인텐트 분류용)
+    workspace_file_names: List[str]  # 워크스페이스 업로드 파일명 목록 (인텐트 분류용)
     has_files: bool  # 세션에 사용자 파일이 업로드되었는지 여부
     chat_mode: str

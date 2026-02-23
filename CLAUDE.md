@@ -104,6 +104,7 @@ LFChatbot_NextJS_FastAPI/
 │   │   │       ├── youtube_worker.py
 │   │   │       ├── it_support_worker.py
 │   │   │       ├── acct_support_worker.py
+│   │   │       ├── mail_worker.py
 │   │   │       └── url_fetch_worker.py
 │   │   ├── core/                # 핵심 설정
 │   │   │   ├── config.py        # 앱 설정
@@ -117,7 +118,9 @@ LFChatbot_NextJS_FastAPI/
 │   │   │   ├── rag_server.py    # 사내 문서 RAG
 │   │   │   ├── youtube_tool.py  # YouTube 요약
 │   │   │   ├── works_it_mcp_server.py   # IT 지원 VOC
-│   │   │   └── works_acct_mcp_server.py # 회계 지원 VOC
+│   │   │   ├── works_acct_mcp_server.py # 회계 지원 VOC
+│   │   │   └── mail_server/        # 메일 조회 MCP
+│   │   │       └── server.py
 │   │   ├── services/            # 비즈니스 로직
 │   │   │   ├── bedrock_service.py       # AWS Bedrock 서비스
 │   │   │   ├── chat_log_service.py      # 채팅 기록 관리 (MySQL)
@@ -159,7 +162,8 @@ LFChatbot_NextJS_FastAPI/
     ├── YouTubeWorker: YouTube 요약
     ├── URLFetchWorker: URL 콘텐츠 추출 (뉴스, 블로그 등)
     ├── ITSupportWorker: IT VOC 검색
-    └── AcctSupportWorker: 회계 VOC 검색
+    ├── AcctSupportWorker: 회계 VOC 검색
+    └── MailWorker: 사내 메일 조회
     ↓
 [MCP Tools] (각 Worker가 필터링된 도구 사용)
     ↓
@@ -180,6 +184,7 @@ LFChatbot_NextJS_FastAPI/
 | works_acct | search_acct_voc, execute_acct_voc_query | 회계 지원 사례 |
 | pdf_generator | create_document_pdf, create_table_spec_pdf | PDF 생성 |
 | chart_generator | create_line/bar/pie/multi_chart | 차트 생성 |
+| mail_server | get_inbox/sent/unread_mail, search_mail, get_mail_folders | 메일 조회 |
 
 ### Worker별 담당 도구
 
@@ -194,6 +199,7 @@ LFChatbot_NextJS_FastAPI/
 | URLFetchWorker | fetch | Sonnet |
 | ITSupportWorker | search_it_voc, execute_it_voc_query | Sonnet |
 | AcctSupportWorker | search_acct_voc, execute_acct_voc_query | Sonnet |
+| MailWorker | get_inbox/sent/unread_mail, search_mail, get_mail_folders | Sonnet |
 
 ## 주요 기능
 
@@ -306,6 +312,48 @@ CREATE TABLE workspace_memory (
 - Cmd+K 스타일 검색 모달
 - 최근 7일 채팅 조회 / 검색어 기반 검색
 - 검색어 하이라이팅
+
+### 11. 메일 조회
+사용자의 사내 메일함을 자연어로 조회하는 기능.
+
+**아키텍처:**
+```
+사번(user_id) → MailWorker 시스템 프롬프트에 사번 주입
+→ LLM이 MCP 도구 호출 (employee_number=사번)
+→ MCP 서버: PostgreSQL VIEW(v_mail_user_mapping) → message_store 경로
+→ JSP 엔드포인트(lucid_mail.jsp) HTTP 호출 → 메일 JSON
+→ LLM이 자연어 응답 생성
+```
+
+**지원 기능:**
+- 받은편지함/보낸편지함 조회 (`get_inbox_mail`, `get_sent_mail`)
+- 키워드 메일 검색 (`search_mail`)
+- 안 읽은 메일 조회 (`get_unread_mail`)
+- 메일함 목록 조회 (`get_mail_folders`)
+
+**핵심 특징:**
+- **보안**: 사번은 SSO 세션에서 자동 주입 (사용자 변경 불가)
+- **성능**: message_store 경로 프로세스 수명 캐싱 (DB 조회 최소화)
+- **On/Off**: `.env`의 `MAIL_WORKER_ENABLED=false`로 즉시 비활성화 가능
+- **읽기 전용**: 메일 본문 미리보기만 제공, 전체 본문 열람 불가
+
+**PostgreSQL VIEW (DBA 생성 필요):**
+```sql
+CREATE VIEW v_mail_user_mapping AS
+SELECT gu.employee_number, mu.message_store
+FROM go_users gu
+JOIN mail_user mu ON gu.login_id = mu.mail_uid
+WHERE mu.message_store IS NOT NULL;
+
+GRANT SELECT ON v_mail_user_mapping TO ai_reader;
+```
+
+**환경변수:**
+| 변수 | 설명 |
+|------|------|
+| MAIL_API_KEY | JSP 엔드포인트 인증 키 |
+| MAIL_API_URL | JSP 엔드포인트 URL |
+| MAIL_WORKER_ENABLED | 메일 기능 on/off (true/false) |
 
 ## 개발 명령어
 

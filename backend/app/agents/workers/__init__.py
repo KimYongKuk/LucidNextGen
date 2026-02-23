@@ -10,6 +10,8 @@ from .it_support_worker import ITSupportWorker
 from .acct_support_worker import AcctSupportWorker
 from .visualization_worker import VisualizationWorker
 from .ppt_worker import PPTWorker
+from .mail_worker import MailWorker
+from .approval_worker import ApprovalWorker
 from .direct_worker import DirectResponseWorker
 
 # Worker Registry
@@ -23,6 +25,8 @@ WORKER_REGISTRY = {
     "AcctSupportWorker": AcctSupportWorker,
     "VisualizationWorker": VisualizationWorker,
     "PPTWorker": PPTWorker,
+    "MailWorker": MailWorker,
+    "ApprovalWorker": ApprovalWorker,
     "DirectResponseWorker": DirectResponseWorker,
 }
 
@@ -45,6 +49,8 @@ __all__ = [
     "AcctSupportWorker",
     "VisualizationWorker",
     "PPTWorker",
+    "MailWorker",
+    "ApprovalWorker",
     "DirectResponseWorker",
     "WORKER_REGISTRY",
     "get_worker",

@@ -40,6 +40,8 @@ LUCID_AI_IDENTITY = """## 루시드AI (LucidAI) - AI 어시스턴트
 11. **IT 지원** - IT 관련 문의 사례(VOC) 검색 및 IT 문제 해결 가이드
 12. **회계/재경 지원** - 회계 관련 문의 사례(VOC) 검색, 전표 처리, 세금계산서 등 재경 업무 지원
 13. **워크스페이스** - 독립적 작업 공간에서 문서 업로드, 커스텀 지시사항 설정, 대화 기억 등 프로젝트별 관리
+14. **메일 조회** - 받은편지함, 보낸편지함 조회, 메일 검색, 안 읽은 메일 확인
+15. **전자결재 조회** - 결재 대기함, 기안함, 결재 완료함, 참조함, 부서 문서함 조회, 결재 병목 분석
 
 사용자가 루시드AI의 기능이나 할 수 있는 일에 대해 물어보면 위 목록을 바탕으로 친절하게 안내하세요.
 당신 자신을 소개할 때는 "루시드AI"라는 이름을 사용하세요.
@@ -94,6 +96,14 @@ class BaseWorker(ABC):
         if not self.tool_names:
             return []
         return [t for t in all_tools if t.name in self.tool_names]
+
+    def prepare_tools(
+        self,
+        tools: List[BaseTool],
+        context: Dict[str, Any]
+    ) -> List[BaseTool]:
+        """도구 후처리 훅 (하위 클래스에서 보안 래핑 등에 오버라이드)"""
+        return tools
 
     def build_system_prompt(
         self,
@@ -211,6 +221,7 @@ class BaseWorker(ABC):
         # 도구 필터링
         filter_start = time.time()
         filtered_tools = self.filter_tools(all_tools)
+        filtered_tools = self.prepare_tools(filtered_tools, context)
         filter_time = int((time.time() - filter_start) * 1000)
         print(f"[{self.name}] Using tools: {[t.name for t in filtered_tools]}")
         print(f"[{self.name}] [TIMING] Tool filtering: {filter_time}ms")
@@ -233,6 +244,22 @@ class BaseWorker(ABC):
         agent_time = int((time.time() - agent_start) * 1000)
         print(f"[{self.name}] [TIMING] Agent creation: {agent_time}ms")
 
+        # 디버깅: 도구 스키마 확인 (Bedrock에 올바르게 전달되는지)
+        if filtered_tools:
+            for t in filtered_tools:
+                try:
+                    schema = t.args_schema
+                    if schema is None:
+                        print(f"[{self.name}] [TOOL_SCHEMA] {t.name}: args_schema=None")
+                    elif isinstance(schema, dict):
+                        print(f"[{self.name}] [TOOL_SCHEMA] {t.name}: {schema}")
+                    elif hasattr(schema, 'model_json_schema'):
+                        print(f"[{self.name}] [TOOL_SCHEMA] {t.name}: {schema.model_json_schema()}")
+                    else:
+                        print(f"[{self.name}] [TOOL_SCHEMA] {t.name}: type={type(schema).__name__}")
+                except Exception as e:
+                    print(f"[{self.name}] [TOOL_SCHEMA] {t.name}: ERROR - {e}")
+
         # 스트리밍 실행
         total_setup_time = int((time.time() - worker_internal_start) * 1000)
         print(f"[{self.name}] [TIMING] Total setup before stream: {total_setup_time}ms")
@@ -242,6 +269,7 @@ class BaseWorker(ABC):
         llm_started = False
         first_token = False
         tool_started = False
+        llm_call_count = 0
         stream_start = time.time()
 
         async for event in agent.astream_events(
@@ -256,6 +284,26 @@ class BaseWorker(ABC):
             if event_kind == "on_chat_model_start" and not llm_started:
                 print(f"[{self.name}] [TIMING] LLM call started: {elapsed}ms")
                 llm_started = True
+
+            # LLM 호출 완료 → tool_calls 확인 (핵심 디버깅)
+            if event_kind == "on_chat_model_end":
+                llm_call_count += 1
+                output = event.get("data", {}).get("output", None)
+                if output and hasattr(output, "tool_calls") and output.tool_calls:
+                    tc_summary = [{"name": tc.get("name"), "args_keys": list(tc.get("args", {}).keys())} for tc in output.tool_calls]
+                    print(f"[{self.name}] [LLM_END #{llm_call_count}] tool_calls: {tc_summary}")
+                else:
+                    # LLM이 도구를 호출하지 않은 경우 → 응답 내용 출력
+                    resp_text = ""
+                    if output and hasattr(output, "content"):
+                        if isinstance(output.content, str):
+                            resp_text = output.content[:200]
+                        elif isinstance(output.content, list):
+                            for item in output.content:
+                                if isinstance(item, dict) and "text" in item:
+                                    resp_text += item["text"]
+                            resp_text = resp_text[:200]
+                    print(f"[{self.name}] [LLM_END #{llm_call_count}] NO tool_calls. Response: {resp_text}")
 
             # 첫 번째 LLM 토큰 (스트리밍 시작)
             if event_kind == "on_chat_model_stream" and not first_token:
