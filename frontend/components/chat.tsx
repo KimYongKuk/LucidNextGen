@@ -20,6 +20,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useArtifactSelector } from "@/hooks/use-artifact";
+import { useXlsxViewer, useXlsxViewerSelector } from "@/hooks/use-xlsx-viewer";
 import { useAutoResume } from "@/hooks/use-auto-resume";
 // import type { Vote } from "@/lib/db/schema";
 import { ChatSDKError } from "@/lib/errors";
@@ -31,12 +32,15 @@ import {
   getUserId,
 } from "@/lib/utils";
 import { workspaceApi, type Workspace } from "@/lib/api/workspaces";
+import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { Artifact } from "./artifact";
+import { XlsxViewerPanel } from "./xlsx-viewer-panel";
 import { useDataStream } from "./data-stream-provider";
 import { Messages } from "./messages";
 import { MultimodalInput } from "./multimodal-input";
 import { getChatHistoryPaginationKey } from "./sidebar-history";
 import { toast } from "./toast";
+import { FollowUpSuggestions } from "./follow-up-suggestions";
 
 export function Chat({
   id,
@@ -98,6 +102,7 @@ export function Chat({
     stop,
     regenerate,
     resumeStream,
+    followUpSuggestions,
   } = useSimpleChat({
     id,
     messages: initialMessages,
@@ -136,19 +141,19 @@ export function Chat({
     },
   });
 
-  const [hasAppendedQuery, setHasAppendedQuery] = useState(false);
+  const hasAppendedQueryRef = useRef(false);
 
   useEffect(() => {
-    if (query && !hasAppendedQuery) {
+    if (query && !hasAppendedQueryRef.current) {
+      hasAppendedQueryRef.current = true;
+      window.history.replaceState({}, "", `/chat/${id}`);
+
       sendMessage({
         role: "user" as const,
         parts: [{ type: "text", text: query }],
       });
-
-      setHasAppendedQuery(true);
-      window.history.replaceState({}, "", `/chat/${id}`);
     }
-  }, [query, sendMessage, hasAppendedQuery, id]);
+  }, [query, id]);
 
   const { data: votes } = useSWR<Vote[]>(
     messages.length >= 2 ? `/api/vote?chatId=${id}` : null,
@@ -162,6 +167,17 @@ export function Chat({
 
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const isArtifactVisible = useArtifactSelector((state) => state.isVisible);
+  const isXlsxViewerOpen = useXlsxViewerSelector((state) => state.isOpen);
+  const { openFile: openXlsxFile, closeViewer: closeXlsxViewer } = useXlsxViewer();
+
+  // 세션 전환 시 XLSX 뷰어 닫기
+  // Note: useRef(id) doesn't work here because React remounts with new id,
+  // so ref always equals current id. Instead, close on every id change/mount.
+  useEffect(() => {
+    return () => {
+      closeXlsxViewer();
+    };
+  }, [id, closeXlsxViewer]);
 
   // 세션에 업로드된 문서 파일 추적 (이미지는 base64로 저장되므로 제외)
   const [hasUploadedSessionFiles, setHasUploadedSessionFiles] = useState(false);
@@ -176,49 +192,109 @@ export function Chat({
     setMessages,
   });
 
+  // Auto-open xlsx viewer when chatbot generates an xlsx file
+  const prevMsgCountRef = useRef(messages.length);
+  useEffect(() => {
+    // Only trigger when streaming completes and new messages arrived
+    if (status !== "ready") return;
+    if (messages.length <= prevMsgCountRef.current) {
+      prevMsgCountRef.current = messages.length;
+      return;
+    }
+    prevMsgCountRef.current = messages.length;
+
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg?.role !== "assistant") return;
+
+    const textContent =
+      lastMsg.parts
+        ?.filter((p: any) => p.type === "text")
+        ?.map((p: any) => p.text)
+        ?.join("") || "";
+
+    const xlsxMatch =
+      /\*?\*?파일명\*?\*?:\s*`?([^\n`]+\.xlsx)`?/i.exec(textContent);
+    if (xlsxMatch) {
+      const filename =
+        xlsxMatch[1]
+          .trim()
+          .replace(/^[`'"*_\s]+|[`'"*_\s]+$/g, "")
+          .replace(/[`'"]/g, "")
+          .split(/[\\\/]/)
+          .pop() || "";
+      if (filename) openXlsxFile(filename);
+    }
+  }, [messages.length, status, openXlsxFile, messages]);
+
   return (
     <>
-      <div className="overscroll-behavior-contain flex h-dvh min-w-0 touch-pan-y flex-col bg-background">
-        <ChatHeader
-          chatId={id}
-          isReadonly={isReadonly}
-          workspace={workspace}
-        />
-
-        <Messages
-          chatId={id}
-          isArtifactVisible={isArtifactVisible}
-          isReadonly={isReadonly}
-          messages={messages}
-          regenerate={regenerate}
-          selectedModelId={initialChatModel}
-          setMessages={setMessages}
-          status={status}
-          votes={votes}
-          workspace={workspace}
-        />
-
-        <div className="sticky bottom-0 z-1 mx-auto flex w-full max-w-4xl gap-2 border-t-0 bg-background px-2 pb-3 md:px-4 md:pb-4">
-          {!isReadonly && (
-            <MultimodalInput
-              attachments={attachments}
+      <PanelGroup direction="horizontal" className="h-dvh">
+        {/* Chat Panel */}
+        <Panel defaultSize={isXlsxViewerOpen ? 50 : 100} minSize={30}>
+          <div className="overscroll-behavior-contain flex h-full min-w-0 touch-pan-y flex-col bg-background">
+            <ChatHeader
               chatId={id}
-              input={input}
+              isReadonly={isReadonly}
+              workspace={workspace}
+            />
+
+            <Messages
+              chatId={id}
+              isArtifactVisible={isArtifactVisible}
+              isReadonly={isReadonly}
               messages={messages}
-              onFileUploaded={() => setHasUploadedSessionFiles(true)}
-              onModelChange={setCurrentModelId}
-              selectedModelId={currentModelId}
-              sendMessage={sendMessage}
-              setAttachments={setAttachments}
-              setInput={setInput}
+              regenerate={regenerate}
+              selectedModelId={initialChatModel}
               setMessages={setMessages}
               status={status}
-              stop={stop}
-              workspaceId={effectiveWorkspaceId}
+              votes={votes}
+              workspace={workspace}
             />
-          )}
-        </div>
-      </div>
+
+            <div className="sticky bottom-0 z-1 mx-auto flex w-full max-w-4xl flex-col gap-2 border-t-0 bg-background px-2 pb-3 md:px-4 md:pb-4">
+              {!isReadonly && status === 'ready' && !input.trim() && (
+                <FollowUpSuggestions
+                  suggestions={followUpSuggestions}
+                  onSuggestionClick={(suggestion) => {
+                    sendMessage({
+                      role: "user",
+                      parts: [{ type: "text", text: suggestion }],
+                    });
+                  }}
+                />
+              )}
+              {!isReadonly && (
+                <MultimodalInput
+                  attachments={attachments}
+                  chatId={id}
+                  input={input}
+                  messages={messages}
+                  onFileUploaded={() => setHasUploadedSessionFiles(true)}
+                  onModelChange={setCurrentModelId}
+                  selectedModelId={currentModelId}
+                  sendMessage={sendMessage}
+                  setAttachments={setAttachments}
+                  setInput={setInput}
+                  setMessages={setMessages}
+                  status={status}
+                  stop={stop}
+                  workspaceId={effectiveWorkspaceId}
+                />
+              )}
+            </div>
+          </div>
+        </Panel>
+
+        {/* XLSX Viewer Panel */}
+        {isXlsxViewerOpen && (
+          <>
+            <PanelResizeHandle className="w-1.5 bg-border hover:bg-primary/20 transition-colors" />
+            <Panel defaultSize={50} minSize={25}>
+              <XlsxViewerPanel />
+            </Panel>
+          </>
+        )}
+      </PanelGroup>
 
       <Artifact
         attachments={attachments}

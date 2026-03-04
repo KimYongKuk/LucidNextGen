@@ -23,6 +23,9 @@ class ChatLogService:
         category_text: str = "temp",
         metadata: Optional[dict] = None,
         workspace_id: Optional[str] = None,  # UUID string
+        intent: Optional[str] = None,
+        worker_name: Optional[str] = None,
+        response_time_ms: Optional[int] = None,
     ) -> bool:
         """
         Save chat log - ALL IN ONE TRANSACTION, NO EXTERNAL CALLS.
@@ -49,9 +52,9 @@ class ChatLogService:
                 metadata_json = json.dumps(metadata, ensure_ascii=False) if metadata else None
                 cursor.execute("""
                     INSERT INTO chat_log_new
-                    (userId, createDate, inputLog, outputLog, chatMode, categoryText, session, metadata)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                """, (user_id, create_date, input_log, output_log, chat_mode, category_text, session, metadata_json))
+                    (userId, createDate, inputLog, outputLog, chatMode, categoryText, session, metadata, intent, worker_name, response_time_ms)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (user_id, create_date, input_log, output_log, chat_mode, category_text, session, metadata_json, intent, worker_name, response_time_ms))
                 print("  [OK] chat_log_new INSERT successful")
                 if metadata:
                     print(f"  [OK] Metadata saved: {len(metadata.get('images', []))} images, {len(metadata.get('sources', []))} sources")
@@ -213,11 +216,27 @@ class ChatLogService:
             query += " AND chat_mode = %s"
             params.append(chat_mode)
 
-        # Cursor pagination: "updated_at|session_id" format
+        # Cursor pagination: "is_pinned|updated_at|session_id" composite format
+        # (ORDER BY is_pinned DESC, updated_at DESC requires composite cursor)
         if cursor:
             try:
                 parts = cursor.split("|")
-                if len(parts) == 2:
+                if len(parts) == 3:
+                    cursor_is_pinned, cursor_updated_at, cursor_session_id = parts
+                    query += """
+                        AND (
+                            is_pinned < %s
+                            OR (is_pinned = %s AND updated_at < %s)
+                            OR (is_pinned = %s AND updated_at = %s AND session_id < %s)
+                        )
+                    """
+                    params.extend([
+                        cursor_is_pinned,
+                        cursor_is_pinned, cursor_updated_at,
+                        cursor_is_pinned, cursor_updated_at, cursor_session_id,
+                    ])
+                elif len(parts) == 2:
+                    # Legacy cursor format fallback
                     cursor_updated_at, cursor_session_id = parts
                     query += """
                         AND (updated_at < %s OR
@@ -241,7 +260,8 @@ class ChatLogService:
 
         if has_more and sessions:
             last_session = sessions[-1]
-            next_cursor = f"{last_session['updated_at']}|{last_session['session_id']}"
+            pinned_val = 1 if last_session.get('is_pinned') else 0
+            next_cursor = f"{pinned_val}|{last_session['updated_at']}|{last_session['session_id']}"
 
         return {
             "sessions": sessions,

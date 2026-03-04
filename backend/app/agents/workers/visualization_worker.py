@@ -189,7 +189,8 @@ Answer in Korean unless asked otherwise."""
     def build_system_prompt(
         self,
         context: Dict[str, Any],
-        memory_context: Optional[Dict[str, Any]] = None
+        memory_context: Optional[Dict[str, Any]] = None,
+        user_memory_context: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         컨텍스트를 반영한 시스템 프롬프트 생성
@@ -251,6 +252,12 @@ Do NOT ask user for data - search the documents directly!
         current_date = f"{now.year}년 {now.month}월 {now.day}일 ({weekday_kr})"
         prompt = f"Today is {current_date}.\n\n{prompt}"
 
+        # 전역 사용자 메모리 주입
+        if user_memory_context and user_memory_context.get("key_facts"):
+            facts = user_memory_context["key_facts"]
+            facts_text = "\n".join(f"  - {fact}" for fact in facts)
+            prompt = f"## User Profile (사용자 개인 특성)\n\n이 사용자에 대해 알려진 정보:\n{facts_text}\n\n{prompt}"
+
         print(f"[VisualizationWorker] Context: session_id={bool(session_id)}, workspace_uuid={bool(workspace_uuid)}, has_files={has_files}")
 
         return prompt
@@ -265,6 +272,7 @@ Do NOT ask user for data - search the documents directly!
         context: Dict[str, Any],
         all_tools: List[BaseTool],
         memory_context: Optional[Dict[str, Any]] = None,
+        user_memory_context: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """
         Haiku 사전 요약을 포함한 스트리밍 응답 생성
@@ -289,7 +297,7 @@ Do NOT ask user for data - search the documents directly!
             }
 
         # 부모 클래스의 stream_response 호출 (요약된 메시지 사용, 메모리 컨텍스트 전달)
-        async for event in super().stream_response(processed_messages, context, all_tools, memory_context):
+        async for event in super().stream_response(processed_messages, context, all_tools, memory_context, user_memory_context):
             yield event
 
     async def _summarize_history_if_needed(

@@ -371,8 +371,9 @@ class PDFVisionService:
                     "method": "direct_text_extraction"
                 }
 
-            elif text_length < self.text_threshold and is_complex:
-                # 이미지 캡처
+            elif text_length < self.text_threshold:
+                # 텍스트가 거의 없는 페이지 → 이미지 기반 PDF일 가능성 높음
+                # is_complex 여부와 무관하게 Vision API로 OCR 시도
                 t0 = time.time()
                 await asyncio.sleep(0)
                 img_bytes = self.capture_page_as_image(page, dpi=self.dpi)
@@ -384,17 +385,21 @@ class PDFVisionService:
                 extracted_text = await self.extract_text_from_image(img_bytes)
                 _log_timing(f"Page {page_num} Vision API", t0, f"{len(extracted_text)} chars extracted")
 
-                _log_timing(f"Page {page_num} TOTAL", page_start, "vision_api")
+                # Vision API도 텍스트를 못 뽑으면 원본 텍스트라도 반환
+                final_text = extracted_text if extracted_text.strip() else text
+
+                _log_timing(f"Page {page_num} TOTAL", page_start, f"vision_api (complex={is_complex})")
                 return {
                     "page_num": page_num,
                     "type": "image_to_text",
-                    "content": extracted_text,
-                    "text_length": len(extracted_text),
+                    "content": final_text,
+                    "text_length": len(final_text),
                     "method": "vision_api_extraction",
                     "original_text_length": text_length
                 }
 
-            elif text_length >= self.text_threshold and is_complex:
+            else:
+                # text >= 30 AND is_complex: 텍스트는 충분하지만 복잡한 레이아웃
                 _log_timing(f"Page {page_num} TOTAL", page_start, "direct_text (complex but enough text)")
                 return {
                     "page_num": page_num,
@@ -403,17 +408,6 @@ class PDFVisionService:
                     "text_length": text_length,
                     "method": "direct_text_extraction",
                     "note": "complex_layout_but_sufficient_text"
-                }
-
-            else:
-                _log_timing(f"Page {page_num} TOTAL", page_start, "direct_text (short, no images)")
-                return {
-                    "page_num": page_num,
-                    "type": "short_text",
-                    "content": text,
-                    "text_length": text_length,
-                    "method": "direct_text_extraction",
-                    "note": "short_text_no_images"
                 }
         except Exception as e:
             print(f"Page {page_num} processing error: {e}")

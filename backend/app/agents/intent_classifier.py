@@ -29,6 +29,9 @@ INTENTS:
   Keywords: "PPT", "파워포인트", "프레젠테이션", "발표자료", "슬라이드로", "PT자료", "PPT로", "발표 자료"
 - visualization: Create charts, graphs, PDF documents, reports, data visualization
   Keywords: "차트", "그래프", "PDF로", "시각화", "막대", "라인", "파이", "문서로 만들어", "보고서로 정리"
+- xlsx: Create, modify, or manipulate Excel (XLSX) files. Editing cells, formatting, formulas, charts in Excel, pivot tables, creating new spreadsheets
+  Keywords: "엑셀", "excel", "xlsx", "스프레드시트", "워크시트", "셀", "행 추가", "열 삭제", "서식", "피벗 테이블", "수식"
+  NOTE: If user asks about analyzing uploaded xlsx file content → "user_files". If user wants to CREATE or MODIFY an xlsx file → "xlsx"
 - user_files: Questions about user's uploaded files or workspace documents
   Keywords: "파일 분석", "파일 요약", "업로드한 것", "올린 파일", "문서 내용"
 - web_search: Queries that require up-to-date or factual information from the internet
@@ -47,16 +50,21 @@ INTENTS:
 - acct_support: Accounting/finance VOC, 재경 VOC, 세금계산서, SAP 전표, 결산, 예산, 자산, 내부회계, 자금, 경비 처리. Also handles finance-domain person-in-charge questions.
   Keywords: "회계 담당자", "재경 담당자", "세금계산서 담당자", "결산 담당자", "예산 담당자", "자금 담당자", "SAP 담당자"
   Accounting systems: SAP ERP, SAP FI, SAP CO, 전자세금계산서, 법인카드, iCUBE
-- mail: Check/search user's email inbox, sent mail, unread mail, mail folders
-  Keywords: "메일", "이메일", "email", "받은편지함", "보낸편지함", "편지함", "안읽은 메일", "새 메일", "메일 검색", "수신함", "발신함", "inbox", "mailbox"
+- mail: Check/search user's email inbox, sent mail, unread mail, mail folders, view full mail body, summarize mail content, draft reply
+  Keywords: "메일", "이메일", "email", "받은편지함", "보낸편지함", "편지함", "안읽은 메일", "새 메일", "메일 검색", "수신함", "발신함", "inbox", "mailbox", "메일 본문", "메일 요약", "메일 답장", "답장 초안", "회신"
 - approval: Electronic approval document queries - check pending approvals, drafted documents, approval status, bottleneck analysis, department documents
   Keywords: "결재", "기안", "상신", "전자결재", "결재 대기", "결재 완료", "결재함", "기안함", "참조함", "반려", "재기안", "결재선", "합의", "승인 문서", "결재 건"
   NOTE: "결산" (settlement/closing) is accounting → use "acct_support", NOT "approval"
+- board: Search company bulletin boards (다우오피스), notices, announcements, posts
+  Keywords: "게시판", "공지", "공지사항", "게시글", "게시물", "사내 공지", "전사 공지", "사내 게시판", "전사 게시판", "게시판 검색"
+  Topics: company notices, board posts, announcements, bulletin board search, finding specific posts
+  NOTE: If user wants to search internal bulletin board posts or company notices → "board". If user asks about company policies/regulations (not board posts) → "corp_rag"
 - direct: General conversation, coding help, translation, math, creative writing, no tools needed
   ONLY use "direct" for tasks that do NOT require any external information (e.g., pure conversation, coding, translation, math)
 
 CONTEXT:
 - User has uploaded files: {has_files}
+- Session has xlsx files: {has_session_xlsx}
 - Workspace mode: {has_workspace}
 - Workspace name: {workspace_name}
 - Workspace description: {workspace_description}
@@ -65,7 +73,18 @@ CONTEXT:
 PRIORITY RULES (IMPORTANT - follow this order):
 1. ppt_generation: If user asks for PPT/PowerPoint/presentation/slides → ALWAYS "ppt_generation"
 2. visualization: If user asks for charts/graphs/PDF/visualization → ALWAYS "visualization" (regardless of file context)
-3. WORKSPACE-AWARE ROUTING (when has_workspace=True AND workspace has files):
+2.5. xlsx: If user asks to CREATE, MODIFY, FORMAT, or MANIPULATE Excel/XLSX files → ALWAYS "xlsx"
+     NOTE: "엑셀 파일 분석해줘" (analyzing content) → "user_files". "엑셀 만들어줘" (creating/modifying) → "xlsx"
+     IMPORTANT: If has_session_xlsx=True AND user asks to FORMAT, MODIFY, EDIT, UPDATE, or CHANGE the uploaded file → "xlsx" (even without explicit "엑셀" keyword)
+     ANY modification request (수정, 편집, 변경, 고치, 바꿔, 업데이트, 추가, 삭제, 정리, 다듬, 값 입력/넣기) + has_session_xlsx=True → "xlsx"
+     Examples: "이 파일 서식 적용해줘" + has_session_xlsx=True → "xlsx". "파일에 합계 추가해줘" + has_session_xlsx=True → "xlsx". "파일 수정해줘" + has_session_xlsx=True → "xlsx". "데이터 좀 바꿔줘" + has_session_xlsx=True → "xlsx"
+     But: "이 파일 내용 요약해줘" + has_session_xlsx=True → "user_files" (READ/분석 요청은 user_files)
+3. DISAMBIGUATION - mail vs approval (IMPORTANT):
+   - If the user's ACTION is about checking/searching EMAIL (메일 확인, 메일 내용, 메일 검색), classify as "mail" even if the mail subject contains approval keywords like "전자결재", "결재", "기안"
+   - The mail subject/title is NOT the user's intent — the ACTION verb determines the intent
+   - "'전자결재 수정 확인 요청' 메일 내용 확인해줘" → "mail" (action=메일 확인, subject happens to mention 전자결재)
+   - "전자결재 결재 대기 건 확인해줘" → "approval" (action=결재 대기 확인)
+4. WORKSPACE-AWARE ROUTING (when has_workspace=True AND workspace has files):
    - Compare the user's query topic with the workspace name, description, and uploaded file names
    - If the query topic MATCHES the workspace domain → "user_files" (search workspace documents first)
    - If the query topic is UNRELATED to the workspace → use the specialized intent (mail, web_search, etc.)
@@ -74,12 +93,13 @@ PRIORITY RULES (IMPORTANT - follow this order):
      - Workspace "분기 실적" with files ["매출보고서.pdf"] + query "안 읽은 메일 확인해줘" → "mail" (workspace is about finance, not mail)
      - Workspace "AI 리서치" with files ["AI동향보고서.pdf"] + query "최근 AI 트렌드" → "user_files" (workspace covers AI trends)
      - Workspace "AI 리서치" with files ["AI동향보고서.pdf"] + query "오늘 날씨" → "web_search" (unrelated to workspace)
-4. mail: If user asks about their email/inbox/sent mail/unread mail → "mail"
-5. approval: If user asks about electronic approval documents, pending approvals, drafted documents, approval status, bottleneck → "approval"
-6. web_search: If user asks about real-world topics, industries, companies, trends, current events, or anything requiring up-to-date info → "web_search"
-7. user_files: If user asks about file contents AND (has_files=True OR has_workspace=True) → "user_files"
-8. NEVER choose "user_files" if BOTH has_files=False AND has_workspace=False
-9. NEVER choose "direct" if the query is about real-world facts, companies, industries, or current information
+5. mail: If user asks about their email/inbox/sent mail/unread mail → "mail"
+6. approval: If user asks about electronic approval documents, pending approvals, drafted documents, approval status, bottleneck → "approval"
+6.5. board: If user asks about company bulletin board posts, notices, announcements, or searching 게시판 → "board"
+7. web_search: If user asks about real-world topics, industries, companies, trends, current events, or anything requiring up-to-date info → "web_search"
+8. user_files: If user asks about file contents AND (has_files=True OR has_workspace=True) → "user_files"
+9. NEVER choose "user_files" if BOTH has_files=False AND has_workspace=False
+10. NEVER choose "direct" if the query is about real-world facts, companies, industries, or current information
 
 WORKSPACE RULES (when has_workspace=True AND workspace has files):
 - The user is working inside a workspace session, so workspace documents are the primary knowledge source
@@ -124,6 +144,29 @@ EXAMPLES:
 - "부서 수신 문서 있어?" → approval (부서 수신함)
 - "안 읽은 참조 문서" → approval (참조함 미열람)
 - "긴급 결재 건 확인해줘" → approval (긴급 결재 대기)
+- "'JHC 전자결재 수정 확인 요청' 메일 내용 확인해줘" → mail (메일 내용 확인 액션, 제목에 전자결재 포함은 무관)
+- "'결재 반려 통보' 메일 찾아줘" → mail (메일 검색 액션)
+- "전자결재 수정 관련 메일 확인해줘" → mail (메일 확인 액션)
+- "안전교육 관련 공지 찾아줘" → board (게시판 검색)
+- "전사 공지 최신글 보여줘" → board (전사 게시판 조회)
+- "IT 게시판에 올라온 글 뭐 있어?" → board (특정 게시판 조회)
+- "게시판에서 발령 검색해줘" → board (게시판 키워드 검색)
+- "이번 달 올라온 공지 보여줘" → board (기간 범위 게시판 검색)
+- "김명진 님이 올린 게시글 있어?" → board (작성자 기반 검색)
+- "JHC 쪽 공지사항 좀 보여줘" → board (카테고리 게시판 검색)
+- "엑셀 파일 만들어줘" → xlsx (엑셀 생성)
+- "매출 데이터를 엑셀로 정리해줘" → xlsx (엑셀 생성)
+- "이 엑셀에 합계 행 추가해줘" → xlsx (엑셀 수정)
+- "피벗테이블 만들어줘" → xlsx (엑셀 피벗)
+- "엑셀 파일 내용 요약해줘" → user_files (파일 분석, NOT xlsx)
+- "이 파일 서식 적용해줘" (has_session_xlsx=True) → xlsx (세션 xlsx 파일 서식 수정)
+- "이 파일 디자인 서식 적용해줘" (has_session_xlsx=True) → xlsx (세션 xlsx 파일 서식 수정)
+- "파일에 합계 행 추가해줘" (has_session_xlsx=True) → xlsx (세션 xlsx 파일 수정)
+- "파일 수정해줘" (has_session_xlsx=True) → xlsx (세션 xlsx 파일 수정)
+- "데이터 좀 바꿔줘" (has_session_xlsx=True) → xlsx (세션 xlsx 파일 수정)
+- "값 변경해줘" (has_session_xlsx=True) → xlsx (세션 xlsx 파일 수정)
+- "이 파일 정리해줘" (has_session_xlsx=True) → xlsx (세션 xlsx 파일 편집)
+- "파일 내용 분석해줘" (has_session_xlsx=True) → user_files (내용 분석/읽기는 user_files)
 - "코드 리뷰해줘" → direct (코딩 도움)
 - "이 문장 영어로 번역해줘" → direct (번역)
 
@@ -162,10 +205,21 @@ class IntentClassifier:
         # → LLM 분류기가 워크스페이스 컨텍스트(이름/설명/파일명)를 보고 최종 판단
         workspace_has_files = context.get("workspace_has_files", False)
 
-        # 메일 관련 키워드 감지 (MAIL_WORKER_ENABLED 환경변수로 on/off)
+        # ================================================================
+        # 메일 액션 우선 감지: "메일 내용 확인해줘", "메일 확인해줘" 등
+        # 메일 제목에 "전자결재"가 포함되어 있어도 사용자의 실제 액션이
+        # 메일 조회인 경우를 정확히 라우팅 (워크스페이스/다른 키워드 무관)
+        # ================================================================
         mail_enabled = os.environ.get("MAIL_WORKER_ENABLED", "true").lower() == "true"
         if mail_enabled:
-            mail_keywords = r'(메일|이메일|e-?mail|받은\s?편지|보낸\s?편지|편지함|안\s?읽은\s?메일|새\s?메일|수신함|발신함|inbox|sent\s?mail|mailbox|unread)'
+            mail_action_pattern = r'메일\s*(내용|내역|본문)?\s*(확인|보여|검색|찾아|조회|알려|읽어|요약|답장|답신|회신|응답)'
+            if re.search(mail_action_pattern, message, re.IGNORECASE):
+                print(f"[INTENT] Quick: explicit mail action pattern detected → MAIL")
+                return Intent.MAIL
+
+        # 메일 관련 키워드 감지 (MAIL_WORKER_ENABLED 환경변수로 on/off)
+        if mail_enabled:
+            mail_keywords = r'(메일|이메일|e-?mail|받은\s?편지|보낸\s?편지|편지함|안\s?읽은\s?메일|새\s?메일|수신함|발신함|inbox|sent\s?mail|mailbox|unread|메일\s?요약|메일\s?답장|메일\s?회신)'
             if re.search(mail_keywords, message, re.IGNORECASE):
                 if workspace_has_files:
                     # 워크스페이스에 파일이 있으면 LLM에게 위임 (워크스페이스 주제와 관련 있을 수 있음)
@@ -176,12 +230,53 @@ class IntentClassifier:
         # 전자결재 관련 키워드 감지 (APPROVAL_WORKER_ENABLED 환경변수로 on/off)
         approval_enabled = os.environ.get("APPROVAL_WORKER_ENABLED", "true").lower() == "true"
         if approval_enabled:
+            # "메일" 키워드가 함께 있고 메일 기능이 활성화되어 있으면 approval로 단정하지 않음
+            # (메일 제목에 "전자결재"가 포함된 경우 오분류 방지)
+            # mail_enabled=false이면 메일 라우팅이 불가능하므로 approval로 바로 분류
+            has_mail_keyword = mail_enabled and bool(re.search(r'(메일|이메일|e-?mail)', message, re.IGNORECASE))
             approval_keywords = r'(결재|기안|상신|전자결재|결재\s?대기|결재\s?완료|결재함|기안함|반려|재기안|결재선|합의|승인\s?문서|결재\s?건)'
             if re.search(approval_keywords, message, re.IGNORECASE):
+                if has_mail_keyword:
+                    print(f"[INTENT] Quick: approval keyword detected but also has mail keyword, deferring to LLM for disambiguation")
+                    return None
                 if workspace_has_files:
                     print(f"[INTENT] Quick: approval keyword detected but workspace has files, deferring to LLM")
                     return None
                 return Intent.APPROVAL
+
+        # 게시판 관련 키워드 감지 (BOARD_WORKER_ENABLED 환경변수로 on/off)
+        board_enabled = os.environ.get("BOARD_WORKER_ENABLED", "true").lower() == "true"
+        if board_enabled:
+            board_keywords = r'(게시판|공지사항|게시글|게시물|사내\s?공지|전사\s?공지|전사\s?게시)'
+            if re.search(board_keywords, message, re.IGNORECASE):
+                if workspace_has_files:
+                    print(f"[INTENT] Quick: board keyword detected but workspace has files, deferring to LLM")
+                    return None
+                return Intent.BOARD
+
+        # Excel/XLSX 관련 키워드 감지 (XLSX_WORKER_ENABLED 환경변수로 on/off)
+        xlsx_enabled = os.environ.get("XLSX_WORKER_ENABLED", "true").lower() == "true"
+        if xlsx_enabled:
+            # 패턴 1: "엑셀" 키워드 + 액션 동사 (기존)
+            xlsx_pattern = r'(엑셀|excel|xlsx|xls|스프레드시트).{0,20}(만들|생성|수정|편집|추가|삭제|서식|포맷|정리|작성|변환|내보내)'
+            xlsx_pattern2 = r'(만들|생성|수정|편집|추가|삭제|서식|포맷|정리|작성|변환|내보내).{0,20}(엑셀|excel|xlsx|xls|스프레드시트)'
+            if re.search(xlsx_pattern, message, re.IGNORECASE) or re.search(xlsx_pattern2, message, re.IGNORECASE):
+                if workspace_has_files:
+                    print(f"[INTENT] Quick: xlsx keyword detected but workspace has files, deferring to LLM")
+                    return None
+                return Intent.XLSX
+
+            # 패턴 2: 세션에 xlsx 파일 존재 + Excel 수정/서식 관련 키워드 (엑셀 키워드 없이도)
+            # "이 파일 서식 적용해줘", "테두리 넣어줘", "합계 추가해줘", "파일 수정해줘" 등
+            has_session_xlsx = context.get("has_session_xlsx", False)
+            if has_session_xlsx:
+                xlsx_modify_keywords = r'(수정|편집|변경|고치|바꿔|바꾸|업데이트|update|서식|포맷|테두리|배경색|글꼴|볼드|bold|정렬|색상|수식|formula|합계|sum|필터|filter|셀\s?병합|merge|행\s?추가|열\s?추가|행\s?삭제|열\s?삭제|데이터\s?추가|데이터\s?입력|값\s?입력|값\s?넣|값\s?변경|값\s?수정|내용\s?변경|내용\s?수정|시트\s?추가|시트\s?삭제|피벗|pivot|채우|넣어|입력|작성|정리|다듬)'
+                if re.search(xlsx_modify_keywords, message, re.IGNORECASE):
+                    if workspace_has_files:
+                        print(f"[INTENT] Quick: xlsx modify keyword + session xlsx, but workspace has files, deferring to LLM")
+                        return None
+                    print(f"[INTENT] Quick: xlsx modify keyword detected with session xlsx files")
+                    return Intent.XLSX
 
         if not workspace_has_files:
             # 시간 기반 정보 요청 감지 → 웹 검색 필요 (실시간 정보)
@@ -237,6 +332,7 @@ class IntentClassifier:
             prompt = CLASSIFIER_PROMPT.format(
                 message=message,
                 has_files=context.get("has_files", False),
+                has_session_xlsx=context.get("has_session_xlsx", False),
                 has_workspace=has_workspace,
                 workspace_name=workspace_name,
                 workspace_description=workspace_description,

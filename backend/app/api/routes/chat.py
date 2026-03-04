@@ -65,6 +65,9 @@ async def _save_chat_log_background(
     chat_mode: str,
     metadata: dict,
     workspace_id: Optional[str],  # UUID string
+    intent: Optional[str] = None,
+    worker_name: Optional[str] = None,
+    response_time_ms: Optional[int] = None,
 ):
     """Background task for saving chat log (prevents streaming delay)"""
     try:
@@ -78,6 +81,9 @@ async def _save_chat_log_background(
             category_text="temp",
             metadata=metadata,
             workspace_id=workspace_id,
+            intent=intent,
+            worker_name=worker_name,
+            response_time_ms=response_time_ms,
         )
         print(f"[BACKGROUND] Chat log saved successfully")
 
@@ -101,7 +107,21 @@ async def _save_chat_log_background(
                 import traceback
                 traceback.print_exc()
         else:
-            print(f"[BACKGROUND] No workspace_id, skipping memory update")
+            print(f"[BACKGROUND] No workspace_id, skipping workspace memory update")
+
+        # ============ 전역 사용자 메모리 업데이트 트리거 ============
+        if user_id and user_id != "anonymous":
+            try:
+                from app.services.memory_service import get_user_memory_service, USER_MEMORY_ENABLED
+                if USER_MEMORY_ENABLED:
+                    user_mem_service = get_user_memory_service()
+                    if await user_mem_service.should_extract_facts(user_id):
+                        asyncio.create_task(
+                            user_mem_service.extract_and_update_facts(user_id)
+                        )
+                        print(f"[BACKGROUND] Triggered global user memory extraction for {user_id}")
+            except Exception as mem_e:
+                print(f"[BACKGROUND] User memory update error (non-fatal): {mem_e}")
 
     except Exception as e:
         print(f"[BACKGROUND] Failed to save chat log: {e}")
@@ -532,6 +552,12 @@ async def chat_stream(
                             metadata["corp_sources"] = a2a_collected_data["corp_sources"]
                         if a2a_collected_data.get("chart_data"):
                             metadata["chart_data"] = a2a_collected_data["chart_data"]
+                        if a2a_collected_data.get("is_error"):
+                            metadata["is_error"] = True
+                        if a2a_collected_data.get("tools_used"):
+                            metadata["tools_used"] = a2a_collected_data["tools_used"]
+                        if request.images:
+                            metadata["image_count"] = len(request.images)
 
                         print(f"[CHAT_STREAM] A2A scheduling background save: {len(a2a_collected_data.get('response', ''))} chars")
                         background_tasks.add_task(
@@ -544,6 +570,9 @@ async def chat_stream(
                             chat_mode,
                             metadata,
                             request.workspace_id,
+                            a2a_collected_data.get("intent"),
+                            a2a_collected_data.get("worker_name"),
+                            a2a_collected_data.get("response_time_ms"),
                         )
 
                     return  # A2A 경로 종료 (finally 블록에서 저장하지 않음)

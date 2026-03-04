@@ -82,7 +82,8 @@ RESPONSE FORMAT:
     def build_system_prompt(
         self,
         context: Dict[str, Any],
-        memory_context: Optional[Dict[str, Any]] = None
+        memory_context: Optional[Dict[str, Any]] = None,
+        user_memory_context: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         컨텍스트를 반영한 시스템 프롬프트 생성 (동적 우선순위 적용)
@@ -172,6 +173,12 @@ DECISION EXAMPLES:
         # 워크스페이스 instructions 주입 (맨 앞에 추가)
         if workspace_instructions:
             prompt = f"WORKSPACE INSTRUCTIONS:\n{workspace_instructions}\n\n{prompt}"
+
+        # 전역 사용자 메모리 주입
+        if user_memory_context and user_memory_context.get("key_facts"):
+            facts = user_memory_context["key_facts"]
+            facts_text = "\n".join(f"  - {fact}" for fact in facts)
+            prompt = f"## User Profile (사용자 개인 특성)\n\n이 사용자에 대해 알려진 정보:\n{facts_text}\n\n{prompt}"
 
         print(f"[UserFilesWorker] Priority: has_files={has_files}, workspace={bool(workspace_uuid)}, workspace_has_files={workspace_has_files}, session={bool(session_id)}")
 

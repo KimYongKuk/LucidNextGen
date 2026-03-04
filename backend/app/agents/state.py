@@ -19,6 +19,8 @@ class Intent(str, Enum):
     PPT_GENERATION = "ppt_generation" # PPT 프레젠테이션 생성
     MAIL = "mail"                   # 메일 조회, 메일 검색
     APPROVAL = "approval"           # 전자결재 조회, 기안/결재/참조/부서문서
+    XLSX = "xlsx"                   # Excel 파일 생성, 수정, 조작
+    BOARD = "board"                 # 사내 게시판 검색, 공지사항 조회
     DIRECT = "direct"               # 일반 대화, 코딩, 번역 등
 
 
@@ -35,6 +37,8 @@ INTENT_TO_WORKER = {
     Intent.PPT_GENERATION: "PPTWorker",
     Intent.MAIL: "MailWorker",
     Intent.APPROVAL: "ApprovalWorker",
+    Intent.XLSX: "XlsxWorker",
+    Intent.BOARD: "BoardWorker",
     Intent.DIRECT: "DirectResponseWorker",
 }
 
@@ -72,4 +76,5 @@ class RequestContext(TypedDict):
     workspace_description: Optional[str]  # 워크스페이스 설명 (인텐트 분류용)
     workspace_file_names: List[str]  # 워크스페이스 업로드 파일명 목록 (인텐트 분류용)
     has_files: bool  # 세션에 사용자 파일이 업로드되었는지 여부
+    has_session_xlsx: bool  # 세션에 xlsx 파일이 업로드되었는지 여부 (인텐트 분류용)
     chat_mode: str

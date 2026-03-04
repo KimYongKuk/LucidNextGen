@@ -57,12 +57,12 @@ export function ChartDisplay({ chartData }: ChartDisplayProps) {
               <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.3} />
               <XAxis
                 dataKey={config.xKey}
-                tick={{ fill: '#9CA3AF', fontSize: 12 }}
-                axisLine={{ stroke: '#4B5563' }}
+                tick={{ fill: '#D1D5DB', fontSize: 12 }}
+                axisLine={{ stroke: '#6B7280' }}
               />
               <YAxis
-                tick={{ fill: '#9CA3AF', fontSize: 12 }}
-                axisLine={{ stroke: '#4B5563' }}
+                tick={{ fill: '#D1D5DB', fontSize: 12 }}
+                axisLine={{ stroke: '#6B7280' }}
               />
               <Tooltip
                 contentStyle={{
@@ -72,7 +72,7 @@ export function ChartDisplay({ chartData }: ChartDisplayProps) {
                   color: '#F3F4F6',
                 }}
               />
-              <Legend wrapperStyle={{ color: '#9CA3AF' }} />
+              <Legend wrapperStyle={{ color: '#D1D5DB' }} />
               {config.yKeys?.map((key, idx) => (
                 <Line
                   key={key}
@@ -99,18 +99,18 @@ export function ChartDisplay({ chartData }: ChartDisplayProps) {
               <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.3} />
               {config.horizontal ? (
                 <>
-                  <XAxis type="number" tick={{ fill: '#9CA3AF', fontSize: 12 }} />
+                  <XAxis type="number" tick={{ fill: '#D1D5DB', fontSize: 12 }} />
                   <YAxis
                     dataKey={config.xKey}
                     type="category"
-                    tick={{ fill: '#9CA3AF', fontSize: 12 }}
+                    tick={{ fill: '#D1D5DB', fontSize: 12 }}
                     width={80}
                   />
                 </>
               ) : (
                 <>
-                  <XAxis dataKey={config.xKey} tick={{ fill: '#9CA3AF', fontSize: 12 }} />
-                  <YAxis tick={{ fill: '#9CA3AF', fontSize: 12 }} />
+                  <XAxis dataKey={config.xKey} tick={{ fill: '#D1D5DB', fontSize: 12 }} />
+                  <YAxis tick={{ fill: '#D1D5DB', fontSize: 12 }} />
                 </>
               )}
               <Tooltip
@@ -166,7 +166,7 @@ export function ChartDisplay({ chartData }: ChartDisplayProps) {
                   color: '#F3F4F6',
                 }}
               />
-              <Legend wrapperStyle={{ color: '#9CA3AF' }} />
+              <Legend wrapperStyle={{ color: '#D1D5DB' }} />
             </PieChart>
           </ResponsiveContainer>
         );
@@ -176,9 +176,9 @@ export function ChartDisplay({ chartData }: ChartDisplayProps) {
           <ResponsiveContainer width="100%" height={350}>
             <ComposedChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.3} />
-              <XAxis dataKey={config.xKey} tick={{ fill: '#9CA3AF', fontSize: 12 }} />
-              <YAxis yAxisId="left" tick={{ fill: '#9CA3AF', fontSize: 12 }} />
-              <YAxis yAxisId="right" orientation="right" tick={{ fill: '#9CA3AF', fontSize: 12 }} />
+              <XAxis dataKey={config.xKey} tick={{ fill: '#D1D5DB', fontSize: 12 }} />
+              <YAxis yAxisId="left" tick={{ fill: '#D1D5DB', fontSize: 12 }} />
+              <YAxis yAxisId="right" orientation="right" tick={{ fill: '#D1D5DB', fontSize: 12 }} />
               <Tooltip
                 contentStyle={{
                   backgroundColor: '#1F2937',
@@ -187,7 +187,7 @@ export function ChartDisplay({ chartData }: ChartDisplayProps) {
                   color: '#F3F4F6',
                 }}
               />
-              <Legend wrapperStyle={{ color: '#9CA3AF' }} />
+              <Legend wrapperStyle={{ color: '#D1D5DB' }} />
               {config.barKeys?.map((key, idx) => (
                 <Bar
                   key={key}
@@ -217,8 +217,8 @@ export function ChartDisplay({ chartData }: ChartDisplayProps) {
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.3} />
-              <XAxis dataKey={config.xKey} tick={{ fill: '#9CA3AF', fontSize: 12 }} />
-              <YAxis tick={{ fill: '#9CA3AF', fontSize: 12 }} />
+              <XAxis dataKey={config.xKey} tick={{ fill: '#D1D5DB', fontSize: 12 }} />
+              <YAxis tick={{ fill: '#D1D5DB', fontSize: 12 }} />
               <Tooltip
                 contentStyle={{
                   backgroundColor: '#1F2937',
@@ -227,7 +227,7 @@ export function ChartDisplay({ chartData }: ChartDisplayProps) {
                   color: '#F3F4F6',
                 }}
               />
-              <Legend wrapperStyle={{ color: '#9CA3AF' }} />
+              <Legend wrapperStyle={{ color: '#D1D5DB' }} />
               {config.stackKeys?.map((key, idx) => (
                 <Bar
                   key={key}
@@ -245,8 +245,8 @@ export function ChartDisplay({ chartData }: ChartDisplayProps) {
           <ResponsiveContainer width="100%" height={300}>
             <AreaChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.3} />
-              <XAxis dataKey={config.xKey} tick={{ fill: '#9CA3AF', fontSize: 12 }} />
-              <YAxis tick={{ fill: '#9CA3AF', fontSize: 12 }} />
+              <XAxis dataKey={config.xKey} tick={{ fill: '#D1D5DB', fontSize: 12 }} />
+              <YAxis tick={{ fill: '#D1D5DB', fontSize: 12 }} />
               <Tooltip
                 contentStyle={{
                   backgroundColor: '#1F2937',
@@ -255,7 +255,7 @@ export function ChartDisplay({ chartData }: ChartDisplayProps) {
                   color: '#F3F4F6',
                 }}
               />
-              <Legend wrapperStyle={{ color: '#9CA3AF' }} />
+              <Legend wrapperStyle={{ color: '#D1D5DB' }} />
               {config.areaKeys?.map((key, idx) => (
                 <Area
                   key={key}
@@ -276,7 +276,7 @@ export function ChartDisplay({ chartData }: ChartDisplayProps) {
   }, [chart_type, data, config]);
 
   return (
-    <div className="my-4 rounded-lg border border-gray-700 bg-gray-800/50 p-4">
+    <div className="my-4 rounded-lg border border-gray-700 bg-gray-800 p-4">
       <h3 className="mb-4 text-center text-lg font-semibold text-gray-200">{title}</h3>
       {renderChart}
     </div>

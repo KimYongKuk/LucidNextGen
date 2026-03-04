@@ -175,7 +175,8 @@
   }
 
   .prose table {
-    @apply w-full my-4 border-collapse;
+    @apply w-full border-collapse;
+    margin: 0;
   }
 
   .prose th {
@@ -192,5 +193,12 @@
 
   .prose a {
     @apply text-blue-600 dark:text-blue-400 underline hover:text-blue-800 dark:hover:text-blue-300;
+  }
+
+  /* 대시보드 텍스트 렌더링 개선 — 어두운 배경에서 본문 텍스트 선명도 향상 */
+  .report-text-sharp {
+    -webkit-font-smoothing: auto;
+    -moz-osx-font-smoothing: auto;
+    text-rendering: optimizeLegibility;
   }
 }

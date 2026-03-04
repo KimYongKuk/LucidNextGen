@@ -6,8 +6,27 @@ import time
 import re
 from typing import Dict, AsyncIterator, List, Optional
 
+from pathlib import Path
+
 from app.agents import get_orchestrator
 from app.agents.state import RequestContext
+
+# xlsx 업로드 디렉토리 (세션별 xlsx 파일 존재 여부 확인용)
+_XLSX_UPLOAD_DIR = Path(__file__).parent.parent.parent / "data" / "xlsx_upload"
+
+
+def _has_session_xlsx(session_id: Optional[str]) -> bool:
+    """세션에 xlsx 파일이 업로드되었는지 확인 (인텐트 분류용)"""
+    if not session_id:
+        return False
+    session_dir = _XLSX_UPLOAD_DIR / session_id
+    if not session_dir.exists():
+        return False
+    return any(
+        f.suffix.lower() in ('.xlsx', '.xls')
+        for f in session_dir.iterdir()
+        if f.is_file()
+    )
 
 
 # ============================================================================
@@ -35,6 +54,8 @@ HEARTBEAT_TOOLS = [
     "create_document_pdf",
     "create_table_spec_pdf",
     "create_presentation",
+    "create_workbook",
+    "write_data_to_excel",
     "create_line_chart",
     "create_bar_chart",
     "create_pie_chart",
@@ -142,9 +163,29 @@ TOOL_STATUS_MESSAGES = {
     "search_mail": "🔍 메일을 검색하고 있습니다. 조금만 기다려주세요!",
     "get_mail_folders": "📁 메일함 목록을 조회하고 있습니다. 조금만 기다려주세요!",
     "get_unread_mail": "📩 안 읽은 메일을 조회하고 있습니다. 조금만 기다려주세요!",
+    "get_mail_detail": "📧 메일 전체 본문을 조회하고 있습니다. 조금만 기다려주세요!",
     # 전자결재 조회 도구
     "get_user_approval_info": "👤 사용자 결재 정보를 확인하고 있습니다. 조금만 기다려주세요!",
     "execute_approval_query": "📋 전자결재 문서를 조회하고 있습니다. 조금만 기다려주세요!",
+    # Excel(XLSX) 도구
+    "create_workbook": "📊 엑셀 파일을 생성하고 있습니다.",
+    "write_data_to_excel": "📊 데이터를 입력하고 있습니다.",
+    "read_data_from_excel": "📊 엑셀 데이터를 읽고 있습니다.",
+    "get_workbook_metadata": "📊 엑셀 파일 구조를 확인하고 있습니다.",
+    "format_range": "📊 서식을 적용하고 있습니다.",
+    "apply_formula": "📊 수식을 적용하고 있습니다.",
+    "create_chart": "📊 엑셀 차트를 생성하고 있습니다.",
+    "create_pivot_table": "📊 피벗테이블을 생성하고 있습니다.",
+    "create_table": "📊 엑셀 테이블을 생성하고 있습니다.",
+}
+
+# 다단계 도구 — 여러 번 연속 호출되는 도구 (매 호출마다 "취합 완료" 표시 억제)
+MULTI_STEP_TOOLS = {
+    "create_workbook", "create_worksheet", "write_data_to_excel",
+    "format_range", "apply_formula", "merge_cells", "unmerge_cells",
+    "insert_rows", "insert_columns", "delete_sheet_rows", "delete_sheet_columns",
+    "copy_range", "delete_range", "rename_worksheet", "copy_worksheet",
+    "delete_worksheet", "create_table", "create_chart", "create_pivot_table",
 }
 
 
@@ -181,6 +222,12 @@ async def stream_a2a_response(
     last_content_time = None  # 마지막 콘텐츠 청크 시간 (지연 분석용)
     MAX_SAME_TOOL_CALLS = 10  # 같은 도구 최대 호출 횟수
 
+    # 리포트용 수집 변수
+    classified_intent = None
+    classified_worker = None
+    is_error = False
+    collected_follow_ups = None  # 팔로우업 제안 (LLM 응답에서 파싱)
+
     # 통합 이벤트 큐 (orchestrator + heartbeat 이벤트 병합)
     event_queue: asyncio.Queue = asyncio.Queue()
     heartbeat_stop_event = asyncio.Event()
@@ -201,6 +248,7 @@ async def stream_a2a_response(
         "workspace_description": workspace_context.get("description") if workspace_context else None,
         "workspace_file_names": workspace_context.get("file_names", []) if workspace_context else [],
         "has_files": has_files,
+        "has_session_xlsx": _has_session_xlsx(session_id),
         "chat_mode": chat_mode,
     }
 
@@ -239,6 +287,8 @@ async def stream_a2a_response(
 
             # A2A 전용 이벤트 처리
             if event_type == "intent_classified":
+                classified_intent = event.get("intent")
+                classified_worker = event.get("worker")
                 yield f"data: {json.dumps(event)}\n\n"
                 continue
 
@@ -271,6 +321,10 @@ async def stream_a2a_response(
                     tool_calls_made.append(tool_name)
                     status_msg = TOOL_STATUS_MESSAGES.get(tool_name, f"🔧 {tool_name} 실행 중...")
                     yield f"data: {json.dumps({'type': 'tool_status', 'tool': tool_name, 'message': status_msg})}\n\n"
+                elif tool_name in MULTI_STEP_TOOLS:
+                    # 다단계 도구: 반복 호출 시 진행 상태 표시
+                    step = tool_call_counts[tool_name]
+                    yield f"data: {json.dumps({'type': 'tool_status', 'tool': tool_name, 'message': f'📊 엑셀 작업 진행 중... (단계 {step})'})}\n\n"
 
                 # HEARTBEAT_TOOLS에 해당하면 하트비트 시작 (도구 실행 중 사용자 피드백)
                 if tool_name in HEARTBEAT_TOOLS and not heartbeat_active:
@@ -298,14 +352,17 @@ async def stream_a2a_response(
                 except Exception:
                     print(f"[TOOL_OUTPUT] {tool_name}: (cannot read output)")
 
-                # HEARTBEAT_TOOLS 도구 완료 시 하트비트 중지
-                if tool_name in HEARTBEAT_TOOLS and heartbeat_active:
+                # 도구 완료 시 하트비트 중지 (모든 도구)
+                # tool_use_detected에서 시작된 하트비트가 non-HEARTBEAT_TOOLS에서도 정상 중지
+                # HEARTBEAT_TOOLS는 on_tool_start에서 다시 시작하므로 영향 없음
+                if heartbeat_active:
                     heartbeat_stop_event.set()
                     heartbeat_active = False
                     print(f"[HEARTBEAT] Stopped (tool '{tool_name}' completed)")
 
-                # 응답 생성 중 상태 메시지
-                yield f"data: {json.dumps({'type': 'tool_status', 'tool': tool_name, 'message': '✨취합 완료! 응답 생성 중... 잠시만 기다려주세요.', 'status': 'generating'})}\n\n"
+                # 응답 생성 중 상태 메시지 (다단계 도구는 중간 단계이므로 억제)
+                if tool_name not in MULTI_STEP_TOOLS:
+                    yield f"data: {json.dumps({'type': 'tool_status', 'tool': tool_name, 'message': '✨취합 완료! 응답 생성 중... 잠시만 기다려주세요.', 'status': 'generating'})}\n\n"
 
                 # Corp 문서 출처 수집 (검색된 모든 문서 + 청크 텍스트)
                 if tool_name in CORP_RAG_TOOLS:
@@ -448,12 +505,19 @@ async def stream_a2a_response(
                             print(f"[HEARTBEAT] Started heartbeat task")
 
                     if content:
+                        # 텍스트 콘텐츠 스트리밍 시작 시 하트비트 중지 (안전 장치)
+                        # on_tool_end에서 중지 못한 경우에도 최종 텍스트 응답 시 확실히 중지
+                        if heartbeat_active:
+                            heartbeat_stop_event.set()
+                            heartbeat_active = False
+                            print(f"[HEARTBEAT] Stopped (content streaming started)")
+
                         # <search> 태그 제거 (모델이 도구 대신 텍스트로 출력하는 경우 방지)
                         content = re.sub(r'<search>.*?</search>\s*', '', content)
                         if not content:
                             continue
 
-                        # Note: Heartbeat는 on_tool_end에서만 중지됨
+                        # Note: Heartbeat는 on_tool_end(모든 도구) 또는 content 수신 시 중지됨
                         # tool_use arguments 생성 중에는 content가 없으므로 하트비트 유지
 
                         if first_chunk_time is None:
@@ -528,10 +592,29 @@ async def stream_a2a_response(
                 source_map[key]["similarity"] = item["similarity"]
         yield f"data: {json.dumps({'type': 'corp_sources', 'sources': list(source_map.values())}, ensure_ascii=False)}\n\n"
 
+    # Follow-up suggestions 파싱 (LLM이 판단하여 마커 포함/생략)
+    follow_up_match = re.search(r'<!--FOLLOW_UP:\[(.+?)\]-->', collected_response)
+    if follow_up_match:
+        try:
+            collected_follow_ups = json.loads('[' + follow_up_match.group(1) + ']')
+            if (isinstance(collected_follow_ups, list)
+                    and len(collected_follow_ups) == 3
+                    and all(isinstance(s, str) for s in collected_follow_ups)):
+                yield f"data: {json.dumps({'type': 'follow_up_suggestions', 'suggestions': collected_follow_ups}, ensure_ascii=False)}\n\n"
+                print(f"[FOLLOW_UP] Sending {len(collected_follow_ups)} suggestions")
+            else:
+                collected_follow_ups = None
+        except (json.JSONDecodeError, Exception) as e:
+            print(f"[FOLLOW_UP] Parsing failed: {e}")
+            collected_follow_ups = None
+
+    # DB 저장용 텍스트에서 팔로우업 마커 제거 (항상 실행)
+    collected_response = re.sub(r'\s*<!--FOLLOW_UP:.*?-->\s*$', '', collected_response).rstrip()
+
     total_time = int((time.time() - start_time) * 1000)
     print(f"[CHAT_STREAM] A2A Completed: {chunk_count} chunks, {total_time}ms")
     yield f"data: {json.dumps({'type': 'timing', 'step': 'complete', 'timing': {'chunk_count': chunk_count, 'total_ms': total_time}, 'chat_mode': chat_mode})}\n\n"
     yield f"data: {json.dumps({'complete': True, 'chat_mode': chat_mode})}\n\n"
 
     # 수집된 데이터 반환 (로그 저장용)
-    yield f"data: {json.dumps({'type': '_internal_collected', 'response': collected_response, 'sources': collected_sources, 'youtube_summary': collected_youtube_summary, 'corp_sources': all_searched_corp_sources, 'chart_data': collected_chart_data})}\n\n"
+    yield f"data: {json.dumps({'type': '_internal_collected', 'response': collected_response, 'sources': collected_sources, 'youtube_summary': collected_youtube_summary, 'corp_sources': all_searched_corp_sources, 'chart_data': collected_chart_data, 'intent': classified_intent, 'worker_name': classified_worker, 'response_time_ms': int((time.time() - start_time) * 1000), 'is_error': is_error, 'tools_used': tool_calls_made})}\n\n"

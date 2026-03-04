@@ -70,6 +70,7 @@ backend/tests/
 *.tmp
 *.temp
 backend/temp_uploads/
+backend/temp_*.xlsx
 
 # Python 가상환경
 backend/venv/
@@ -84,6 +85,9 @@ backend/data/chromadb/
 backend/data/pdf_output/
 backend/data/chart_output/
 backend/data/ppt_output/
+backend/data/report_output/
+backend/data/xlsx_output/
+backend/data/xlsx_upload/
 
 # 이메일 백업 참조
 backend/email_backup_reference/
@@ -113,3 +117,18 @@ KILL_ALL_PYTHON.bat
 *.backup_*
 backend/response.txt
 backend/test_request.json
+
+# 로컬 테스트 스크립트
+backend/test_*.py
+backend/find_post_table.py
+
+# 프로토타입/별도 프로젝트
+admin_report/
+
+# 로컬 작업 메모
+MAIL_HANDSOFF.md
+SERVICE_REPORT_TODO.md
+검토중인 항목.md
+게시판_테이블_스키마_가이드.md
+전자결재_본문컨텐츠_추가.md
+전자결재_테이블_스키마_가이드.md

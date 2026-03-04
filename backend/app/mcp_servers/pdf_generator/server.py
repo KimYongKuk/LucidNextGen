@@ -166,8 +166,95 @@ def strip_markdown_formatting(text: str) -> str:
     return text
 
 
+def inline_markdown_for_pdf(text: str) -> str:
+    """인라인 마크다운을 fpdf2 multi_cell(markdown=True)용으로 변환
+
+    fpdf2 markdown mode 지원:
+    - **bold** → 굵게
+    - *italic* → 기울임
+    - __underlined__ → 밑줄
+
+    지원하지 않는 형식은 텍스트만 유지:
+    - `code` → code
+    - [link](url) → link
+    """
+    # `code` → code (backticks 제거)
+    text = re.sub(r'`(.+?)`', r'\1', text)
+    # [link](url) → link (텍스트만 유지)
+    text = re.sub(r'\[(.+?)\]\(.+?\)', r'\1', text)
+    return text
+
+
+def _is_list_line(line: str) -> bool:
+    """줄이 리스트 항목인지 확인 (bullet 또는 numbered)"""
+    stripped = line.strip()
+    return bool(re.match(r'^[-*+]\s+', stripped) or re.match(r'^\d+\.\s+', stripped))
+
+
+def _has_consecutive_numbered(lines: List[str], idx: int) -> bool:
+    """idx 위치에서 시작하여 2개 이상 연속된 번호 리스트가 있는지 확인"""
+    for j in range(idx + 1, len(lines)):
+        stripped = lines[j].strip()
+        if not stripped:
+            continue  # 빈 줄 건너뜀
+        return bool(re.match(r'^\d+\.\s+', stripped))
+    return False
+
+
+def _collect_list_items(lines: List[str], start_idx: int) -> tuple:
+    """연속된 리스트 항목 수집. (items, next_index) 반환."""
+    items = []
+    i = start_idx
+
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        if not stripped:
+            # 빈 줄: 다음에 리스트가 계속되는지 확인
+            j = i + 1
+            while j < len(lines) and not lines[j].strip():
+                j += 1
+            if j < len(lines) and _is_list_line(lines[j]):
+                i = j
+                continue
+            break
+
+        # 불릿 항목 (-, *, +)
+        ul_match = re.match(r'^(\s*)[-*+]\s+(.+)$', line)
+        if ul_match:
+            indent = len(ul_match.group(1))
+            depth = indent // 2
+            items.append({'text': ul_match.group(2).strip(), 'depth': depth, 'ordered': False})
+            i += 1
+            continue
+
+        # 번호 항목 (1. 2. etc)
+        ol_match = re.match(r'^(\s*)\d+\.\s+(.+)$', line)
+        if ol_match:
+            indent = len(ol_match.group(1))
+            depth = indent // 2
+            items.append({'text': ol_match.group(2).strip(), 'depth': depth, 'ordered': True})
+            i += 1
+            continue
+
+        break  # 리스트가 아닌 줄
+
+    return items, i
+
+
 def parse_markdown_content(content: str) -> List[Dict[str, Any]]:
-    """마크다운 컨텐츠를 구조화된 요소로 파싱"""
+    """마크다운 컨텐츠를 구조화된 요소로 파싱
+
+    지원 요소:
+    - 제목 (#, ##, ###, ####)
+    - 불릿 리스트 (-, *, +) 및 번호 리스트 (1. 2. 3.)
+    - 중첩 리스트 (들여쓰기 기반)
+    - **굵게**, *기울임* 인라인 서식 (paragraph/list에서)
+    - 블록인용 (>)
+    - 테이블, 코드블록, 이미지, 구분선
+    - 섹션 번호 (1-1. 2-3. 등) → 자동 제목 스타일
+    """
     elements = []
     lines = content.split('\n')
     i = 0
@@ -195,21 +282,6 @@ def parse_markdown_content(content: str) -> List[Dict[str, Any]]:
         if stripped.startswith('#'):
             level = len(stripped) - len(stripped.lstrip('#'))
             text = strip_markdown_formatting(stripped.lstrip('#').strip())
-            elements.append({'type': 'heading', 'level': level, 'text': text})
-            i += 1
-            continue
-
-        # 숫자 섹션 제목 (1. 2. 2-1. 등)
-        section_match = re.match(r'^(\d+(?:-\d+)*)\.\s+(.+)$', stripped)
-        if section_match:
-            section_num = section_match.group(1)
-            text = strip_markdown_formatting(stripped)
-            if '-' not in section_num:
-                level = 2
-            elif section_num.count('-') == 1:
-                level = 3
-            else:
-                level = 4
             elements.append({'type': 'heading', 'level': level, 'text': text})
             i += 1
             continue
@@ -242,19 +314,85 @@ def parse_markdown_content(content: str) -> List[Dict[str, Any]]:
             i += 1
             continue
 
-        # 일반 텍스트 (여러 줄 수집)
+        # 블록인용 (>)
+        if stripped.startswith('>'):
+            quote_lines = []
+            while i < len(lines):
+                s = lines[i].strip()
+                if s.startswith('>'):
+                    # > 프리픽스 제거
+                    text = re.sub(r'^>\s?', '', s)
+                    quote_lines.append(text)
+                    i += 1
+                elif not s:
+                    # 빈 줄: 다음 줄이 인용이면 계속
+                    if i + 1 < len(lines) and lines[i + 1].strip().startswith('>'):
+                        quote_lines.append('')
+                        i += 1
+                    else:
+                        break
+                else:
+                    break
+            combined = '\n'.join(quote_lines)
+            elements.append({'type': 'blockquote', 'text': combined})
+            continue
+
+        # 불릿 리스트 (-, *, +)
+        bullet_match = re.match(r'^(\s*)[-*+]\s+', line)
+        if bullet_match:
+            items, i = _collect_list_items(lines, i)
+            if items:
+                elements.append({'type': 'list', 'ordered': False, 'items': items})
+            continue
+
+        # 서브 섹션 제목 (1-1. 2-3-1. 등) — 항상 제목으로 처리
+        sub_section_match = re.match(r'^(\d+-\d+(?:-\d+)*)\.\s+(.+)$', stripped)
+        if sub_section_match:
+            section_num = sub_section_match.group(1)
+            text = strip_markdown_formatting(stripped)
+            if section_num.count('-') == 1:
+                level = 3
+            else:
+                level = 4
+            elements.append({'type': 'heading', 'level': level, 'text': text})
+            i += 1
+            continue
+
+        # 번호 패턴 (1. 2. 등) — 연속이면 리스트, 단독이면 섹션 제목
+        num_match = re.match(r'^(\d+)\.\s+(.+)$', stripped)
+        if num_match:
+            if _has_consecutive_numbered(lines, i):
+                # 연속 번호 → 번호 리스트
+                items, i = _collect_list_items(lines, i)
+                if items:
+                    elements.append({'type': 'list', 'ordered': True, 'items': items})
+                continue
+            else:
+                # 단독 번호 → 섹션 제목 (기존 동작 유지)
+                text = strip_markdown_formatting(stripped)
+                elements.append({'type': 'heading', 'level': 2, 'text': text})
+                i += 1
+                continue
+
+        # 일반 텍스트 (여러 줄 수집, 인라인 서식 보존)
         text_lines = [stripped]
         i += 1
         while i < len(lines):
             next_line = lines[i].strip()
-            if not next_line or next_line.startswith('#') or next_line.startswith('```') or \
-               '|' in next_line or next_line in ['---', '***', '___'] or \
-               re.match(r'^\d+(?:-\d+)*\.\s+', next_line):
+            if (not next_line or
+                next_line.startswith('#') or
+                next_line.startswith('```') or
+                next_line.startswith('>') or
+                next_line in ['---', '***', '___'] or
+                re.match(r'^[-*+]\s+', next_line) or
+                re.match(r'^\d+(?:-\d+)*\.\s+', next_line) or
+                re.match(r'^!\[', next_line) or
+                ('|' in next_line and i + 1 < len(lines) and '---' in lines[i + 1])):
                 break
             text_lines.append(next_line)
             i += 1
-        # 마크다운 포맷팅 제거
-        combined_text = strip_markdown_formatting(' '.join(text_lines))
+        # 인라인 서식 보존 (bold, italic은 유지, backtick/link만 변환)
+        combined_text = inline_markdown_for_pdf(' '.join(text_lines))
         elements.append({'type': 'paragraph', 'text': combined_text})
 
     return elements
@@ -358,8 +496,14 @@ def render_pdf(elements: List[Dict[str, Any]], title: str, style: str = "technic
         elif elem_type == 'paragraph':
             pdf.set_font(pdf.default_font, "", 10)
             pdf.set_text_color(*pdf.colors['text'])
-            pdf.multi_cell(0, 6, elem['text'])
+            pdf.multi_cell(0, 6, elem['text'], markdown=True)
             pdf.ln(3)
+
+        elif elem_type == 'list':
+            render_list(pdf, elem['items'], elem['ordered'])
+
+        elif elem_type == 'blockquote':
+            render_blockquote(pdf, elem['text'])
 
         elif elem_type == 'table':
             table = parse_table(elem['lines'])
@@ -540,6 +684,100 @@ def render_code_block(pdf: KoreanPDF, code: str, lang: str = ""):
     pdf.set_font(pdf.default_font, "", 10)
 
 
+def render_list(pdf: KoreanPDF, items: List[Dict[str, Any]], ordered: bool):
+    """리스트 렌더링 (불릿/번호, 중첩 지원)"""
+    if pdf.get_y() > 260:
+        pdf.add_page()
+
+    pdf.set_font(pdf.default_font, "", 10)
+    pdf.set_text_color(*pdf.colors['text'])
+
+    # depth별 순번 카운터 (번호 리스트용)
+    counters: Dict[int, int] = {}
+
+    for item in items:
+        depth = item.get('depth', 0)
+        is_ordered = item.get('ordered', ordered)
+        text = inline_markdown_for_pdf(item['text'])
+
+        # 들여쓰기 계산
+        base_indent = 20
+        indent = base_indent + depth * 7
+
+        # 프리픽스 생성
+        if is_ordered:
+            counters.setdefault(depth, 0)
+            counters[depth] += 1
+            # 하위 depth 카운터 리셋
+            for d in list(counters.keys()):
+                if d > depth:
+                    del counters[d]
+            prefix = f"{counters[depth]}.  "
+        else:
+            bullets = ['\u2022', '-', '\u00B7']  # •, -, ·
+            bullet_char = bullets[min(depth, len(bullets) - 1)]
+            prefix = f"{bullet_char}  "
+
+        # 프리픽스 렌더
+        pdf.set_font(pdf.default_font, "", 10)
+        pdf.set_x(indent)
+        prefix_width = pdf.get_string_width(prefix) + 1
+        pdf.cell(prefix_width, 6, prefix)
+
+        # 텍스트 렌더 (markdown=True로 **bold**, *italic* 지원)
+        text_x = indent + prefix_width
+        old_margin = pdf.l_margin
+        pdf.set_left_margin(text_x)
+        pdf.multi_cell(0, 6, text, markdown=True)
+        pdf.set_left_margin(old_margin)
+
+        # 페이지 넘침 체크
+        if pdf.get_y() > 270:
+            pdf.add_page()
+            pdf.set_font(pdf.default_font, "", 10)
+            pdf.set_text_color(*pdf.colors['text'])
+
+    pdf.ln(2)
+    # 폰트 상태 리셋
+    pdf.set_font(pdf.default_font, "", 10)
+
+
+def render_blockquote(pdf: KoreanPDF, text: str):
+    """블록인용 렌더링 (왼쪽 세로선 + 배경)"""
+    if pdf.get_y() > 250:
+        pdf.add_page()
+
+    start_y = pdf.get_y()
+
+    # 배경색 + 들여쓰기
+    quote_indent = 22
+    pdf.set_fill_color(245, 247, 250)
+    pdf.set_font(pdf.default_font, "", 10)
+    pdf.set_text_color(85, 85, 85)
+
+    old_margin = pdf.l_margin
+    pdf.set_left_margin(quote_indent)
+    pdf.set_x(quote_indent)
+
+    processed_text = inline_markdown_for_pdf(text)
+    pdf.multi_cell(170, 6, processed_text, markdown=True, fill=True)
+
+    pdf.set_left_margin(old_margin)
+
+    end_y = pdf.get_y()
+
+    # 왼쪽 세로선
+    pdf.set_draw_color(*pdf.colors['h2'])
+    pdf.set_line_width(1.0)
+    pdf.line(19, start_y, 19, end_y)
+
+    # 리셋
+    pdf.set_text_color(*pdf.colors['text'])
+    pdf.set_draw_color(0, 0, 0)
+    pdf.set_line_width(0.2)
+    pdf.ln(3)
+
+
 def find_chart_image(img_path: str) -> Optional[Path]:
     """차트 이미지 파일 찾기 - 여러 경로 시도"""
     img_file = Path(img_path)
@@ -640,7 +878,10 @@ async def list_tools():
 
 기능:
 - 마크다운 문법 지원 (제목 #, 표, 코드블록 ```, 구분선 ---)
-- 섹션 번호 자동 인식 (1. 2-1. 형태 → 자동 제목 스타일)
+- **굵게**, *기울임* 인라인 서식 지원
+- 불릿 리스트 (-, *, +) 및 번호 리스트 (1. 2. 3.) 지원 (중첩 가능)
+- 블록인용 (>) 지원
+- 섹션 번호 자동 인식 (1-1. 2-3. 형태 → 자동 제목 스타일)
 - 한글 완벽 지원 (맑은 고딕)
 - 테이블 자동 스타일링 (헤더 색상, 줄무늬)
 - 코드블록 구문 하이라이팅 스타일

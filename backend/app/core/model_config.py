@@ -12,20 +12,40 @@ class ModelConfig:
     max_tokens: int = 8192
 
 
+def _derive_display_name(model_id: str) -> str:
+    """모델 ID에서 display name 자동 추출"""
+    # 프리픽스 제거 (us., global., apac., anthropic.)
+    name = model_id
+    for prefix in ("us.anthropic.", "global.anthropic.", "apac.anthropic.", "anthropic."):
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+            break
+    # 버전 접미사 제거 (-v1:0 등)
+    import re
+    name = re.sub(r'-v\d+:\d+$', '', name)
+    # 날짜 제거 (-20250929 등)
+    name = re.sub(r'-\d{8}', '', name)
+    # claude- 제거, 하이픈→공백, 타이틀 케이스
+    name = name.replace("claude-", "Claude ")
+    return name
+
+
 def get_model_chain() -> List[ModelConfig]:
     """
     모델 체인 반환 (Primary -> Fallback 순서)
     환경변수에서 모델 ID를 읽어옴
     """
+    primary_id = os.getenv("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")
+    fallback_id = os.getenv("BEDROCK_FALLBACK_MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1:0")
     return [
         ModelConfig(
-            model_id=os.getenv("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-5-20250929-v1:0"),
-            display_name="Claude Sonnet 4.5",
+            model_id=primary_id,
+            display_name=_derive_display_name(primary_id),
             max_tokens=8192
         ),
         ModelConfig(
-            model_id=os.getenv("BEDROCK_FALLBACK_MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1:0"),
-            display_name="Claude Haiku 4.5",
+            model_id=fallback_id,
+            display_name=_derive_display_name(fallback_id),
             max_tokens=4096
         ),
     ]
@@ -69,20 +89,16 @@ def get_worker_config(use_sonnet: bool = False) -> ModelConfig:
         use_sonnet: True면 복잡한 추론용 Sonnet, False면 기본 Haiku
     """
     if use_sonnet:
+        mid = os.getenv("WORKER_SONNET_MODEL_ID", "global.anthropic.claude-sonnet-4-5-20250929-v1:0")
         return ModelConfig(
-            model_id=os.getenv(
-                "WORKER_SONNET_MODEL_ID",
-                "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
-            ),
-            display_name="Worker (Sonnet Global)",
+            model_id=mid,
+            display_name=f"Worker ({_derive_display_name(mid)})",
             max_tokens=8192
         )
+    mid = os.getenv("WORKER_DEFAULT_MODEL_ID", "global.anthropic.claude-haiku-4-5-20251001-v1:0")
     return ModelConfig(
-        model_id=os.getenv(
-            "WORKER_DEFAULT_MODEL_ID",
-            "global.anthropic.claude-haiku-4-5-20251001-v1:0"
-        ),
-        display_name="Worker (Haiku Global)",
+        model_id=mid,
+        display_name=f"Worker ({_derive_display_name(mid)})",
         max_tokens=4096
     )
 

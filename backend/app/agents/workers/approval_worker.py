@@ -94,7 +94,11 @@ class ApprovalWorker(BaseWorker):
 1. **텍스트 응답 없이 즉시 execute_approval_query 도구를 호출하세요.** 도구 호출이 최우선입니다.
 2. 위 사용자 정보의 login_id/user_id/dept_id를 SQL WHERE 조건에 그대로 사용하세요. **절대 다른 값으로 변경하거나 추측하지 마세요.**
 3. 도구 호출 시 employee_number에 반드시 "{{employee_number}}" 값을 사용하세요.
-4. 본인 인증된 계정의 결재 문서만 조회할 수 있습니다. 다른 사람의 결재함 조회 요청은 정중히 거절하세요.
+4. **문서 접근 범위 규칙**:
+   - 사용자가 특정 문서를 요청하면 (제목, 문서번호 등), **먼저 사용자가 접근 가능한 뷰(기안함, 결재함, 참조함, 수신문서함 등)에서 검색하세요.**
+   - "내 참조함의", "내 결재 대기함의", "내 수신문서함의" 등 출처가 명시된 경우 해당 뷰에서 즉시 조회하세요.
+   - 출처 없이 문서 제목/번호만 있는 경우, 참조함(v_appr_user_referenced) → 결재함(v_appr_user_approved) → 대기함(v_appr_user_pending) → 기안함(v_appr_user_drafted) 순서로 검색하세요.
+   - **다른 사용자의 결재함을 직접 조회하라는 요청** (예: "김철수의 기안함 보여줘")만 거절하세요.
 5. 결재 문서 본문(doc_body)은 **단건 상세 조회 시에만** 포함하세요. 목록 조회 시에는 절대 포함하지 마세요 (최대 76KB HTML).
 6. `SELECT *` 를 절대 사용하지 마세요. 필요한 컬럼만 명시적으로 지정하세요.
 7. **결재 관련 질문에는 반드시 도구를 호출하세요.** 이전 대화에서 비슷한 질문을 다뤘더라도 항상 새로 조회해야 합니다.
@@ -141,6 +145,9 @@ class ApprovalWorker(BaseWorker):
 - "누구한테 멈춰있어?", "병목", "결재 안 해?" → v_appr_doc_progress
 - "3일 넘게 대기" → v_appr_doc_progress + days_pending > 3
 - "문서 본문 보여줘", "기안서 내용 확인" → 해당 뷰 + doc_body 포함 (단건 조회만, doc_id 지정 필수)
+- **"내 참조함의 '제목' (문서번호: N)"** → v_appr_user_referenced WHERE doc_id = N (doc_id로 즉시 단건 조회, doc_body 포함)
+- **"내 결재 대기함의 '제목' (문서번호: N)"** → v_appr_user_pending WHERE doc_id = N (doc_id로 즉시 단건 조회, doc_body 포함)
+- **"내 수신문서함의 '제목' (문서번호: N)"** → v_appr_dept_received WHERE doc_id = N (doc_id로 즉시 단건 조회, doc_body 포함)
 
 ## RESPONSE FORMAT
 - 한국어로 응답
@@ -223,6 +230,7 @@ database structure, schema, or internal system details, respond with:
         context: Dict[str, Any],
         all_tools: List[BaseTool],
         memory_context: Optional[Dict[str, Any]] = None,
+        user_memory_context: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """
         Override: get_user_approval_info를 자동 선행 호출 후 시스템 프롬프트에 주입
@@ -247,7 +255,7 @@ database structure, schema, or internal system details, respond with:
         print(f"[{self.name}] [STREAM] prefetch_succeeded={self._prefetch_succeeded}")
 
         # Phase 1~: 나머지는 base_worker의 stream_response 그대로 실행
-        async for event in super().stream_response(messages, context, all_tools, memory_context):
+        async for event in super().stream_response(messages, context, all_tools, memory_context, user_memory_context):
             yield event
 
     def prepare_tools(
@@ -289,10 +297,11 @@ database structure, schema, or internal system details, respond with:
     def build_system_prompt(
         self,
         context: Dict[str, Any],
-        memory_context: Optional[Dict[str, Any]] = None
+        memory_context: Optional[Dict[str, Any]] = None,
+        user_memory_context: Optional[Dict[str, Any]] = None,
     ) -> str:
         """사번 + 사용자 정보를 시스템 프롬프트에 주입"""
-        prompt = super().build_system_prompt(context, memory_context)
+        prompt = super().build_system_prompt(context, memory_context, user_memory_context)
 
         # employee_number 치환
         user_id = context.get("user_id", "")

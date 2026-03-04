@@ -184,7 +184,7 @@ LFChatbot_NextJS_FastAPI/
 | works_acct | search_acct_voc, execute_acct_voc_query | 회계 지원 사례 |
 | pdf_generator | create_document_pdf, create_table_spec_pdf | PDF 생성 |
 | chart_generator | create_line/bar/pie/multi_chart | 차트 생성 |
-| mail_server | get_inbox/sent/unread_mail, search_mail, get_mail_folders | 메일 조회 |
+| mail_server | get_inbox/sent/unread_mail, search_mail, get_mail_folders, get_mail_detail | 메일 조회/요약/답장 |
 
 ### Worker별 담당 도구
 
@@ -199,7 +199,7 @@ LFChatbot_NextJS_FastAPI/
 | URLFetchWorker | fetch | Sonnet |
 | ITSupportWorker | search_it_voc, execute_it_voc_query | Sonnet |
 | AcctSupportWorker | search_acct_voc, execute_acct_voc_query | Sonnet |
-| MailWorker | get_inbox/sent/unread_mail, search_mail, get_mail_folders | Sonnet |
+| MailWorker | get_inbox/sent/unread_mail, search_mail, get_mail_folders, get_mail_detail | Sonnet |
 
 ## 주요 기능
 
@@ -313,8 +313,8 @@ CREATE TABLE workspace_memory (
 - 최근 7일 채팅 조회 / 검색어 기반 검색
 - 검색어 하이라이팅
 
-### 11. 메일 조회
-사용자의 사내 메일함을 자연어로 조회하는 기능.
+### 11. 메일 조회/요약/답장 초안
+사용자의 사내 메일함을 자연어로 조회하고, 전체 본문 열람/요약/답장 초안 생성을 지원하는 기능.
 
 **아키텍처:**
 ```
@@ -322,7 +322,8 @@ CREATE TABLE workspace_memory (
 → LLM이 MCP 도구 호출 (employee_number=사번)
 → MCP 서버: PostgreSQL VIEW(v_mail_user_mapping) → message_store 경로
 → JSP 엔드포인트(lucid_mail.jsp) HTTP 호출 → 메일 JSON
-→ LLM이 자연어 응답 생성
+→ (detail) SQLite full_path → .eml 파일 MIME 파싱 → 텍스트 본문
+→ LLM이 자연어 응답/요약/답장 초안 생성
 ```
 
 **지원 기능:**
@@ -330,12 +331,16 @@ CREATE TABLE workspace_memory (
 - 키워드 메일 검색 (`search_mail`)
 - 안 읽은 메일 조회 (`get_unread_mail`)
 - 메일함 목록 조회 (`get_mail_folders`)
+- **메일 전체 본문 조회** (`get_mail_detail`) — .eml 파일 MIME 파싱
+- **메일 요약** — LLM이 본문 기반 핵심 내용/요청 사항/액션 아이템 정리
+- **답장 초안 생성** — LLM이 원본 기반 비즈니스 톤 답장 작성 (복사 사용)
 
 **핵심 특징:**
 - **보안**: 사번은 SSO 세션에서 자동 주입 (사용자 변경 불가)
 - **성능**: message_store 경로 프로세스 수명 캐싱 (DB 조회 최소화)
 - **On/Off**: `.env`의 `MAIL_WORKER_ENABLED=false`로 즉시 비활성화 가능
-- **읽기 전용**: 메일 본문 미리보기만 제공, 전체 본문 열람 불가
+- **본문 조회**: .eml 파일 MIME 파싱 (QP/Base64, multipart 지원), 본문 8,000자 제한
+- **답장 범위**: 초안 생성만 (실제 발송은 그룹웨어에서)
 
 **PostgreSQL VIEW (DBA 생성 필요):**
 ```sql
@@ -411,3 +416,40 @@ start_server.bat                 # Windows용 서버 시작
 - Frontend: Vercel 또는 Next.js 호스팅 플랫폼
 - Backend: FastAPI 서버 (Uvicorn)
 - 데이터: ChromaDB 및 MySQL 인스턴스
+
+## 자동 변경 이력 관리
+
+코드 변경을 수반하는 작업 완료 시, 사용자가 별도로 요청하지 않아도 아래 두 파일을 자동으로 업데이트한다.
+
+### docs/history/ (상세 기록)
+- **유의미한 기능 추가/수정/삭제** 완료 시 `docs/history/YYYY-MM-DD_기능명.md` 파일을 생성 또는 업데이트한다.
+- "유의미한 변경" 기준: 새 모듈/워커/API 추가, 기존 기능의 아키텍처 변경, 파일 3개 이상 수정, 중요한 버그 수정
+- 사소한 변경(포맷팅, 주석, import 정리, 오타, 단일 파일 미세 수정)은 기록하지 않는다.
+- 동일 날짜에 동일 기능 관련 변경이 누적되면, 기존 파일을 업데이트한다 (새 파일 생성 X).
+- 템플릿:
+  ```
+  # YYYY-MM-DD 기능명
+
+  ## 개요
+  (1~2문장: 무엇을 왜 변경했는지)
+
+  ## 변경 파일 요약
+  | 파일 | 변경 유형 | 설명 |
+  |------|-----------|------|
+
+  ## 상세 내용
+  (코드 구조, 동작 방식, 환경변수, 주요 함수/클래스 등 — 기능의 복잡도에 맞게 조절)
+
+  ## 결정 사항 및 주의점
+  (기술적 결정 이유, 알려진 제약, 향후 주의할 점)
+  ```
+
+### CHANGELOG.md (인덱스)
+- docs/history/ 파일을 생성/업데이트할 때, `CHANGELOG.md`에도 해당 날짜의 한 줄 요약을 추가한다.
+- 형식: `- **태그** [모듈명] 한 줄 설명 → [상세](docs/history/파일명.md)`
+- 태그: **추가** (신규 기능/파일), **수정** (기존 변경), **삭제** (기능/파일 제거)
+- docs/history/ 파일이 없는 사소한 변경도 한 줄 요약은 기록 가능 (링크 없이).
+
+### 기록하지 않는 경우
+- 포맷팅, 주석, import 정리, 오타 수정 등 기능 변경이 없는 경우
+- 대화/질의응답만 진행하고 코드 변경이 없는 경우

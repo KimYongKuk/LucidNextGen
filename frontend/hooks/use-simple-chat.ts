@@ -39,10 +39,14 @@ export function useSimpleChat({
 }: UseSimpleChatOptions) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [status, setStatus] = useState<'ready' | 'streaming' | 'submitted'>('ready');
+  const [followUpSuggestions, setFollowUpSuggestions] = useState<string[] | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const userId = getUserId();
 
   const sendMessage = useCallback(async (message: Omit<ChatMessage, 'id' | 'createdAt'>) => {
+    // 이전 팔로우업 제안 초기화
+    setFollowUpSuggestions(null);
+
     // 사용자 메시지 추가
     const userMessage: ChatMessage = {
       ...message,
@@ -153,6 +157,7 @@ export function useSimpleChat({
       let youtubeSummary: any = null; // YouTube 요약 (매 요청마다 초기화)
       let corpSources: any[] = []; // Corp 문서 출처 (매 요청마다 초기화)
       let chartData: any = null; // 차트 데이터 (매 요청마다 초기화)
+      let workerName: string = ''; // 인텐트 분류 결과 워커 이름
 
       if (reader) {
         try {
@@ -268,6 +273,16 @@ export function useSimpleChat({
                     // 차트는 저장만 하고 스트리밍 완료 시 표시
                   }
 
+                  // Intent 분류 결과 처리 (워커 이름 캡처)
+                  if (data.type === 'intent_classified' && data.worker) {
+                    workerName = data.worker;
+                  }
+
+                  // Follow-up suggestions 처리
+                  if (data.type === 'follow_up_suggestions' && data.suggestions) {
+                    setFollowUpSuggestions(data.suggestions);
+                  }
+
                   // 모델 Fallback 알림 처리
                   if (data.type === 'model_fallback') {
                     const fallbackMessage = data.message || `${data.model}로 전환되었습니다.`;
@@ -314,31 +329,32 @@ export function useSimpleChat({
                   if (data.complete) {
                     hasCompleted = true;
 
-                    // 스트리밍 완료 후 최종 parts 구성 (텍스트 + 차트 + 출처 + Corp 출처 + YouTube 요약 순서)
-                    if (sources.length > 0 || corpSources.length > 0 || youtubeSummary || chartData) {
-                      const finalContent = allChunks.join('');
-                      const finalParts: any[] = [];
+                    // 스트리밍 완료 후 최종 parts 구성
+                    // 팔로우업 마커 strip + 텍스트/차트/출처/Corp출처/YouTube 요약 조합
+                    const rawContent = allChunks.join('');
+                    const cleanedContent = rawContent.replace(/\s*<!--FOLLOW_UP:.*?-->\s*$/s, '').trimEnd();
+                    // 워커 이름 마커 삽입 (파일 아티팩트 감지 조건부 실행에 사용)
+                    const workerMarker = workerName ? `<!--WORKER:${workerName}-->` : '';
 
-                      finalParts.push({ type: 'text', text: finalContent });
-                      if (chartData) {
-                        finalParts.push({ type: 'chart-data', chartData });
-                      }
-                      if (sources.length > 0) {
-                        finalParts.push({ type: 'sources', sources });
-                      }
-                      if (corpSources.length > 0) {
-                        finalParts.push({ type: 'corp-sources', sources: corpSources });
-                      }
-                      if (youtubeSummary) {
-                        finalParts.push({ type: 'youtube-summary', summary: youtubeSummary });
-                      }
-
-                      setMessages(prev => prev.map(msg =>
-                        msg.id === assistantMessageId
-                          ? { ...msg, parts: finalParts }
-                          : msg
-                      ));
+                    const finalParts: any[] = [{ type: 'text', text: workerMarker + cleanedContent }];
+                    if (chartData) {
+                      finalParts.push({ type: 'chart-data', chartData });
                     }
+                    if (sources.length > 0) {
+                      finalParts.push({ type: 'sources', sources });
+                    }
+                    if (corpSources.length > 0) {
+                      finalParts.push({ type: 'corp-sources', sources: corpSources });
+                    }
+                    if (youtubeSummary) {
+                      finalParts.push({ type: 'youtube-summary', summary: youtubeSummary });
+                    }
+
+                    setMessages(prev => prev.map(msg =>
+                      msg.id === assistantMessageId
+                        ? { ...msg, parts: finalParts }
+                        : msg
+                    ));
 
                     break;
                   }
@@ -429,5 +445,6 @@ export function useSimpleChat({
     stop,
     regenerate,
     resumeStream,
+    followUpSuggestions,
   };
 }

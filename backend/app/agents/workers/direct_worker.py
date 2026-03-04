@@ -58,6 +58,7 @@ RESPONSE FORMAT:
         context: Dict[str, Any],
         all_tools: List,  # 사용하지 않음
         memory_context: Optional[Dict[str, Any]] = None,
+        user_memory_context: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """
         도구 없이 직접 LLM 스트리밍
@@ -77,11 +78,13 @@ RESPONSE FORMAT:
         )
 
         # 시스템 프롬프트 적용 (메모리 컨텍스트 포함)
-        system_prompt = self.build_system_prompt(context, memory_context)
+        system_prompt = self.build_system_prompt(context, memory_context, user_memory_context)
         full_messages = [SystemMessage(content=system_prompt)] + messages
 
         if memory_context:
-            print(f"[{self.name}] Memory context injected: {len(memory_context.get('summary', ''))} chars")
+            print(f"[{self.name}] Workspace memory injected: {len(memory_context.get('summary', ''))} chars")
+        if user_memory_context:
+            print(f"[{self.name}] User memory injected: {len(user_memory_context.get('key_facts', []))} facts")
 
         setup_time = int((time.time() - setup_start) * 1000)
         print(f"[{self.name}] [TIMING] Setup: {setup_time}ms")

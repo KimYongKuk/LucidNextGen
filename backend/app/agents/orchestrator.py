@@ -48,7 +48,23 @@ class Orchestrator:
         start_time = time.time()
 
         # ============================================================
-        # Phase 0: Load Workspace Memory (if applicable)
+        # Phase 0a: Load Global User Memory (모든 세션)
+        # ============================================================
+        user_memory_context = None
+        user_id = context.get("user_id", "anonymous")
+        if user_id != "anonymous":
+            try:
+                from app.services.memory_service import get_user_memory_service, USER_MEMORY_ENABLED
+                if USER_MEMORY_ENABLED:
+                    user_memory_service = get_user_memory_service()
+                    user_memory_context = await user_memory_service.get_user_memory(user_id)
+                    if user_memory_context and user_memory_context.get("key_facts"):
+                        print(f"[ORCHESTRATOR] Loaded user memory: {len(user_memory_context['key_facts'])} facts")
+            except Exception as e:
+                print(f"[ORCHESTRATOR] User memory load error (non-fatal): {e}")
+
+        # ============================================================
+        # Phase 0b: Load Workspace Memory (if applicable)
         # ============================================================
         memory_context = None
         workspace_id = context.get("workspace_id")
@@ -111,7 +127,7 @@ class Orchestrator:
         print(f"[ORCHESTRATOR] [TIMING] Entering worker.stream_response()")
 
         first_event = True
-        async for event in worker.stream_response(messages, context, all_tools, memory_context):
+        async for event in worker.stream_response(messages, context, all_tools, memory_context, user_memory_context):
             if first_event:
                 first_event_time = int((time.time() - worker_start) * 1000)
                 print(f"[ORCHESTRATOR] [TIMING] First event from worker: {first_event_time}ms")

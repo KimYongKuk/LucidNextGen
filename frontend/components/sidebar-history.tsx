@@ -64,8 +64,8 @@ const groupChatsByDate = (chats: Chat[]): GroupedChats => {
       }
 
       // Parse as local time (not UTC)
-      // Backend returns local time in format: 2026-01-21T14:30:00
-      const dateStr = chat.createdAt || chat.created_at;
+      // Use updatedAt (last activity) for grouping, not createdAt
+      const dateStr = chat.updatedAt || chat.updated_at || chat.createdAt || chat.created_at;
       const chatDate = dateStr ? new Date(dateStr) : new Date();
 
       if (isToday(chatDate)) {

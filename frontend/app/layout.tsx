@@ -4,6 +4,7 @@ import { Toaster } from "sonner";
 import { ThemeProvider } from "@/components/theme-provider";
 import { OnboardingProvider } from "@/components/onboarding/onboarding-provider";
 import { WhatsNewProvider } from "@/components/whats-new/whats-new-provider";
+import { NoticeToastProvider } from "@/components/notice-toast/notice-toast-provider";
 
 import "./globals.css";
 
@@ -94,6 +95,12 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <head>
+        <link
+          rel="stylesheet"
+          as="style"
+          crossOrigin="anonymous"
+          href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"
+        />
         <script
           // biome-ignore lint/security/noDangerouslySetInnerHtml: "Required"
           dangerouslySetInnerHTML={{
@@ -116,8 +123,10 @@ export default function RootLayout({
         >
           <OnboardingProvider>
             <WhatsNewProvider>
-              <Toaster position="top-center" />
-              {children}
+              <NoticeToastProvider>
+                <Toaster position="top-center" />
+                {children}
+              </NoticeToastProvider>
             </WhatsNewProvider>
           </OnboardingProvider>
         </ThemeProvider>

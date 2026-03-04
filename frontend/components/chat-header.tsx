@@ -1,18 +1,19 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { memo } from "react";
+import { memo, useState, useEffect } from "react";
 import { useWindowSize } from "usehooks-ts";
 import { useTheme } from "next-themes";
 import { SidebarToggle } from "@/components/sidebar-toggle";
 import { Button } from "@/components/ui/button";
 import { PlusIcon } from "./icons";
 import { useSidebar } from "./ui/sidebar";
-import { Folder, HelpCircle, Moon, Sun, Sparkles, Shield, X } from "lucide-react";
+import { Bell, Folder, HelpCircle, Moon, Sun, Sparkles, Shield, X } from "lucide-react";
 import Link from "next/link";
 import { getUserId, isAdminUser } from "@/lib/utils";
 import { useOnboarding } from "@/components/onboarding/onboarding-provider";
 import { useWhatsNew } from "@/components/whats-new/whats-new-provider";
+import { useNotifications } from "@/components/notice-toast/notice-toast-provider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import type { Workspace } from "@/lib/api/workspaces";
 
@@ -30,7 +31,11 @@ function PureChatHeader({
   const { theme, setTheme } = useTheme();
   const { openOnboarding } = useOnboarding();
   const { openWhatsNew, hasUnseenAnnouncements } = useWhatsNew();
-  const isAdmin = isAdminUser(getUserId());
+  const { openNotifications, hasData: hasNotifications } = useNotifications();
+  const [isAdmin, setIsAdmin] = useState(false);
+  useEffect(() => {
+    setIsAdmin(isAdminUser(getUserId()));
+  }, []);
 
   const { width: windowWidth } = useWindowSize();
 
@@ -96,8 +101,26 @@ function PureChatHeader({
         </Button>
       )}
 
+      {hasNotifications && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              className="relative order-4 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
+              onClick={openNotifications}
+              variant="ghost"
+              size="icon"
+            >
+              <Bell className="h-4 w-4" />
+              <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-orange-500" />
+              <span className="sr-only">알림</span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>실시간 알림</TooltipContent>
+        </Tooltip>
+      )}
+
       <Button
-        className="relative order-4 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
+        className="relative order-5 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
         onClick={openWhatsNew}
         variant="ghost"
         size="icon"
@@ -111,7 +134,7 @@ function PureChatHeader({
       </Button>
 
       <Button
-        className="order-5 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
+        className="order-6 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
         onClick={openOnboarding}
         variant="ghost"
         size="icon"
@@ -122,7 +145,7 @@ function PureChatHeader({
       </Button>
 
       <Button
-        className="order-6 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
+        className="order-7 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
         onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
         variant="outline"
         size="icon"

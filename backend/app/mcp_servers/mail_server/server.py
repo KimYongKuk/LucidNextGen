@@ -1,9 +1,10 @@
-"""메일 조회 MCP 서버
+"""메일 조회 MCP 서버 v2
 
 사용자의 사내 메일함을 실시간 조회합니다.
 - PostgreSQL(TIMS DB)에서 사번 → message_store 경로 매핑
 - 그룹웨어 JSP 엔드포인트(lucid_mail.jsp) HTTP 호출
-- 5가지 액션: inbox, sent, search, folders, unread
+- 6가지 액션: inbox, sent, search, folders, unread, detail
+- v2: 메일 전체 본문 조회(detail), 메일 요약/답장 초안 지원
 """
 import sys
 import os
@@ -21,7 +22,10 @@ from fastmcp import FastMCP
 # SSL 경고 억제 (내부 서버)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-mcp = FastMCP("Mail Query Server v1")
+mcp = FastMCP("Mail Query Server v2")
+
+# 본문 텍스트 길이 제한 (LLM 컨텍스트 효율)
+MAIL_BODY_MAX_LENGTH = 8000
 
 # PostgreSQL 연결 정보 (TIMS DB - org_chart MCP와 동일)
 DATABASE_URL = os.environ.get(
@@ -95,6 +99,10 @@ async def _call_mail_api(message_store: str, action: str, **kwargs) -> dict:
         params["limit"] = str(kwargs["limit"])
     if kwargs.get("keyword") is not None:
         params["keyword"] = kwargs["keyword"]
+    if kwargs.get("uid_no") is not None:
+        params["uid_no"] = str(kwargs["uid_no"])
+    if kwargs.get("folder_no") is not None:
+        params["folder_no"] = str(kwargs["folder_no"])
 
     raw_text = ""
     try:
@@ -131,6 +139,8 @@ def _format_mail_list(result: dict, label: str) -> str:
 
     lines = [f"{label} ({len(data)}건)\n"]
     for i, mail in enumerate(data, 1):
+        uid = mail.get("uid", "")
+        folder_no = mail.get("folder_no", "")
         subject = mail.get("subject", "(제목 없음)")
         sender = mail.get("from", "")
         recipient = mail.get("to", "")
@@ -140,6 +150,8 @@ def _format_mail_list(result: dict, label: str) -> str:
         read_status = "읽음" if (flag & 2) else "안읽음"
 
         lines.append(f"{i}. [{read_status}] {subject}")
+        if uid and folder_no:
+            lines.append(f"   [메일ID: uid={uid}, folder={folder_no}]")
         if sender:
             lines.append(f"   발신: {sender}")
         if recipient:
@@ -171,11 +183,59 @@ def _format_folders(result: dict) -> str:
     return "\n".join(lines)
 
 
+def _format_mail_detail(result: dict) -> str:
+    """메일 상세 결과를 LLM 친화적 텍스트로 포맷팅"""
+    data = result.get("data", {})
+
+    if not data:
+        return "메일 상세 정보를 가져올 수 없습니다."
+
+    lines = ["=== 메일 상세 내용 ===\n"]
+
+    subject = data.get("subject", "(제목 없음)")
+    sender = data.get("from", "")
+    recipient = data.get("to", "")
+    cc = data.get("cc", "")
+    date = data.get("date", "")
+    body = data.get("body", "")
+    body_length = data.get("body_length", len(body))
+    body_truncated = data.get("body_truncated", False)
+
+    lines.append(f"제목: {subject}")
+    if sender:
+        lines.append(f"발신자: {sender}")
+    if recipient:
+        lines.append(f"수신자: {recipient}")
+    if cc:
+        lines.append(f"참조(CC): {cc}")
+    if date:
+        lines.append(f"날짜: {date}")
+    lines.append("")
+    lines.append("--- 본문 ---")
+
+    if body:
+        if len(body) > MAIL_BODY_MAX_LENGTH:
+            body = body[:MAIL_BODY_MAX_LENGTH]
+            lines.append(body)
+            lines.append(f"\n[본문이 {MAIL_BODY_MAX_LENGTH:,}자로 잘렸습니다. 원문 길이: {body_length:,}자]")
+        else:
+            lines.append(body)
+    else:
+        lines.append("(본문 없음)")
+
+    if body_truncated:
+        lines.append("[JSP 서버에서 본문이 50,000자 초과로 잘렸습니다]")
+
+    lines.append("\n=== 상세 끝 ===")
+    return "\n".join(lines)
+
+
 async def _query_mail(employee_number: str, action: str, label: str, **kwargs) -> str:
     """공통 메일 조회 로직"""
     import time as _time
     _start = _time.time()
-    _log_lines = [f"[MAIL_DEBUG] action={action} employee={employee_number}"]
+    kw_summary = " ".join(f"{k}={v}" for k, v in kwargs.items()) if kwargs else ""
+    _log_lines = [f"[MAIL_DEBUG] action={action} employee={employee_number} {kw_summary}".rstrip()]
 
     try:
         # Step 1: message_store 조회
@@ -267,8 +327,50 @@ async def get_unread_mail(employee_number: str, limit: int = 20) -> str:
     return await _query_mail(employee_number, "unread", "안 읽은 메일", limit=limit)
 
 
+@mcp.tool()
+async def get_mail_detail(employee_number: str, uid_no: int, folder_no: int) -> str:
+    """특정 메일의 전체 본문을 조회합니다. 메일 요약, 답장 초안 작성에 사용합니다.
+    메일 목록 조회 결과의 [메일ID: uid=N, folder=M] 정보를 사용하세요.
+    employee_number: 사용자 사번 (예: PA2601004)
+    uid_no: 메일 고유 번호 (메일 목록의 uid 값)
+    folder_no: 메일함 번호 (메일 목록의 folder 값)"""
+    import time as _time
+    _start = _time.time()
+    _log_lines = [f"[MAIL_DEBUG] action=detail employee={employee_number} uid={uid_no} folder={folder_no}"]
+
+    try:
+        message_store = await _get_message_store(employee_number)
+        _log_lines.append(f"[MAIL_DEBUG] message_store='{message_store}'")
+
+        api_start = _time.time()
+        result = await _call_mail_api(
+            message_store, "detail",
+            uid_no=uid_no, folder_no=folder_no
+        )
+        api_ms = int((_time.time() - api_start) * 1000)
+        _log_lines.append(f"[MAIL_DEBUG] HTTP detail 응답: {api_ms}ms")
+
+        formatted = _format_mail_detail(result)
+
+        total_ms = int((_time.time() - _start) * 1000)
+        _log_lines.append(f"[MAIL_DEBUG] 완료: {total_ms}ms total")
+
+        debug_header = "\n".join(_log_lines) + "\n---\n"
+        return debug_header + formatted
+
+    except ValueError as e:
+        _log_lines.append(f"[MAIL_DEBUG] ValueError: {e}")
+        return "\n".join(_log_lines) + f"\n오류: {str(e)}"
+    except RuntimeError as e:
+        _log_lines.append(f"[MAIL_DEBUG] RuntimeError: {e}")
+        return "\n".join(_log_lines) + f"\n메일 상세 조회 실패: {str(e)}"
+    except Exception as e:
+        _log_lines.append(f"[MAIL_DEBUG] Exception: {type(e).__name__}: {e}")
+        return "\n".join(_log_lines) + f"\n메일 상세 조회 중 오류: {str(e)}"
+
+
 if __name__ == "__main__":
-    print("Mail Query MCP Server v1 시작...", file=sys.stderr)
+    print("Mail Query MCP Server v2 시작...", file=sys.stderr)
     print(f"API URL: {MAIL_API_URL}", file=sys.stderr)
     print(f"API Key configured: {bool(MAIL_API_KEY)}", file=sys.stderr)
     print(f"DB URL: {DATABASE_URL[:30]}...", file=sys.stderr)

@@ -266,6 +266,52 @@ class BedrockService:
             print(f"[BEDROCK] generate_text_haiku error: {e}")
             raise
 
+    async def stream_text_haiku(
+        self,
+        prompt: str,
+        max_tokens: int = 200,
+        temperature: float = 0.2
+    ):
+        """
+        Haiku 모델로 텍스트 스트리밍 생성 (SSE용 async generator)
+
+        토큰 단위로 yield하여 실시간 스트리밍 지원
+        """
+        haiku_model_id = os.getenv(
+            "BEDROCK_FALLBACK_MODEL_ID",
+            "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        )
+
+        request_body = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": prompt}]
+                }
+            ]
+        }
+
+        try:
+            print(f"[BEDROCK] stream_text_haiku: {haiku_model_id}")
+            response = self.client.invoke_model_with_response_stream(
+                modelId=haiku_model_id,
+                body=json.dumps(request_body)
+            )
+
+            for event in response["body"]:
+                chunk = json.loads(event["chunk"]["bytes"])
+                if chunk["type"] == "content_block_delta":
+                    delta = chunk.get("delta", {})
+                    if delta.get("type") == "text_delta":
+                        yield delta["text"]
+
+        except Exception as e:
+            print(f"[BEDROCK] stream_text_haiku error: {e}")
+            raise
+
     async def converse_with_tools(
         self,
         messages: List[Dict],

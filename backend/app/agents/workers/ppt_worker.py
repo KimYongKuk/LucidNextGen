@@ -220,7 +220,8 @@ Answer in Korean unless asked otherwise."""
     def build_system_prompt(
         self,
         context: Dict[str, Any],
-        memory_context: Optional[Dict[str, Any]] = None
+        memory_context: Optional[Dict[str, Any]] = None,
+        user_memory_context: Optional[Dict[str, Any]] = None,
     ) -> str:
         """컨텍스트 + 템플릿 메타데이터를 반영한 시스템 프롬프트 생성"""
         prompt = self._base_prompt
@@ -299,6 +300,12 @@ you MUST call search_workspace_docs(workspace_uuid="{workspace_uuid}", query="..
                         memory_section += f"- {fact}\n"
                 prompt = prompt + memory_section
 
+        # 전역 사용자 메모리 주입
+        if user_memory_context and user_memory_context.get("key_facts"):
+            facts = user_memory_context["key_facts"]
+            facts_text = "\n".join(f"  - {fact}" for fact in facts)
+            prompt = f"## User Profile (사용자 개인 특성)\n\n이 사용자에 대해 알려진 정보:\n{facts_text}\n\n{prompt}"
+
         print(f"[PPTWorker] Context: session_id={bool(session_id)}, workspace_uuid={bool(workspace_uuid)}, has_files={has_files}")
 
         return prompt
@@ -313,6 +320,7 @@ you MUST call search_workspace_docs(workspace_uuid="{workspace_uuid}", query="..
         context: Dict[str, Any],
         all_tools: List[BaseTool],
         memory_context: Optional[Dict[str, Any]] = None,
+        user_memory_context: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Haiku 사전 요약을 포함한 스트리밍 응답 생성"""
         # Phase 0: 히스토리가 길면 Haiku로 사전 요약
@@ -331,7 +339,7 @@ you MUST call search_workspace_docs(workspace_uuid="{workspace_uuid}", query="..
                 "timing_ms": summarize_time,
             }
 
-        async for event in super().stream_response(processed_messages, context, all_tools, memory_context):
+        async for event in super().stream_response(processed_messages, context, all_tools, memory_context, user_memory_context):
             yield event
 
     async def _summarize_history_if_needed(

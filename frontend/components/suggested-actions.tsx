@@ -2,7 +2,7 @@
 
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { motion } from "framer-motion";
-import { memo, useMemo } from "react";
+import { memo, useEffect, useState } from "react";
 import type { ChatMessage } from "@/lib/types";
 import { Suggestion } from "./elements/suggestion";
 
@@ -16,15 +16,16 @@ const ALL_SUGGESTED_ACTIONS = [
   "https://blog.naver.com/shmoon305/224172937025 분석",
   "명의개서료 회계처리 방법",
   "월세는 어떻게 연말정산 하나요?",
-  "관세환급금 전표 처리 방법",
   "내가 업로드한 csv 파일로 라인차트 만들어줘",
+  "가장 최근 올라온 공지글 요약해줘",
+  "내 읽지 않은 메일 요약해줘",
   "IT VOC 중 SAP 비밀번호 초기화 요청 관련 문의 찾아줘",
-  "근골격계 부담작업은 어떤게 있나요?",
   "WA에서 다른 부서 코스트센터 권한이 필요한데 어떻게 신청하나요?",
   "전표 역분개 후 매핑이 안 되는데 어떻게 해야 하나요?",
   "법인카드로 결제했다가 취소한 경우 전표 처리는 어떻게 하나요?",
   "관세환급금 받았을 때 미수금 전표는 어떻게 처리하나요?",
-  "인사팀에서 발송한 메일 찾아줄 수 있어?"
+  "인사팀에서 발송한 메일 찾아줄 수 있어?",
+  "https://doi.org/10.1038/s41467-021-22635-w 이 논문 분석해줘"
 ];
 
 function getRandomItems<T>(array: T[], count: number): T[] {
@@ -38,10 +39,13 @@ type SuggestedActionsProps = {
 };
 
 function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
-  const suggestedActions = useMemo(
-    () => getRandomItems(ALL_SUGGESTED_ACTIONS, 4),
-    [chatId]
-  );
+  const [suggestedActions, setSuggestedActions] = useState<string[]>([]);
+
+  useEffect(() => {
+    setSuggestedActions(getRandomItems(ALL_SUGGESTED_ACTIONS, 4));
+  }, [chatId]);
+
+  if (suggestedActions.length === 0) return null;
 
   return (
     <div

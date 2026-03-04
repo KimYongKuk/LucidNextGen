@@ -20,8 +20,9 @@ from dotenv import load_dotenv
 import logging
 
 from app.adapters.mcp_adapter import MCPAdapter
-from app.utils.pdf_cleanup import pdf_cleanup_scheduler
+from app.utils.file_cleanup import file_cleanup_scheduler
 from app.utils.chromadb_cleanup import session_cleanup_scheduler
+from app.utils.report_email_scheduler import report_email_scheduler
 
 load_dotenv()
 
@@ -75,12 +76,16 @@ async def lifespan(app: FastAPI):
     await get_mcp_adapter()
 
     # PDF 자동 정리 스케줄러 시작
-    print("[STARTUP] PDF Cleanup Scheduler starting...")
-    pdf_cleanup_scheduler.start()
+    print("[STARTUP] File Cleanup Scheduler starting...")
+    file_cleanup_scheduler.start()
 
     # ChromaDB 세션 컬렉션 자동 정리 스케줄러 시작
     print("[STARTUP] Session Collection Cleanup Scheduler starting...")
     session_cleanup_scheduler.start()
+
+    # 주간 리포트 이메일 스케줄러 시작
+    print("[STARTUP] Weekly Report Email Scheduler starting...")
+    report_email_scheduler.start()
 
     startup_time = int((time.time() - startup_start) * 1000)
     print("="*70)
@@ -95,9 +100,14 @@ async def lifespan(app: FastAPI):
     finally:
         try:
             print("\n[SHUTDOWN] Server shutting down...")
-            pdf_cleanup_scheduler.stop()
+            file_cleanup_scheduler.stop()
             session_cleanup_scheduler.stop()
+            report_email_scheduler.stop()
             await close_mcp_adapter()
+            # Notification service pool cleanup
+            from app.services.notice_service import _notification_service
+            if _notification_service:
+                await _notification_service.close()
             print("[SHUTDOWN] Complete\n")
         except asyncio.CancelledError:
             # reload 시 발생하는 CancelledError 무시
@@ -151,7 +161,7 @@ async def validation_exception_handler(request, exc: RequestValidationError):
         }
     )
 
-from app.api.routes import chat, upload, auth, workspace, chat_a2a, feedback
+from app.api.routes import chat, upload, auth, workspace, chat_a2a, feedback, report, board
 
 # 라우터 등록
 app.include_router(auth.router, prefix="/api", tags=["auth"])
@@ -160,6 +170,8 @@ app.include_router(chat_a2a.router, prefix="/api", tags=["A2A Chat"])  # 계층�
 app.include_router(upload.router, prefix="/api", tags=["upload"])
 app.include_router(workspace.router, prefix="/api", tags=["workspaces"])
 app.include_router(feedback.router, prefix="/api", tags=["feedback"])
+app.include_router(report.router, prefix="/api", tags=["report"])
+app.include_router(board.router, prefix="/api", tags=["notifications"])
 
 @app.get("/")
 async def root():

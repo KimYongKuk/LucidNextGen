@@ -16,6 +16,9 @@ from app.services.chromadb_service import (
 PDF_OUTPUT_DIR = FilePath(__file__).parent.parent.parent.parent / "data" / "pdf_output"
 # PPT 출력 디렉토리
 PPT_OUTPUT_DIR = FilePath(__file__).parent.parent.parent.parent / "data" / "ppt_output"
+# XLSX 디렉토리
+XLSX_UPLOAD_DIR = FilePath(__file__).parent.parent.parent.parent / "data" / "xlsx_upload"
+XLSX_OUTPUT_DIR = FilePath(__file__).parent.parent.parent.parent / "data" / "xlsx_output"
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -118,7 +121,19 @@ async def upload_file(
             status_code=400,
             detail=f"파일 크기는 10MB를 초과할 수 없습니다. (현재: {file_size / (1024*1024):.2f}MB)"
         )
-    
+
+    # 1-1. Excel 파일은 원본도 디스크에 저장 (XlsxWorker가 직접 조작하기 위해)
+    if file.filename and file.filename.lower().endswith(('.xlsx', '.xls')):
+        try:
+            xlsx_dir = XLSX_UPLOAD_DIR / (session_id or "no_session")
+            xlsx_dir.mkdir(parents=True, exist_ok=True)
+            xlsx_path = xlsx_dir / file.filename
+            with open(xlsx_path, "wb") as f:
+                f.write(file_content)
+            logger.info(f"XLSX original saved: {xlsx_path}")
+        except Exception as e:
+            logger.warning(f"Failed to save XLSX original: {e}")
+
     # 2. File ID 미리 생성
     file_id = str(uuid.uuid4())
     
@@ -719,4 +734,50 @@ async def download_ppt(filename: str):
         raise
     except Exception as e:
         logger.error(f"Failed to download PPT: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/v1/xlsx/download/{filename:path}")
+async def download_xlsx(filename: str):
+    """XLSX 파일 다운로드"""
+    from urllib.parse import quote, unquote
+
+    try:
+        decoded_filename = unquote(filename)
+
+        if ".." in decoded_filename:
+            raise HTTPException(status_code=400, detail="Invalid filename")
+
+        safe_filename = decoded_filename.replace("/", "").replace("\\", "")
+
+        file_path = XLSX_OUTPUT_DIR / safe_filename
+
+        # Fallback: xlsx_output에 없으면 xlsx_upload 하위 디렉토리 검색
+        if not file_path.exists():
+            found = False
+            if XLSX_UPLOAD_DIR.exists():
+                for session_dir in XLSX_UPLOAD_DIR.iterdir():
+                    if session_dir.is_dir():
+                        candidate = session_dir / safe_filename
+                        if candidate.exists():
+                            file_path = candidate
+                            found = True
+                            break
+            if not found:
+                logger.error(f"XLSX not found: {safe_filename}")
+                raise HTTPException(status_code=404, detail=f"XLSX not found: {safe_filename}")
+
+        encoded_filename = quote(safe_filename)
+
+        return FileResponse(
+            path=str(file_path),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to download XLSX: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

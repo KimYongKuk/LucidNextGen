@@ -19,7 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
-import { ArrowLeft, ChevronDown, ChevronRight, Eye, Trash2, FolderOpen, RefreshCw, Search, Shield } from "lucide-react";
+import { ArrowLeft, BarChart3, ChevronDown, ChevronRight, Eye, Trash2, FolderOpen, RefreshCw, Search, Shield } from "lucide-react";
 import Link from "next/link";
 import { adminWorkspaceApi, ChunkData, ChunkSearchResult } from "@/lib/api/admin-workspaces";
 import { Workspace, WorkspaceFile } from "@/lib/api/workspaces";
@@ -1542,12 +1542,12 @@ export default function AdminPage() {
                 문서 업로드, 임베딩을 한 곳에서 관리
               </p> */}
             </div>
-            {/* <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="outline">Preview</Badge>
-              <Button variant="outline" size="sm">
-                변경사항 초안
-              </Button>
-            </div> */}
+            <Button asChild variant="outline" size="sm">
+              <Link href="/admin/report">
+                <BarChart3 className="mr-1.5 h-4 w-4" />
+                서비스 리포트
+              </Link>
+            </Button>
           </div>
         </div>
 
