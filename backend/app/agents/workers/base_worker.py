@@ -31,8 +31,9 @@ AGENT_RECURSION_LIMIT = 20
 # ============================================================================
 # 이전 Tool 결과 압축 설정 (ReAct loop 토큰 누적 방지)
 # ============================================================================
-COMPACT_KEEP_RECENT_PAIRS = 2    # 최근 N개 tool call 쌍은 원본 유지
+COMPACT_KEEP_RECENT_PAIRS = 1    # 최근 N개 tool call 쌍은 원본 유지
 COMPACT_SUMMARY_MAX_CHARS = 200  # 압축된 tool result 최대 길이
+COMPACT_ARGS_MAX_CHARS = 300     # 압축된 tool_call args 최대 길이
 
 # ============================================================================
 # Haiku 대화 요약 파이프라인 설정 (멀티턴 토큰 누적 방지)
@@ -254,16 +255,42 @@ DEFAULT_FOLLOW_UP_CAPABILITIES = [
 ]
 
 
+def _compact_tool_call_args(args: dict, max_chars: int = COMPACT_ARGS_MAX_CHARS) -> dict:
+    """AIMessage의 tool_calls args를 축약.
+
+    큰 값(data 배열, 긴 문자열)만 요약으로 대체.
+    tool_call 구조(name, id)는 보존.
+    """
+    compacted = {}
+    for key, val in args.items():
+        val_str = str(val)
+        if len(val_str) <= max_chars:
+            compacted[key] = val
+        elif isinstance(val, list):
+            # data 배열 등: 행/열 개수만 표시
+            if val and isinstance(val[0], list):
+                compacted[key] = f"[{len(val)}행 x {len(val[0])}열 데이터 생략]"
+            elif val and isinstance(val[0], dict):
+                compacted[key] = f"[{len(val)}개 dict 항목 생략]"
+            else:
+                compacted[key] = f"[{len(val)}개 항목 생략]"
+        elif isinstance(val, str) and len(val) > max_chars:
+            compacted[key] = val[:max_chars] + f"... ({len(val):,}자 중 {max_chars}자)"
+        else:
+            compacted[key] = val_str[:max_chars] + f"... (생략)"
+    return compacted
+
+
 def _compact_tool_messages(
     messages: List[BaseMessage],
     keep_last_n: int = COMPACT_KEEP_RECENT_PAIRS,
     max_chars: int = COMPACT_SUMMARY_MAX_CHARS,
 ) -> List[BaseMessage]:
-    """이전 단계의 ToolMessage content를 축약하여 토큰 누적 방지.
+    """이전 단계의 ToolMessage content + AIMessage tool_calls args를 축약하여 토큰 누적 방지.
 
     - AIMessage(tool_calls) + ToolMessage 쌍을 식별
     - 최근 keep_last_n 쌍은 원본 유지
-    - 이전 쌍의 ToolMessage.content만 축약 (메시지 자체는 유지)
+    - 이전 쌍의 ToolMessage.content 축약 + AIMessage tool_calls args 축약
     - tool_call_id 페어링 유지 (LangGraph ValidationError 방지)
     """
     # 1. tool call 쌍 인덱스 수집: (ai_index, [tool_msg_indices])
@@ -282,19 +309,22 @@ def _compact_tool_messages(
     if len(chains) <= keep_last_n:
         return messages  # 압축 불필요
 
-    # 2. 압축 대상 ToolMessage 인덱스
-    compact_indices: set = set()
-    for _, tool_indices in chains[:-keep_last_n]:
-        compact_indices.update(tool_indices)
+    # 2. 압축 대상 인덱스 수집
+    compact_ai_indices: set = set()
+    compact_tool_indices: set = set()
+    for ai_idx, tool_indices in chains[:-keep_last_n]:
+        compact_ai_indices.add(ai_idx)
+        compact_tool_indices.update(tool_indices)
 
     # 3. 메시지 복사 + 압축
     result = []
-    compacted_count = 0
+    compacted_tool_count = 0
+    compacted_ai_count = 0
     original_chars = 0
     compacted_chars = 0
 
     for i, msg in enumerate(messages):
-        if i in compact_indices and isinstance(msg, ToolMessage):
+        if i in compact_tool_indices and isinstance(msg, ToolMessage):
             content = msg.content if isinstance(msg.content, str) else str(msg.content)
             original_chars += len(content)
 
@@ -302,7 +332,7 @@ def _compact_tool_messages(
                 short = content[:max_chars].rstrip()
                 new_content = f"[이전 결과] {short}... ({len(content):,}자 중 {max_chars}자 표시)"
                 compacted_chars += len(new_content)
-                compacted_count += 1
+                compacted_tool_count += 1
                 result.append(ToolMessage(
                     content=new_content,
                     tool_call_id=msg.tool_call_id,
@@ -311,12 +341,38 @@ def _compact_tool_messages(
             else:
                 compacted_chars += len(content)
                 result.append(msg)
+
+        elif i in compact_ai_indices and isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
+            # AIMessage tool_calls args 축약
+            new_tool_calls = []
+            args_compacted = False
+            for tc in msg.tool_calls:
+                tc_args = tc.get("args", {})
+                tc_args_str = str(tc_args)
+                if len(tc_args_str) > COMPACT_ARGS_MAX_CHARS:
+                    compacted_args = _compact_tool_call_args(tc_args)
+                    new_tool_calls.append({**tc, "args": compacted_args})
+                    args_compacted = True
+                    original_chars += len(tc_args_str)
+                    compacted_chars += len(str(compacted_args))
+                else:
+                    new_tool_calls.append(tc)
+
+            if args_compacted:
+                compacted_ai_count += 1
+                result.append(AIMessage(
+                    content=msg.content,
+                    tool_calls=new_tool_calls,
+                ))
+            else:
+                result.append(msg)
         else:
             result.append(msg)
 
-    if compacted_count > 0:
+    total_compacted = compacted_tool_count + compacted_ai_count
+    if total_compacted > 0:
         print(
-            f"[COMPACT] {compacted_count}개 ToolMessage 압축: "
+            f"[COMPACT] ToolMsg={compacted_tool_count}개 + AIMsg_args={compacted_ai_count}개 압축: "
             f"{original_chars:,}자 → {compacted_chars:,}자 "
             f"({(1 - compacted_chars / max(original_chars, 1)) * 100:.0f}% 절감)"
         )

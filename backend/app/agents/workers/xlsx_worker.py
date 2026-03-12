@@ -522,13 +522,24 @@ def _truncate_tool_result(
 ):
     """개별 도구 결과가 max_chars 초과 시 잘라서 토큰 폭증 방지.
 
+    모든 타입(str, list, dict, ToolMessage 등)을 문자열로 변환 후 잘라냄.
     LLM에게 잘렸음을 안내하여 정확성 유지.
     """
-    if not isinstance(result, str) or len(result) <= max_chars:
-        return result
+    # 문자열로 변환
+    if isinstance(result, str):
+        text = result
+    elif hasattr(result, "content"):
+        # ToolMessage 등 content 속성이 있는 객체
+        text = result.content if isinstance(result.content, str) else str(result.content)
+    else:
+        text = str(result)
 
-    original_len = len(result)
-    truncated = result[:max_chars].rstrip()
+    if len(text) <= max_chars:
+        # 원래 타입이 str이 아니었으면 변환된 텍스트를 반환
+        return result if isinstance(result, str) else text
+
+    original_len = len(text)
+    truncated = text[:max_chars].rstrip()
 
     notice = f"\n\n... ⚠️ 결과가 길어 처음 {max_chars:,}자만 표시합니다 (전체 {original_len:,}자)."
     if tool_name == "read_data_from_excel":
