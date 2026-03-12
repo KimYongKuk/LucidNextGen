@@ -153,6 +153,7 @@ function PureMultimodalInput({
           url: attachment.url,
           name: attachment.name,
           mediaType: attachment.contentType,
+          storedFilename: attachment.storedFilename,
         })),
         {
           type: "text",
@@ -227,7 +228,7 @@ function PureMultimodalInput({
 
       if (isImage) {
         // Image: immediate base64 response
-        const { media_type, base64_data, filename } = data;
+        const { media_type, base64_data, filename, stored_filename } = data;
         if (!base64_data) {
           throw new Error("Image upload failed: empty base64 data");
         }
@@ -241,6 +242,7 @@ function PureMultimodalInput({
                 name: filename,
                 contentType: media_type,
                 status: 'ready',
+                storedFilename: stored_filename,
               }
               : att
           )
@@ -405,25 +407,6 @@ function PureMultimodalInput({
     }
   }, [chatId, setAttachments, onFileUploaded]);
 
-  const deleteSessionFiles = useCallback(async () => {
-    try {
-      const baseUrl = getApiUrl();
-      const response = await fetch(
-        `${baseUrl}/api/v1/upload/session/${chatId}`,
-        {
-          method: "DELETE",
-        }
-      );
-
-      if (response.ok) {
-        console.log(`Session ${chatId} files deleted`);
-      }
-    } catch (error) {
-      console.error("Failed to delete session files:", error);
-    }
-  }, [chatId]);
-
-
 
   const handleFileChange = useCallback(
     async (event: ChangeEvent<HTMLInputElement>) => {
@@ -558,12 +541,7 @@ function PureMultimodalInput({
                     fileInputRef.current.value = "";
                   }
 
-                  // 파일 타입 확인 (이미지가 아닌 문서 파일만 백엔드에서 삭제)
-                  const isDocument = !attachment.url.startsWith('data:');
-                  if (isDocument && attachment.status === 'ready') {
-                    // 백엔드 세션 파일 삭제
-                    await deleteSessionFiles();
-                  }
+                  // 세션 파일은 백엔드 30일 스케줄러가 자동 정리 (즉시 삭제하지 않음)
                 }}
               />
             ))}

@@ -2,21 +2,24 @@
 ChromaDB 세션 컬렉션 자동 정리 스케줄러
 - 오래된 session_* 컬렉션을 주기적으로 삭제
 - workspace_* 및 user_* 컬렉션은 절대 삭제하지 않음
+- delete_collection() 후 남은 고아 디렉토리도 정리
 - APScheduler 기반
 """
 
 import os
+import shutil
 import logging
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
-from typing import Optional, List
+from typing import Optional, List, Set
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 logger = logging.getLogger(__name__)
 
-# 환경 변수에서 설정 읽기 (기본값: 24시간 보관, 6시간 간격)
-SESSION_RETENTION_HOURS = int(os.getenv("SESSION_RETENTION_HOURS", "24"))
+# 환경 변수에서 설정 읽기 (기본값: 7일(168시간) 보관, 6시간 간격)
+SESSION_RETENTION_HOURS = int(os.getenv("SESSION_RETENTION_HOURS", "168"))
 SESSION_CLEANUP_INTERVAL_HOURS = int(os.getenv("SESSION_CLEANUP_INTERVAL_HOURS", "6"))
 
 
@@ -170,7 +173,74 @@ def cleanup_old_session_collections(retention_hours: Optional[int] = None) -> di
             f"{skipped} skipped, {errors} errors"
         )
 
+    # 디스크 고아 디렉토리 정리 (delete_collection 후 남은 HNSW 인덱스 파일)
+    orphan_result = _cleanup_orphan_dirs()
+    if orphan_result["deleted"] > 0:
+        deleted += orphan_result["deleted"]
+
     return {"deleted": deleted, "skipped": skipped, "errors": errors}
+
+
+def _cleanup_orphan_dirs() -> dict:
+    """
+    ChromaDB delete_collection() 후 디스크에 남은 고아 디렉토리 정리.
+    segments 테이블에 없는 디렉토리(HNSW 인덱스)를 삭제한다.
+    """
+    import sqlite3
+
+    chromadb_dir = Path(__file__).parent.parent.parent / "data" / "chromadb_user"
+    sqlite_path = chromadb_dir / "chroma.sqlite3"
+
+    if not sqlite_path.exists():
+        return {"deleted": 0, "errors": 0, "freed_mb": 0.0}
+
+    # 유효한 segment ID 조회
+    valid_ids: Set[str] = set()
+    try:
+        conn = sqlite3.connect(str(sqlite_path))
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM segments")
+        valid_ids = {row[0] for row in cursor.fetchall()}
+        conn.close()
+    except Exception as e:
+        logger.warning(f"[Orphan Cleanup] Failed to read segments: {e}")
+        return {"deleted": 0, "errors": 0, "freed_mb": 0.0}
+
+    deleted = 0
+    errors = 0
+    freed_bytes = 0
+
+    for entry in chromadb_dir.iterdir():
+        if not entry.is_dir():
+            continue
+        if entry.name in valid_ids:
+            continue
+
+        # UUID 형식 디렉토리만 대상 (안전장치)
+        try:
+            import uuid
+            uuid.UUID(entry.name)
+        except ValueError:
+            continue
+
+        try:
+            dir_size = sum(f.stat().st_size for f in entry.rglob("*") if f.is_file())
+            shutil.rmtree(entry)
+            freed_bytes += dir_size
+            deleted += 1
+            logger.debug(f"[Orphan Cleanup] Deleted: {entry.name} ({dir_size / (1024*1024):.1f} MB)")
+        except Exception as e:
+            errors += 1
+            logger.error(f"[Orphan Cleanup] Error deleting {entry.name}: {e}")
+
+    freed_mb = freed_bytes / (1024 * 1024)
+    if deleted > 0:
+        logger.info(
+            f"[Orphan Cleanup] Completed: {deleted} orphan dirs deleted, "
+            f"{freed_mb:.1f} MB freed, {errors} errors"
+        )
+
+    return {"deleted": deleted, "errors": errors, "freed_mb": freed_mb}
 
 
 class SessionCleanupScheduler:

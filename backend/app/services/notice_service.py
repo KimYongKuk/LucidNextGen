@@ -37,6 +37,17 @@ MAIL_API_KEY = os.environ.get("MAIL_API_KEY", "")
 EMPTY_SECTION = {"items": [], "count": 0}
 
 
+def _fix_mojibake(text: str) -> str:
+    """JSP QP 디코더 버그로 깨진 한글 복원 (UTF-8 바이트가 Latin-1 char로 저장된 경우)"""
+    if not text:
+        return text
+    try:
+        fixed = text.encode("latin-1").decode("utf-8")
+        return fixed
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        return text
+
+
 def _safe_date(val) -> str:
     """날짜 값을 ISO 문자열로 안전하게 변환 (이미 str이면 그대로)"""
     if not val:
@@ -74,7 +85,7 @@ class NotificationService:
     # ── 공지사항 ──────────────────────────────────────────────
 
     async def get_today_notices(self) -> Dict[str, Any]:
-        """최근 공지사항 조회 (JHC 제외, 최근 5건)"""
+        """최근 공지사항 조회 (JHC 제외, 최근 3건)"""
         pool = await self._get_pool()
 
         query = """
@@ -82,8 +93,9 @@ class NotificationService:
                    author_name, author_dept, posted_at, post_url
             FROM v_board_search
             WHERE board_name NOT LIKE '%JHC%'
+              AND board_category NOT LIKE 'L&F Plus%'
             ORDER BY posted_at DESC
-            LIMIT 5
+            LIMIT 3
         """
 
         async with pool.acquire() as conn:
@@ -135,7 +147,7 @@ class NotificationService:
             "api_key": MAIL_API_KEY,
             "action": "unread",
             "message_store": message_store,
-            "limit": "5",
+            "limit": "3",
         }
 
         async with httpx.AsyncClient(
@@ -144,20 +156,18 @@ class NotificationService:
         ) as client:
             response = await client.get(MAIL_API_URL, params=params)
             response.raise_for_status()
-            result = json.loads(response.text.strip())
+            result = json.loads(response.content.decode("utf-8"))
 
         data = result.get("data", [])
         items = [
             {
-                "subject": mail.get("subject", "(제목 없음)"),
-                "from": mail.get("from", ""),
+                "subject": _fix_mojibake(mail.get("subject", "(제목 없음)")),
+                "from": _fix_mojibake(mail.get("from", "")),
                 "date": mail.get("date", ""),
             }
-            for mail in data[:5]
+            for mail in data[:3]
         ]
-        # JSP가 전체 안읽음 수를 반환하면 그것을 사용, 아니면 data 길이
-        total_count = result.get("total_count", len(data))
-        return {"items": items, "count": total_count}
+        return {"items": items, "count": len(items)}
 
     # ── 전자결재 ───────────────────────────────────────────────
 
@@ -225,8 +235,8 @@ class NotificationService:
                 SELECT doc_id, title, form_name, drafted_at, drafter_name
                 FROM v_appr_user_pending
                 WHERE login_id = $1
-                ORDER BY drafted_at ASC
-                LIMIT 5
+                ORDER BY drafted_at DESC
+                LIMIT 3
                 """,
                 login_id
             )
@@ -253,6 +263,7 @@ class NotificationService:
                 """
                 SELECT COUNT(*) as cnt FROM v_appr_dept_received
                 WHERE dept_id = $1 AND is_assigned = false AND is_reception_returned = false
+                  AND appr_status != 'TEMPSAVE'
                 """,
                 dept_id
             )
@@ -263,8 +274,9 @@ class NotificationService:
                 SELECT doc_id, title, form_name, drafter_name, drafter_dept_name, received_at
                 FROM v_appr_dept_received
                 WHERE dept_id = $1 AND is_assigned = false AND is_reception_returned = false
+                  AND appr_status != 'TEMPSAVE'
                 ORDER BY received_at DESC
-                LIMIT 5
+                LIMIT 3
                 """,
                 dept_id
             )
@@ -303,7 +315,7 @@ class NotificationService:
                 FROM v_appr_user_referenced
                 WHERE login_id = $1 AND is_read = false
                 ORDER BY drafted_at DESC
-                LIMIT 5
+                LIMIT 3
                 """,
                 login_id
             )

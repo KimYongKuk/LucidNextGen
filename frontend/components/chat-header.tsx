@@ -134,17 +134,6 @@ function PureChatHeader({
       </Button>
 
       <Button
-        className="order-6 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
-        onClick={openOnboarding}
-        variant="ghost"
-        size="icon"
-        title="사용 가이드"
-      >
-        <HelpCircle className="h-4 w-4" />
-        <span className="sr-only">사용 가이드</span>
-      </Button>
-
-      <Button
         className="order-7 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
         onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
         variant="outline"
@@ -154,6 +143,19 @@ function PureChatHeader({
         <Moon className="absolute h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
         <span className="sr-only">Toggle theme</span>
       </Button>
+      
+      {/* <Button
+        className="order-6 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
+        onClick={openOnboarding}
+        variant="ghost"
+        size="icon"
+        title="사용 가이드"
+      >
+        <HelpCircle className="h-4 w-4" />
+        <span className="sr-only">사용 가이드</span>
+      </Button>
+        
+      
 
       {/* <Button
         asChild

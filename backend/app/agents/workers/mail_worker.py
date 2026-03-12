@@ -35,7 +35,7 @@ class MailWorker(BaseWorker):
     @property
     def max_agent_steps(self) -> int:
         """메일 목록 조회 → 상세 N건 → 요약/답장 워크플로우에 충분한 단계"""
-        return 30
+        return 24
 
     @property
     def system_prompt(self) -> str:

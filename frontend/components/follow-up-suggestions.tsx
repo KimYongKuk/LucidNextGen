@@ -31,7 +31,7 @@ function PureFollowUpSuggestions({
               transition={{ delay: 0.05 * index }}
             >
               <Suggestion
-                className="h-auto whitespace-nowrap px-3 py-1.5 text-xs max-w-[250px] truncate bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 dark:bg-blue-950/60 dark:border-blue-800 dark:text-blue-300 dark:hover:bg-blue-900/60"
+                className="h-auto whitespace-nowrap px-3 py-1.5 text-xs max-w-[250px] truncate bg-[#FF4000]/10 border-[#FF4000]/30 text-[#FF4000] hover:bg-[#FF4000]/20 dark:bg-[#FF4000]/15 dark:border-[#FF4000]/30 dark:text-[#FF4000] dark:hover:bg-[#FF4000]/25"
                 onClick={onSuggestionClick}
                 suggestion={suggestion}
               >

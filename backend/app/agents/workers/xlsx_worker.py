@@ -25,12 +25,10 @@ from io import BytesIO
 from pathlib import Path
 from typing import List, Dict, Any, AsyncIterator, Optional
 
-from langchain_aws import ChatBedrockConverse
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langchain_core.messages import BaseMessage
 from langchain_core.tools import BaseTool
 
 from .base_worker import BaseWorker
-from app.core.model_config import get_worker_config
 
 # ============================================================================
 # 경로 설정
@@ -73,33 +71,8 @@ READ_ONLY_TOOLS = frozenset([
     "validate_formula_syntax",
 ])
 
-# ============================================================================
-# Haiku 요약 파이프라인 설정 (VisualizationWorker와 동일 패턴)
-# ============================================================================
-SUMMARIZATION_MESSAGE_THRESHOLD = 6
-SUMMARIZATION_CHAR_THRESHOLD = 5000
-
-SUMMARIZATION_PROMPT = """다음 대화 내용을 Excel 파일 생성/수정을 위해 요약해줘.
-
-## 요약 지침
-1. 핵심 데이터, 숫자, 통계는 정확히 보존
-2. 주요 주제와 요청 사항 포함
-3. 테이블 데이터가 있으면 구조 유지 (헤더, 행, 열)
-4. 사용자의 최종 요청 명확히 기록
-5. 마크다운 형식으로 정리
-6. 최대 800단어
-
-## ⚠️ 중요 - Excel 관련 정보 보존:
-- 사용자가 요청한 엑셀 구조 (시트명, 열 구성, 데이터 타입)
-- 서식 요청 (셀 색상, 글꼴, 테두리 등)
-- 이전에 생성/수정된 파일명이 있다면 기록
-- 수식/피벗테이블 요청 사항
-
-## 대화 내용:
-{conversation}
-
----
-## 요약:"""
+# Tool result 최대 길이 (개별 결과 안전망 — 극단적 대량 데이터 방어)
+TOOL_RESULT_MAX_CHARS = 8000
 
 
 class XlsxWorker(BaseWorker):
@@ -151,6 +124,8 @@ class XlsxWorker(BaseWorker):
             "delete_range",
             "validate_excel_range",
             "get_data_validation_info",
+            # 웹 검색 도구 (시장 데이터, 통계 등 최신 정보 필요 시)
+            "tavily_search",
         ]
 
     @property
@@ -159,8 +134,37 @@ class XlsxWorker(BaseWorker):
 
     @property
     def max_agent_steps(self) -> int:
-        """Excel 작업은 다단계 도구 호출 필요 (기본 20 → 50 = 최대 25회 도구 호출)"""
-        return 50
+        """Excel 작업은 다단계 도구 호출 필요 (기본 20 → 30 = 최대 15회 도구 호출)"""
+        return 30
+
+    @property
+    def compact_previous_results(self) -> bool:
+        """이전 단계 Tool 결과 압축 활성화 (토큰 누적 방지)"""
+        return True
+
+    @property
+    def summarization_prompt(self) -> str:
+        return """다음 대화 내용을 Excel 파일 생성/수정을 위해 요약해줘.
+
+## 요약 지침
+1. 핵심 데이터, 숫자, 통계는 정확히 보존
+2. 주요 주제와 요청 사항 포함
+3. 테이블 데이터가 있으면 구조 유지 (헤더, 행, 열)
+4. 사용자의 최종 요청 명확히 기록
+5. 마크다운 형식으로 정리
+6. 최대 800단어
+
+## ⚠️ 중요 - Excel 관련 정보 보존:
+- 사용자가 요청한 엑셀 구조 (시트명, 열 구성, 데이터 타입)
+- 서식 요청 (셀 색상, 글꼴, 테두리 등)
+- 이전에 생성/수정된 파일명이 있다면 기록
+- 수식/피벗테이블 요청 사항
+
+## 대화 내용:
+{conversation}
+
+---
+## 요약:"""
 
     @property
     def system_prompt(self) -> str:
@@ -183,6 +187,11 @@ class XlsxWorker(BaseWorker):
 
 ## 파일
 {available_files}
+
+## 웹 검색 (tavily_search)
+- 시장 데이터, 통계, 트렌드 등 **최신 정보가 필요한 엑셀 생성 요청** 시 tavily_search로 먼저 조사
+- 검색 결과의 구체적 수치/통계를 엑셀 데이터에 반영
+- 사용자가 직접 데이터를 제공했거나, 기존 파일 수정인 경우에는 검색 불필요
 
 ## 규칙
 1. **경로**: 새 파일은 `{output_dir}/파일명.xlsx`, 기존 파일은 AVAILABLE FILES의 경로 사용
@@ -364,17 +373,24 @@ Answer in Korean unless asked otherwise."""
                         print(f"[XlsxWorker] [LOCK] {_tname}: acquired lock for {Path(resolved_filepath).name}")
                         result = await _original(input_data, config, **kwargs)
                         print(f"[XlsxWorker] [LOCK] {_tname}: released lock for {Path(resolved_filepath).name}")
-                        return result
+                else:
+                    result = await _original(input_data, config, **kwargs)
 
-                return await _original(input_data, config, **kwargs)
+                # 긴 도구 결과 잘라서 토큰 폭증 방지 (Approach A)
+                return _truncate_tool_result(result, _tname)
 
             object.__setattr__(tool, "ainvoke", secured_ainvoke)
 
         print(f"[XlsxWorker] 보안 래핑 완료: {len(tools)}개 도구, allowed_dirs={allowed_dirs}")
+
+        # 아카이브 래핑 (보안 래핑 위에 적용 — Output 파일 복사)
+        tools = self._wrap_tools_for_archive(tools, context)
+
         return tools
 
     # ==========================================================
-    # Haiku 요약 파이프라인 (VisualizationWorker와 동일 패턴)
+    # stream_response: BaseWorker 기본 + 후처리 (빈 시트 제거, 수식 캐시)
+    # Haiku 요약은 BaseWorker.stream_response()에서 자동 처리
     # ==========================================================
 
     async def stream_response(
@@ -385,78 +401,13 @@ Answer in Korean unless asked otherwise."""
         memory_context: Optional[Dict[str, Any]] = None,
         user_memory_context: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
-        """Haiku 사전 요약을 포함한 스트리밍 응답 생성"""
-        summarize_start = time.time()
-        processed_messages = await self._summarize_history_if_needed(messages)
-
-        if len(processed_messages) < len(messages):
-            summarize_time = int((time.time() - summarize_start) * 1000)
-            print(f"[{self.name}] [TIMING] Haiku summarization: {summarize_time}ms")
-            print(f"[{self.name}] Messages reduced: {len(messages)} -> {len(processed_messages)}")
-
-            yield {
-                "event": "summarization_complete",
-                "original_count": len(messages),
-                "summarized_count": len(processed_messages),
-                "timing_ms": summarize_time,
-            }
-
-        async for event in super().stream_response(processed_messages, context, all_tools, memory_context, user_memory_context):
+        """BaseWorker 스트리밍 + 후처리 (빈 시트 제거, 수식 캐시)"""
+        async for event in super().stream_response(messages, context, all_tools, memory_context, user_memory_context):
             yield event
 
         # Post-processing: remove empty sheets, then pre-compute formula values
         self._cleanup_empty_sheets()
         self._precompute_formulas()
-
-    async def _summarize_history_if_needed(
-        self,
-        messages: List[BaseMessage],
-    ) -> List[BaseMessage]:
-        """히스토리가 임계값을 초과하면 Haiku로 요약"""
-        if len(messages) < SUMMARIZATION_MESSAGE_THRESHOLD:
-            return messages
-
-        total_chars = sum(
-            len(msg.content) if isinstance(msg.content, str) else len(str(msg.content))
-            for msg in messages
-        )
-
-        if total_chars < SUMMARIZATION_CHAR_THRESHOLD:
-            return messages
-
-        print(f"[{self.name}] History exceeds threshold: {len(messages)} messages, {total_chars} chars")
-        print(f"[{self.name}] Summarizing with Haiku...")
-
-        try:
-            from .base_worker import BEDROCK_CONFIG
-
-            haiku_config = get_worker_config(use_sonnet=False)
-            haiku_llm = ChatBedrockConverse(
-                model=haiku_config.model_id,
-                temperature=0.3,
-                max_tokens=1500,
-                config=BEDROCK_CONFIG,
-            )
-
-            conversation_text = self._format_messages_for_summary(messages[:-1])
-            current_message = messages[-1]
-
-            summary_prompt = SUMMARIZATION_PROMPT.format(conversation=conversation_text)
-            response = await haiku_llm.ainvoke([
-                HumanMessage(content=summary_prompt),
-            ])
-
-            summary = response.content.strip()
-            print(f"[{self.name}] Summary generated: {len(summary)} chars")
-
-            return [
-                HumanMessage(content=f"[이전 대화 요약]\n{summary}"),
-                current_message,
-            ]
-
-        except Exception as e:
-            print(f"[{self.name}] Summarization failed: {e}, using original messages")
-            return messages
 
     def _cleanup_empty_sheets(self) -> None:
         """Agent 완료 후: output 디렉토리의 최근 xlsx 파일에서 빈 시트 제거
@@ -562,19 +513,29 @@ Answer in Korean unless asked otherwise."""
             except Exception as e:
                 print(f"[XlsxWorker] [FORMULA] Skipped {f.name}: {e}")
 
-    def _format_messages_for_summary(self, messages: List[BaseMessage]) -> str:
-        """메시지를 요약용 텍스트로 포맷팅"""
-        lines = []
-        for msg in messages:
-            role = "User" if isinstance(msg, HumanMessage) else "Assistant"
-            content = msg.content if isinstance(msg.content, str) else str(msg.content)
 
-            if len(content) > 2000:
-                content = content[:2000] + "... [truncated]"
 
-            lines.append(f"{role}: {content}")
+def _truncate_tool_result(
+    result,
+    tool_name: str,
+    max_chars: int = TOOL_RESULT_MAX_CHARS,
+):
+    """개별 도구 결과가 max_chars 초과 시 잘라서 토큰 폭증 방지.
 
-        return "\n\n".join(lines)
+    LLM에게 잘렸음을 안내하여 정확성 유지.
+    """
+    if not isinstance(result, str) or len(result) <= max_chars:
+        return result
+
+    original_len = len(result)
+    truncated = result[:max_chars].rstrip()
+
+    notice = f"\n\n... ⚠️ 결과가 길어 처음 {max_chars:,}자만 표시합니다 (전체 {original_len:,}자)."
+    if tool_name == "read_data_from_excel":
+        notice += " 전체 데이터에 수식을 적용하려면 apply_formula를 사용하세요."
+
+    print(f"[XlsxWorker] [TRUNCATE] {tool_name}: {original_len:,}자 → {max_chars:,}자로 잘림")
+    return truncated + notice
 
 
 def _deduplicate_filepath(filepath: str) -> str:

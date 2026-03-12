@@ -1,4 +1,4 @@
-"""AWS Bedrock 스트리밍 서비스 (자동 Fallback 지원)"""
+"""AWS Bedrock 스트리밍 서비스 (자동 Fallback + 리전 폴백 지원)"""
 import os
 import json
 import asyncio
@@ -6,17 +6,24 @@ import boto3
 from typing import AsyncGenerator, List, Dict, Any, Optional, Tuple
 
 from app.core.model_config import get_model_chain, RETRY_CONFIG, ModelConfig
+from app.core.region_fallback import get_region_fallback_manager
 from app.utils.bedrock_exceptions import is_throttling_error
 
 
 class BedrockService:
     def __init__(self):
-        self.client = boto3.client(
+        self._region_mgr = get_region_fallback_manager()
+
+        # Primary 리전 client
+        self._primary_client = boto3.client(
             'bedrock-runtime',
             aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
             aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
-            region_name=os.getenv('AWS_REGION', 'us-east-1')
+            region_name=self._region_mgr.primary_region,
         )
+        # Fallback 리전 client (lazy 생성)
+        self._fallback_client = None
+
         # 모델 체인 (Primary -> Fallback)
         self.model_chain = get_model_chain()
         # 기본 모델 ID (하위 호환성)
@@ -25,6 +32,36 @@ class BedrockService:
         )
         # 테스트 모드: 첫 번째 모델 강제 실패
         self.force_fallback_test = os.getenv('FORCE_FALLBACK_TEST', 'false').lower() == 'true'
+
+    @property
+    def _fallback_client_lazy(self):
+        """Fallback 리전 boto3 client (최초 사용 시 1회만 생성)"""
+        if self._fallback_client is None:
+            self._fallback_client = boto3.client(
+                'bedrock-runtime',
+                aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+                aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+                region_name=self._region_mgr.fallback_region,
+            )
+            print(f"[BEDROCK] Fallback client created for region: {self._region_mgr.fallback_region}")
+        return self._fallback_client
+
+    @property
+    def client(self):
+        """현재 리전 상태에 따라 적절한 client 반환"""
+        if self._region_mgr.is_fallback_active:
+            return self._fallback_client_lazy
+        return self._primary_client
+
+    def _get_model_id(self, original_model_id: str) -> str:
+        """현재 리전에 맞는 model ID 반환"""
+        return self._region_mgr.get_model_id(original_model_id)
+
+    def _on_all_retries_exhausted(self):
+        """모든 모델+리트라이 실패 시 리전 폴백 활성화"""
+        if not self._region_mgr.is_fallback_active:
+            self._region_mgr.activate_fallback()
+
     async def stream_chat(
         self,
         message: str,
@@ -111,6 +148,7 @@ class BedrockService:
                 last_exception = Exception("ThrottlingException (테스트 모드)")
                 continue
 
+            model_id = self._get_model_id(model_config.model_id)
             for retry in range(RETRY_CONFIG["max_retries"]):
                 try:
                     # Bedrock 요청
@@ -122,9 +160,10 @@ class BedrockService:
                         "messages": messages
                     }
 
-                    print(f"[BEDROCK] Streaming with model: {model_config.display_name}")
+                    region_tag = f"[{self._region_mgr.current_region}]" if self._region_mgr.is_fallback_active else ""
+                    print(f"[BEDROCK] Streaming with model: {model_config.display_name} {region_tag}")
                     response = self.client.invoke_model_with_response_stream(
-                        modelId=model_config.model_id,
+                        modelId=model_id,
                         body=json.dumps(request_body)
                     )
 
@@ -155,14 +194,18 @@ class BedrockService:
                     else:
                         raise  # 쓰로틀링이 아닌 에러는 즉시 raise
 
-        # 모든 모델 실패
+        # 모든 모델 실패 → 리전 폴백 활성화 후 재시도 안내
+        self._on_all_retries_exhausted()
         raise Exception(f"모든 모델이 쓰로틀링으로 실패했습니다: {last_exception}")
 
     async def generate_text(
         self,
         prompt: str,
         max_tokens: int = 100,
-        temperature: float = 0.3
+        temperature: float = 0.3,
+        caller: str = "",
+        session_id: str = None,
+        user_id: str = None,
     ) -> str:
         """단순 텍스트 생성 (non-streaming, 자동 Fallback) - title 생성 등에 사용"""
         last_exception = None
@@ -174,6 +217,7 @@ class BedrockService:
                 last_exception = Exception("ThrottlingException (테스트 모드)")
                 continue
 
+            model_id = self._get_model_id(model_config.model_id)
             for retry in range(RETRY_CONFIG["max_retries"]):
                 try:
                     request_body = {
@@ -190,11 +234,27 @@ class BedrockService:
 
                     print(f"[BEDROCK] generate_text with model: {model_config.display_name}")
                     response = self.client.invoke_model(
-                        modelId=model_config.model_id,
+                        modelId=model_id,
                         body=json.dumps(request_body)
                     )
 
                     response_body = json.loads(response['body'].read())
+
+                    # 토큰 사용량 로깅
+                    if caller and "usage" in response_body:
+                        usage = response_body["usage"]
+                        try:
+                            from app.services.token_usage_service import get_token_usage_service
+                            asyncio.create_task(get_token_usage_service().log(
+                                caller=caller,
+                                model_id=model_id,
+                                input_tokens=usage.get("input_tokens", 0),
+                                output_tokens=usage.get("output_tokens", 0),
+                                session_id=session_id,
+                                user_id=user_id,
+                            ))
+                        except Exception as e:
+                            print(f"[TOKEN_LOG] generate_text log error: {e}")
 
                     # Extract text from response
                     if 'content' in response_body and len(response_body['content']) > 0:
@@ -218,13 +278,17 @@ class BedrockService:
                     else:
                         raise
 
+        self._on_all_retries_exhausted()
         raise Exception(f"모든 모델이 쓰로틀링으로 실패했습니다: {last_exception}")
 
     async def generate_text_haiku(
         self,
         prompt: str,
         max_tokens: int = 1000,
-        temperature: float = 0.3
+        temperature: float = 0.3,
+        caller: str = "",
+        session_id: str = None,
+        user_id: str = None,
     ) -> str:
         """
         Haiku 모델로 텍스트 생성 (메모리 요약 등 저비용 작업용)
@@ -235,6 +299,8 @@ class BedrockService:
             "BEDROCK_FALLBACK_MODEL_ID",
             "us.anthropic.claude-haiku-4-5-20251001-v1:0"
         )
+        # 리전 폴백 시 model ID 변환
+        effective_model_id = self._get_model_id(haiku_model_id)
 
         try:
             request_body = {
@@ -249,13 +315,29 @@ class BedrockService:
                 ]
             }
 
-            print(f"[BEDROCK] generate_text_haiku: {haiku_model_id}")
+            print(f"[BEDROCK] generate_text_haiku: {effective_model_id}")
             response = self.client.invoke_model(
-                modelId=haiku_model_id,
+                modelId=effective_model_id,
                 body=json.dumps(request_body)
             )
 
             response_body = json.loads(response['body'].read())
+
+            # 토큰 사용량 로깅
+            if caller and "usage" in response_body:
+                usage = response_body["usage"]
+                try:
+                    from app.services.token_usage_service import get_token_usage_service
+                    asyncio.create_task(get_token_usage_service().log(
+                        caller=caller,
+                        model_id=effective_model_id,
+                        input_tokens=usage.get("input_tokens", 0),
+                        output_tokens=usage.get("output_tokens", 0),
+                        session_id=session_id,
+                        user_id=user_id,
+                    ))
+                except Exception as e:
+                    print(f"[TOKEN_LOG] generate_text_haiku log error: {e}")
 
             if 'content' in response_body and len(response_body['content']) > 0:
                 return response_body['content'][0]['text']
@@ -263,6 +345,8 @@ class BedrockService:
             return ""
 
         except Exception as e:
+            if is_throttling_error(e):
+                self._on_all_retries_exhausted()
             print(f"[BEDROCK] generate_text_haiku error: {e}")
             raise
 
@@ -281,6 +365,7 @@ class BedrockService:
             "BEDROCK_FALLBACK_MODEL_ID",
             "us.anthropic.claude-haiku-4-5-20251001-v1:0"
         )
+        effective_model_id = self._get_model_id(haiku_model_id)
 
         request_body = {
             "anthropic_version": "bedrock-2023-05-31",
@@ -295,9 +380,9 @@ class BedrockService:
         }
 
         try:
-            print(f"[BEDROCK] stream_text_haiku: {haiku_model_id}")
+            print(f"[BEDROCK] stream_text_haiku: {effective_model_id}")
             response = self.client.invoke_model_with_response_stream(
-                modelId=haiku_model_id,
+                modelId=effective_model_id,
                 body=json.dumps(request_body)
             )
 
@@ -309,6 +394,8 @@ class BedrockService:
                         yield delta["text"]
 
         except Exception as e:
+            if is_throttling_error(e):
+                self._on_all_retries_exhausted()
             print(f"[BEDROCK] stream_text_haiku error: {e}")
             raise
 
@@ -342,10 +429,11 @@ class BedrockService:
                 last_exception = Exception("ThrottlingException (테스트 모드)")
                 continue
 
+            model_id = self._get_model_id(model_config.model_id)
             for retry in range(RETRY_CONFIG["max_retries"]):
                 try:
                     request = {
-                        "modelId": model_config.model_id,
+                        "modelId": model_id,
                         "messages": messages,
                         "inferenceConfig": {
                             "maxTokens": min(max_tokens, model_config.max_tokens),
@@ -381,6 +469,7 @@ class BedrockService:
                     else:
                         raise
 
+        self._on_all_retries_exhausted()
         raise Exception(f"모든 모델이 쓰로틀링으로 실패했습니다: {last_exception}")
 
 

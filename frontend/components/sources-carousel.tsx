@@ -72,7 +72,7 @@ export function SourcesCarousel({ sources }: SourcesCarouselProps) {
                     rel="noopener noreferrer"
                     className="flex items-start gap-3 group h-full"
                   >
-                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-sm font-medium text-primary">
+                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-[#FF4000]/10 flex items-center justify-center text-sm font-medium text-[#FF4000]">
                       {index + 1}
                     </div>
                     <div className="flex-1 min-w-0">

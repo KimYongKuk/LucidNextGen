@@ -83,12 +83,13 @@ export function useSimpleChat({
               return {
                 media_type: matches[1],
                 base64_data: matches[2],
+                stored_filename: part.storedFilename || null,
               };
             }
           }
           return null;
         })
-        .filter((img): img is { media_type: string; base64_data: string } => !!img && !!img.base64_data) || [];
+        .filter((img): img is { media_type: string; base64_data: string; stored_filename: string | null } => !!img && !!img.base64_data) || [];
 
       // 현재 메시지 히스토리 구성 (현재 사용자 메시지 제외)
       // 최대 15회의 대화만 전송 (토큰 관리 + 워크스페이스 메모리로 이전 대화 보완)
@@ -311,12 +312,13 @@ export function useSimpleChat({
                       currentToolStatus = '';
                     }
 
-                    // 실시간 UI 업데이트 - 기존처럼 단순하게 텍스트만 업데이트
+                    // 실시간 UI 업데이트 - workerName은 메시지 객체에 별도 저장 (텍스트 마커 삽입 제거)
                     const currentContent = allChunks.join('');
                     setMessages(prev => prev.map(msg =>
                       msg.id === assistantMessageId
                         ? {
                           ...msg,
+                          workerName: workerName || msg.workerName,
                           parts: [{ type: 'text', text: currentContent }]
                         }
                         : msg
@@ -332,11 +334,9 @@ export function useSimpleChat({
                     // 스트리밍 완료 후 최종 parts 구성
                     // 팔로우업 마커 strip + 텍스트/차트/출처/Corp출처/YouTube 요약 조합
                     const rawContent = allChunks.join('');
-                    const cleanedContent = rawContent.replace(/\s*<!--FOLLOW_UP:.*?-->\s*$/s, '').trimEnd();
-                    // 워커 이름 마커 삽입 (파일 아티팩트 감지 조건부 실행에 사용)
-                    const workerMarker = workerName ? `<!--WORKER:${workerName}-->` : '';
+                    const cleanedContent = rawContent.replace(/\s*<!--FOLLOW_UP:[\s\S]*?-->\s*$/, '').trimEnd();
 
-                    const finalParts: any[] = [{ type: 'text', text: workerMarker + cleanedContent }];
+                    const finalParts: any[] = [{ type: 'text', text: cleanedContent }];
                     if (chartData) {
                       finalParts.push({ type: 'chart-data', chartData });
                     }
@@ -352,7 +352,7 @@ export function useSimpleChat({
 
                     setMessages(prev => prev.map(msg =>
                       msg.id === assistantMessageId
-                        ? { ...msg, parts: finalParts }
+                        ? { ...msg, workerName: workerName || msg.workerName, parts: finalParts }
                         : msg
                     ));
 

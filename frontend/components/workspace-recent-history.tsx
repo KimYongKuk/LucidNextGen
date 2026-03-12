@@ -26,7 +26,7 @@ export function WorkspaceRecentHistory({ workspace }: WorkspaceRecentHistoryProp
     const userId = getUserId() ?? "";
 
     const url = userId && workspace
-        ? `/api/v1/chat/sessions?user_id=${userId}&workspace_id=${workspace.uuid}&limit=4`
+        ? `/api/v1/chat/sessions?user_id=${userId}&workspace_id=${workspace.uuid}&range=all&limit=4`
         : null;
 
     const { data, isLoading } = useSWR<{ sessions: ChatSession[] }>(

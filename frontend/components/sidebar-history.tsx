@@ -86,14 +86,19 @@ const groupChatsByDate = (chats: Chat[]): GroupedChats => {
 
 export function getChatHistoryPaginationKey(
   pageIndex: number,
-  previousPageData: ChatHistory
+  previousPageData: ChatHistory,
+  workspaceId?: string | null
 ) {
   if (previousPageData && previousPageData.hasMore === false) {
     return null;
   }
 
+  // 워크스페이스 내에서는 기간 제한 없이 전체 조회
+  const range = workspaceId ? "all" : undefined;
+
   if (pageIndex === 0) {
-    return `/api/history?limit=${PAGE_SIZE}`;
+    const base = `/api/history?limit=${PAGE_SIZE}`;
+    return range ? `${base}&range=${range}` : base;
   }
 
   const cursor = previousPageData.nextCursor;
@@ -118,7 +123,7 @@ export function SidebarHistory() {
     mutate,
   } = useSWRInfinite<ChatHistory>(
     (pageIndex, previousPageData) => {
-      const base = getChatHistoryPaginationKey(pageIndex, previousPageData);
+      const base = getChatHistoryPaginationKey(pageIndex, previousPageData, workspaceId);
       if (!base) return null;
       const url = new URL(base, "http://localhost");
       url.searchParams.set("user_id", userId);

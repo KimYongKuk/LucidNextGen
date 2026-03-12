@@ -37,6 +37,12 @@ FONTS_DIR.mkdir(parents=True, exist_ok=True)
 # MCP 서버 생성
 server = Server("pdf-generator")
 
+# 페이지 레이아웃 상수 (A4 = 210mm)
+PAGE_WIDTH = 210
+MARGIN_LEFT = 25
+MARGIN_RIGHT = 25
+CONTENT_WIDTH = PAGE_WIDTH - MARGIN_LEFT - MARGIN_RIGHT  # 160mm
+
 
 class KoreanPDF(FPDF):
     """한글 지원 PDF 클래스"""
@@ -96,19 +102,20 @@ class KoreanPDF(FPDF):
                 self._consolas_available = False
 
     def setup_style(self):
-        """스타일 설정"""
+        """스타일 설정 — DOCX와 통일된 색상 체계"""
         if self.style == "technical":
             self.colors = {
-                "title": (26, 54, 93),      # 진한 파란색
-                "h2": (43, 108, 176),       # 파란색
-                "h3": (43, 108, 176),       # 파란색
-                "text": (51, 51, 51),       # 진한 회색
-                "table_header": (74, 85, 104),  # 헤더 배경 (어두운 색)
-                "table_header_text": (255, 255, 255),  # 헤더 텍스트 (흰색)
-                "table_row_even": (247, 250, 252),  # 짝수 행
-                "table_border": (226, 232, 240),    # 테두리
-                "code_bg": (26, 32, 44),    # 코드 배경
-                "code_text": (226, 232, 240),  # 코드 텍스트
+                "title": (26, 54, 93),           # 진한 네이비 (#1A365D)
+                "h2": (43, 108, 176),            # 파란색 (#2B6CB0)
+                "h3": (43, 108, 176),            # 파란색
+                "text": (51, 51, 51),            # 진한 회색 (#333333)
+                "table_header": (43, 108, 176),  # 파란색 (DOCX와 동일)
+                "table_header_text": (255, 255, 255),
+                "table_row_even": (247, 250, 252),
+                "table_border": (176, 196, 222),  # 연한 파란 (#B0C4DE)
+                "code_bg": (240, 244, 248),      # 밝은 회색 (#F0F4F8, DOCX와 동일)
+                "code_text": (45, 58, 74),       # 진한 회색 (#2D3A4A)
+                "inline_code_bg": (240, 244, 248),
             }
         elif self.style == "report":
             self.colors = {
@@ -116,12 +123,13 @@ class KoreanPDF(FPDF):
                 "h2": (51, 51, 51),
                 "h3": (68, 68, 68),
                 "text": (34, 34, 34),
-                "table_header": (245, 245, 245),  # 헤더 배경 (밝은 색)
-                "table_header_text": (34, 34, 34),  # 헤더 텍스트 (어두운 색)
-                "table_row_even": (250, 250, 250),
-                "table_border": (204, 204, 204),
-                "code_bg": (248, 248, 248),
-                "code_text": (51, 51, 51),
+                "table_header": (74, 85, 104),
+                "table_header_text": (255, 255, 255),
+                "table_row_even": (247, 250, 252),
+                "table_border": (203, 213, 224),
+                "code_bg": (247, 250, 252),
+                "code_text": (45, 58, 74),
+                "inline_code_bg": (247, 250, 252),
             }
         else:  # simple
             self.colors = {
@@ -129,12 +137,13 @@ class KoreanPDF(FPDF):
                 "h2": (68, 68, 68),
                 "h3": (85, 85, 85),
                 "text": (51, 51, 51),
-                "table_header": (245, 245, 245),  # 헤더 배경 (밝은 색)
-                "table_header_text": (51, 51, 51),  # 헤더 텍스트 (어두운 색)
-                "table_row_even": (250, 250, 250),
-                "table_border": (221, 221, 221),
+                "table_header": (226, 232, 240),
+                "table_header_text": (45, 58, 74),
+                "table_row_even": (247, 250, 252),
+                "table_border": (226, 232, 240),
                 "code_bg": (245, 245, 245),
                 "code_text": (51, 51, 51),
+                "inline_code_bg": (245, 245, 245),
             }
 
     def header(self):
@@ -151,17 +160,11 @@ class KoreanPDF(FPDF):
 
 def strip_markdown_formatting(text: str) -> str:
     """인라인 마크다운 포맷팅 제거 (**bold**, *italic*, etc.)"""
-    # **bold** → bold
     text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
-    # *italic* → italic
     text = re.sub(r'\*(.+?)\*', r'\1', text)
-    # __bold__ → bold
     text = re.sub(r'__(.+?)__', r'\1', text)
-    # _italic_ → italic
     text = re.sub(r'_(.+?)_', r'\1', text)
-    # `code` → code
     text = re.sub(r'`(.+?)`', r'\1', text)
-    # [link](url) → link
     text = re.sub(r'\[(.+?)\]\(.+?\)', r'\1', text)
     return text
 
@@ -419,19 +422,20 @@ def parse_table(table_lines: List[str]) -> Dict[str, Any]:
     return {'headers': [], 'data': []}
 
 
-def render_pdf(elements: List[Dict[str, Any]], title: str, style: str = "technical", section_per_page: bool = True) -> KoreanPDF:
+def render_pdf(elements: List[Dict[str, Any]], title: str, subtitle: str = "", style: str = "technical", section_per_page: bool = True) -> KoreanPDF:
     """구조화된 요소를 PDF로 렌더링
 
     Args:
         elements: 파싱된 마크다운 요소 목록
         title: 문서 제목
+        subtitle: 부제목 (선택)
         style: PDF 스타일 (technical, report, simple)
         section_per_page: True면 주요 섹션(h2)마다 새 페이지에서 시작
     """
     pdf = KoreanPDF(style=style)
     pdf.set_auto_page_break(auto=True, margin=20)
     pdf.add_page()
-    pdf.set_margins(15, 15, 15)
+    pdf.set_margins(MARGIN_LEFT, 20, MARGIN_RIGHT)
 
     # 섹션 페이지 나누기를 위한 상태 추적
     h1_rendered = False  # h1(제목)이 렌더링되었는지
@@ -445,49 +449,56 @@ def render_pdf(elements: List[Dict[str, Any]], title: str, style: str = "technic
             text = elem['text']
 
             if level == 1:
-                pdf.set_font(pdf.default_font, "B", 20)
+                pdf.set_font(pdf.default_font, "B", 22)
                 pdf.set_text_color(*pdf.colors['title'])
-                pdf.ln(5)
-                pdf.multi_cell(0, 10, text, align="C")
+                pdf.ln(8)
+                pdf.multi_cell(0, 11, text, align="C")
+
+                # 부제목
+                if subtitle:
+                    pdf.ln(2)
+                    pdf.set_font(pdf.default_font, "", 11)
+                    pdf.set_text_color(136, 136, 136)
+                    pdf.multi_cell(0, 7, subtitle, align="C")
+
                 pdf.ln(3)
-                # 밑줄
+                # 구분선
                 pdf.set_draw_color(*pdf.colors['h2'])
                 pdf.set_line_width(0.8)
-                pdf.line(15, pdf.get_y(), 195, pdf.get_y())
-                pdf.ln(8)
+                pdf.line(MARGIN_LEFT, pdf.get_y(), PAGE_WIDTH - MARGIN_RIGHT, pdf.get_y())
+                pdf.ln(10)
                 h1_rendered = True
 
             elif level == 2:
-                # 섹션별 페이지 나누기: h1 직후 첫 번째 h2는 같은 페이지, 이후 h2는 새 페이지
+                # 섹션별 페이지 나누기
                 if section_per_page and h1_rendered:
                     if first_h2_after_h1:
                         first_h2_after_h1 = False
-                        pdf.ln(6)  # 첫 번째 h2는 같은 페이지이므로 상단 여백 유지
+                        pdf.ln(6)
                     else:
                         pdf.add_page()
-                        # 새 페이지에서는 약간의 상단 여백만 추가
                         pdf.ln(3)
                 else:
-                    pdf.ln(6)  # section_per_page=False일 때 기존 여백 유지
+                    pdf.ln(8)
 
-                pdf.set_font(pdf.default_font, "B", 14)
+                pdf.set_font(pdf.default_font, "B", 15)
                 pdf.set_text_color(*pdf.colors['h2'])
-                pdf.multi_cell(0, 8, text)
+                pdf.multi_cell(0, 9, text)
                 # 밑줄
                 pdf.set_draw_color(*pdf.colors['h2'])
                 pdf.set_line_width(0.5)
-                pdf.line(15, pdf.get_y() + 1, 195, pdf.get_y() + 1)
-                pdf.ln(5)
+                pdf.line(MARGIN_LEFT, pdf.get_y() + 1, PAGE_WIDTH - MARGIN_RIGHT, pdf.get_y() + 1)
+                pdf.ln(6)
 
             elif level == 3:
-                pdf.ln(4)
+                pdf.ln(5)
                 pdf.set_font(pdf.default_font, "B", 12)
                 pdf.set_text_color(*pdf.colors['h3'])
                 pdf.multi_cell(0, 7, text)
                 pdf.ln(3)
 
             else:
-                pdf.ln(3)
+                pdf.ln(4)
                 pdf.set_font(pdf.default_font, "B", 11)
                 pdf.set_text_color(*pdf.colors['text'])
                 pdf.multi_cell(0, 6, text)
@@ -497,7 +508,7 @@ def render_pdf(elements: List[Dict[str, Any]], title: str, style: str = "technic
             pdf.set_font(pdf.default_font, "", 10)
             pdf.set_text_color(*pdf.colors['text'])
             pdf.multi_cell(0, 6, elem['text'], markdown=True)
-            pdf.ln(3)
+            pdf.ln(4)
 
         elif elem_type == 'list':
             render_list(pdf, elem['items'], elem['ordered'])
@@ -509,27 +520,27 @@ def render_pdf(elements: List[Dict[str, Any]], title: str, style: str = "technic
             table = parse_table(elem['lines'])
             if table['headers']:
                 render_table(pdf, table)
-            pdf.ln(3)
+            pdf.ln(4)
 
         elif elem_type == 'code':
             render_code_block(pdf, elem['text'], elem.get('lang', ''))
-            pdf.ln(3)
+            pdf.ln(4)
 
         elif elem_type == 'hr':
-            pdf.ln(3)
+            pdf.ln(4)
             pdf.set_draw_color(200, 200, 200)
             pdf.set_line_width(0.3)
-            pdf.line(15, pdf.get_y(), 195, pdf.get_y())
-            pdf.ln(5)
+            pdf.line(MARGIN_LEFT, pdf.get_y(), PAGE_WIDTH - MARGIN_RIGHT, pdf.get_y())
+            pdf.ln(6)
 
         elif elem_type == 'image':
             render_image(pdf, elem['path'], elem.get('caption', ''))
-            pdf.ln(3)
+            pdf.ln(4)
 
     return pdf
 
 
-def calculate_col_widths(headers: List[str], data: List[List[str]], max_total: float = 180) -> List[float]:
+def calculate_col_widths(headers: List[str], data: List[List[str]], max_total: float = CONTENT_WIDTH) -> List[float]:
     """컬럼 너비를 내용 기반으로 계산"""
     num_cols = len(headers)
     if num_cols == 0:
@@ -538,9 +549,7 @@ def calculate_col_widths(headers: List[str], data: List[List[str]], max_total: f
     # 각 열의 최대 문자 길이 계산
     max_lengths = []
     for col_idx in range(num_cols):
-        # 헤더 길이
         max_len = len(headers[col_idx]) if col_idx < len(headers) else 0
-        # 데이터 최대 길이
         for row in data:
             if col_idx < len(row):
                 max_len = max(max_len, len(str(row[col_idx])))
@@ -549,24 +558,39 @@ def calculate_col_widths(headers: List[str], data: List[List[str]], max_total: f
     # 총 문자 길이
     total_chars = sum(max_lengths) or 1
 
-    # 비율 기반 너비 계산 (최소 20mm, 최대 80mm)
+    # 비율 기반 너비 계산 (최소 18mm, 최대 넉넉하게)
     col_widths = []
     for length in max_lengths:
         width = (length / total_chars) * max_total
-        width = max(20, min(80, width))  # 최소 20, 최대 80
+        width = max(18, min(max_total * 0.6, width))
         col_widths.append(width)
 
     # 전체 너비 조정
     total_width = sum(col_widths)
-    if total_width > max_total:
+    if total_width != max_total:
         ratio = max_total / total_width
         col_widths = [w * ratio for w in col_widths]
 
     return col_widths
 
 
+def _measure_cell_height(pdf: KoreanPDF, text: str, col_width: float, font_size: int = 9) -> float:
+    """셀 텍스트의 렌더링 높이를 측정"""
+    pdf.set_font(pdf.default_font, "", font_size)
+    # fpdf2의 multi_cell dry_run으로 높이 계산
+    line_height = 5.5
+    str_width = pdf.get_string_width(text)
+    usable_width = col_width - 2  # 패딩
+    if usable_width <= 0:
+        usable_width = col_width
+    if str_width <= usable_width:
+        return line_height
+    num_lines = int(str_width / usable_width) + 1
+    return num_lines * line_height
+
+
 def render_table(pdf: KoreanPDF, table: Dict[str, Any]):
-    """테이블 렌더링"""
+    """테이블 렌더링 — multi_cell 기반 자동 줄바꿈"""
     headers = table['headers']
     data = table['data']
 
@@ -574,112 +598,134 @@ def render_table(pdf: KoreanPDF, table: Dict[str, Any]):
         return
 
     num_cols = len(headers)
-
-    # 동적 열 너비 계산
     col_widths = calculate_col_widths(headers, data)
+
+    line_height = 5.5
+    cell_padding = 1.5
 
     # 페이지 체크
     if pdf.get_y() > 250:
         pdf.add_page()
 
-    # 헤더 행
-    pdf.set_font(pdf.default_font, "B", 9)
-    pdf.set_fill_color(*pdf.colors['table_header'])
-    pdf.set_text_color(*pdf.colors['table_header_text'])
-    pdf.set_draw_color(*pdf.colors['table_border'])
+    def _render_header_row():
+        """헤더 행 렌더링"""
+        pdf.set_font(pdf.default_font, "B", 9)
+        pdf.set_fill_color(*pdf.colors['table_header'])
+        pdf.set_text_color(*pdf.colors['table_header_text'])
+        pdf.set_draw_color(*pdf.colors['table_border'])
 
-    for col_idx, header in enumerate(headers):
-        col_width = col_widths[col_idx] if col_idx < len(col_widths) else 30
-        # 너비에 맞게 텍스트 잘라내기 (글자당 약 2.5mm)
-        max_chars = int(col_width / 2.5)
-        display_text = header[:max_chars] if len(header) > max_chars else header
-        pdf.cell(col_width, 8, display_text, border=1, fill=True, align="C")
-    pdf.ln()
+        row_y = pdf.get_y()
+        row_height = line_height + cell_padding * 2
+
+        for col_idx, header in enumerate(headers):
+            col_width = col_widths[col_idx] if col_idx < len(col_widths) else 30
+            x = MARGIN_LEFT + sum(col_widths[:col_idx])
+            # 배경 + 테두리
+            pdf.rect(x, row_y, col_width, row_height, style='DF')
+            # 텍스트 (중앙 정렬)
+            pdf.set_xy(x + 1, row_y + cell_padding)
+            pdf.set_font(pdf.default_font, "B", 9)
+            pdf.cell(col_width - 2, line_height, header, align="C")
+
+        pdf.set_y(row_y + row_height)
+
+    _render_header_row()
 
     # 데이터 행
     pdf.set_font(pdf.default_font, "", 9)
     pdf.set_text_color(*pdf.colors['text'])
 
     for row_idx, row in enumerate(data):
-        # 짝수 행 배경색
-        if row_idx % 2 == 0:
-            pdf.set_fill_color(*pdf.colors['table_row_even'])
-            fill = True
-        else:
-            fill = False
+        # 행 높이 계산 (가장 긴 셀 기준)
+        max_cell_h = line_height
+        for col_idx in range(num_cols):
+            cell_text = str(row[col_idx]) if col_idx < len(row) else ""
+            col_width = col_widths[col_idx] if col_idx < len(col_widths) else 30
+            h = _measure_cell_height(pdf, cell_text, col_width, 9)
+            max_cell_h = max(max_cell_h, h)
+        row_height = max_cell_h + cell_padding * 2
 
         # 페이지 넘침 체크
-        if pdf.get_y() > 270:
+        if pdf.get_y() + row_height > 275:
             pdf.add_page()
-            # 헤더 다시 그리기
-            pdf.set_font(pdf.default_font, "B", 9)
-            pdf.set_fill_color(*pdf.colors['table_header'])
-            pdf.set_text_color(*pdf.colors['table_header_text'])
-            for col_idx, header in enumerate(headers):
-                col_width = col_widths[col_idx] if col_idx < len(col_widths) else 30
-                max_chars = int(col_width / 2.5)
-                display_text = header[:max_chars] if len(header) > max_chars else header
-                pdf.cell(col_width, 8, display_text, border=1, fill=True, align="C")
-            pdf.ln()
+            _render_header_row()
             pdf.set_font(pdf.default_font, "", 9)
             pdf.set_text_color(*pdf.colors['text'])
 
-        for col_idx, cell in enumerate(row):
-            if col_idx < num_cols:
-                col_width = col_widths[col_idx] if col_idx < len(col_widths) else 30
-                # 첫 번째 열은 가운데 정렬
-                align = "C" if col_idx == 0 else "L"
-                # 너비에 맞게 텍스트 잘라내기
-                max_chars = int(col_width / 2.5)
-                cell_text = str(cell)
-                display_text = cell_text[:max_chars] if len(cell_text) > max_chars else cell_text
-                pdf.cell(col_width, 7, display_text, border=1, fill=fill, align=align)
+        row_y = pdf.get_y()
 
-        # 부족한 셀 채우기
-        for missing_idx in range(num_cols - len(row)):
-            col_idx = len(row) + missing_idx
+        # 짝수 행 배경색
+        use_fill = row_idx % 2 == 0
+
+        for col_idx in range(num_cols):
             col_width = col_widths[col_idx] if col_idx < len(col_widths) else 30
-            pdf.cell(col_width, 7, "", border=1, fill=fill)
-        pdf.ln()
+            x = MARGIN_LEFT + sum(col_widths[:col_idx])
+            cell_text = str(row[col_idx]) if col_idx < len(row) else ""
 
-    # 테이블 종료 후 텍스트 색상 리셋 (흰색 방지)
+            # 셀 배경 + 테두리
+            pdf.set_draw_color(*pdf.colors['table_border'])
+            if use_fill:
+                pdf.set_fill_color(*pdf.colors['table_row_even'])
+                pdf.rect(x, row_y, col_width, row_height, style='DF')
+            else:
+                pdf.rect(x, row_y, col_width, row_height, style='D')
+
+            # 셀 텍스트 (multi_cell로 줄바꿈 지원)
+            pdf.set_xy(x + 1, row_y + cell_padding)
+            pdf.set_font(pdf.default_font, "", 9)
+            pdf.set_text_color(*pdf.colors['text'])
+            align = "C" if col_idx == 0 else "L"
+            old_margin = pdf.l_margin
+            pdf.set_left_margin(x + 1)
+            pdf.multi_cell(col_width - 2, line_height, cell_text, align=align)
+            pdf.set_left_margin(old_margin)
+
+        pdf.set_y(row_y + row_height)
+
+    # 리셋
     pdf.set_text_color(*pdf.colors['text'])
     pdf.set_font(pdf.default_font, "", 10)
 
 
 def render_code_block(pdf: KoreanPDF, code: str, lang: str = ""):
-    """코드 블록 렌더링"""
+    """코드 블록 렌더링 — 밝은 배경, 테두리, 자동 줄바꿈"""
     # 페이지 체크
     if pdf.get_y() > 240:
         pdf.add_page()
 
-    # 배경
-    start_y = pdf.get_y()
-    pdf.set_fill_color(*pdf.colors['code_bg'])
-    pdf.set_text_color(*pdf.colors['code_text'])
-    pdf.set_font(pdf.code_font, "", 8)
+    pdf.set_font(pdf.code_font, "", 8.5)
+    line_height = 4.8
 
-    # 코드 라인
     lines = code.split('\n')
-    line_height = 4.5
 
-    # 배경 박스 그리기
-    total_height = len(lines) * line_height + 8
-    pdf.rect(15, start_y, 180, total_height, style='F')
+    # 배경 + 테두리 박스
+    start_y = pdf.get_y()
+    total_height = len(lines) * line_height + 10
+    # 페이지 넘치면 분할하지 않고 새 페이지에서 시작
+    if start_y + total_height > 275:
+        pdf.add_page()
+        start_y = pdf.get_y()
 
-    pdf.set_xy(18, start_y + 3)
+    # 배경
+    pdf.set_fill_color(*pdf.colors['code_bg'])
+    pdf.set_draw_color(*pdf.colors['table_border'])
+    pdf.set_line_width(0.3)
+    pdf.rect(MARGIN_LEFT, start_y, CONTENT_WIDTH, total_height, style='DF')
+
+    # 텍스트
+    pdf.set_text_color(*pdf.colors['code_text'])
+    pdf.set_xy(MARGIN_LEFT + 4, start_y + 4)
 
     for line in lines:
-        pdf.set_x(18)
-        # 긴 라인 자르기
-        if len(line) > 95:
-            line = line[:92] + "..."
-        pdf.cell(0, line_height, line)
+        pdf.set_x(MARGIN_LEFT + 4)
+        pdf.set_font(pdf.code_font, "", 8.5)
+        # 줄바꿈 없이 한 줄씩 출력 (긴 줄은 잘리지만 잘림 표시 없음)
+        pdf.cell(CONTENT_WIDTH - 8, line_height, line)
         pdf.ln(line_height)
 
-    pdf.ln(3)
+    pdf.set_y(start_y + total_height + 2)
 
-    # 코드 블록 종료 후 텍스트 색상/폰트 리셋 (흰색 방지)
+    # 리셋
     pdf.set_text_color(*pdf.colors['text'])
     pdf.set_font(pdf.default_font, "", 10)
 
@@ -701,7 +747,7 @@ def render_list(pdf: KoreanPDF, items: List[Dict[str, Any]], ordered: bool):
         text = inline_markdown_for_pdf(item['text'])
 
         # 들여쓰기 계산
-        base_indent = 20
+        base_indent = MARGIN_LEFT + 4
         indent = base_indent + depth * 7
 
         # 프리픽스 생성
@@ -737,7 +783,7 @@ def render_list(pdf: KoreanPDF, items: List[Dict[str, Any]], ordered: bool):
             pdf.set_font(pdf.default_font, "", 10)
             pdf.set_text_color(*pdf.colors['text'])
 
-    pdf.ln(2)
+    pdf.ln(3)
     # 폰트 상태 리셋
     pdf.set_font(pdf.default_font, "", 10)
 
@@ -750,7 +796,7 @@ def render_blockquote(pdf: KoreanPDF, text: str):
     start_y = pdf.get_y()
 
     # 배경색 + 들여쓰기
-    quote_indent = 22
+    quote_indent = MARGIN_LEFT + 6
     pdf.set_fill_color(245, 247, 250)
     pdf.set_font(pdf.default_font, "", 10)
     pdf.set_text_color(85, 85, 85)
@@ -760,7 +806,7 @@ def render_blockquote(pdf: KoreanPDF, text: str):
     pdf.set_x(quote_indent)
 
     processed_text = inline_markdown_for_pdf(text)
-    pdf.multi_cell(170, 6, processed_text, markdown=True, fill=True)
+    pdf.multi_cell(CONTENT_WIDTH - 10, 6, processed_text, markdown=True, fill=True)
 
     pdf.set_left_margin(old_margin)
 
@@ -769,13 +815,13 @@ def render_blockquote(pdf: KoreanPDF, text: str):
     # 왼쪽 세로선
     pdf.set_draw_color(*pdf.colors['h2'])
     pdf.set_line_width(1.0)
-    pdf.line(19, start_y, 19, end_y)
+    pdf.line(MARGIN_LEFT + 3, start_y, MARGIN_LEFT + 3, end_y)
 
     # 리셋
     pdf.set_text_color(*pdf.colors['text'])
     pdf.set_draw_color(0, 0, 0)
     pdf.set_line_width(0.2)
-    pdf.ln(3)
+    pdf.ln(4)
 
 
 def find_chart_image(img_path: str) -> Optional[Path]:
@@ -840,12 +886,12 @@ def render_image(pdf: KoreanPDF, img_path: str, caption: str = ""):
         pdf.add_page()
 
     try:
-        # 이미지 크기 계산 (최대 너비 160mm, 최대 높이 100mm)
-        max_width = 160
+        # 이미지 크기 계산 (콘텐츠 영역에 맞춤)
+        max_width = CONTENT_WIDTH
         max_height = 100
 
         # 이미지를 중앙 정렬로 삽입
-        x_pos = (210 - max_width) / 2  # A4 너비 210mm 기준 중앙
+        x_pos = MARGIN_LEFT
 
         pdf.image(str(img_file), x=x_pos, w=max_width)
 
@@ -900,6 +946,11 @@ async def list_tools():
                     "title": {
                         "type": "string",
                         "description": "문서 제목"
+                    },
+                    "subtitle": {
+                        "type": "string",
+                        "description": "부제목 (선택사항, 제목 아래 이탤릭으로 표시)",
+                        "default": ""
                     },
                     "filename": {
                         "type": "string",
@@ -979,6 +1030,7 @@ async def call_tool(name: str, arguments: dict):
     if name == "create_document_pdf":
         content = arguments.get("content", "")
         title = arguments.get("title", "문서")
+        subtitle = arguments.get("subtitle", "")
         filename = arguments.get("filename", "output")
         style = arguments.get("style", "technical")
         section_per_page = arguments.get("section_per_page", False)
@@ -997,7 +1049,7 @@ async def call_tool(name: str, arguments: dict):
 
             # 파싱 및 렌더링
             elements = parse_markdown_content(full_content)
-            pdf = render_pdf(elements, title, style, section_per_page)
+            pdf = render_pdf(elements, title, subtitle, style, section_per_page)
 
             # 저장
             pdf.output(str(output_path))
@@ -1044,7 +1096,7 @@ async def call_tool(name: str, arguments: dict):
 
             # 파싱 및 렌더링 (technical 스타일)
             elements = parse_markdown_content(full_content)
-            pdf = render_pdf(elements, title, "technical", section_per_page)
+            pdf = render_pdf(elements, title, "", "technical", section_per_page)
 
             # 저장
             pdf.output(str(output_path))

@@ -5,11 +5,14 @@ import { KpiCard } from "./kpi-card"
 import { SectionHeader } from "./section-header"
 import type { WorkspacesData } from "@/lib/api/report"
 
+type Tab = "messages" | "documents"
+
 interface Props {
   data: WorkspacesData
+  onWorkspaceClick?: (workspaceId: string, workspaceName: string, tab: Tab) => void
 }
 
-export function WorkspaceUsage({ data }: Props) {
+export function WorkspaceUsage({ data, onWorkspaceClick }: Props) {
   return (
     <section>
       <SectionHeader title="워크스페이스 활용" subtitle="Workspace Activity" />
@@ -35,15 +38,25 @@ export function WorkspaceUsage({ data }: Props) {
             </thead>
             <tbody>
               {data.topWorkspaces.map((ws) => (
-                <tr key={ws.name} className="border-b border-[#334155]/50 transition-colors hover:bg-[#334155]/20">
+                <tr key={ws.workspaceId} className="border-b border-[#334155]/50 transition-colors hover:bg-[#334155]/20">
                   <td className="px-4 py-2.5 font-medium text-[#F3F4F6]">{ws.name}</td>
                   <td className="px-4 py-2.5 text-[#9CA3AF]">{ws.user}</td>
-                  <td className="px-4 py-2.5 text-right font-mono text-[#F3F4F6]">{ws.messages.toLocaleString()}</td>
                   <td className="px-4 py-2.5 text-right font-mono text-[#F3F4F6]">
-                    <span className="inline-flex items-center gap-1">
+                    <button
+                      onClick={() => onWorkspaceClick?.(ws.workspaceId, ws.name, "messages")}
+                      className="rounded px-1.5 py-0.5 text-[#3B82F6] transition-colors hover:bg-[#3B82F6]/10 hover:underline"
+                    >
+                      {ws.messages.toLocaleString()}
+                    </button>
+                  </td>
+                  <td className="px-4 py-2.5 text-right font-mono text-[#F3F4F6]">
+                    <button
+                      onClick={() => onWorkspaceClick?.(ws.workspaceId, ws.name, "documents")}
+                      className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[#3B82F6] transition-colors hover:bg-[#3B82F6]/10 hover:underline"
+                    >
                       <FileText className="h-3 w-3 text-[#9CA3AF]" />
                       {ws.documents}
-                    </span>
+                    </button>
                   </td>
                   <td className="px-4 py-2.5 text-right font-mono text-xs text-[#9CA3AF]">{ws.lastActive}</td>
                 </tr>

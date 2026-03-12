@@ -11,8 +11,10 @@ import { IntentDetailModal } from "@/components/dashboard/intent-detail-modal"
 import { UserDetailModal } from "@/components/dashboard/user-detail-modal"
 import { QualityMetrics } from "@/components/dashboard/quality-metrics"
 import { WorkspaceUsage } from "@/components/dashboard/workspace-usage"
+import { WorkspaceDetailModal } from "@/components/dashboard/workspace-detail-modal"
 import { FilesGenerated } from "@/components/dashboard/files-generated"
 import { PerformanceSection } from "@/components/dashboard/performance-section"
+import { TokenUsage } from "@/components/dashboard/token-usage"
 import { UserRanking } from "@/components/dashboard/user-ranking"
 import { EmailSettings } from "@/components/dashboard/email-settings"
 import { fetchAllReportData, type AllReportData } from "@/lib/api/report"
@@ -27,6 +29,9 @@ export default function ReportPage() {
 
   // User detail modal state
   const [userModal, setUserModal] = useState<string | null>(null)
+
+  // Workspace detail modal state
+  const [wsModal, setWsModal] = useState<{ workspaceId: string; name: string; tab: "messages" | "documents" } | null>(null)
 
   // Keep current date range for modal API calls
   const dateRangeRef = useRef({ from: "", to: "" })
@@ -51,6 +56,10 @@ export default function ReportPage() {
 
   const handleUserClick = useCallback((userId: string) => {
     setUserModal(userId)
+  }, [])
+
+  const handleWorkspaceClick = useCallback((workspaceId: string, name: string, tab: "messages" | "documents") => {
+    setWsModal({ workspaceId, name, tab })
   }, [])
 
   return (
@@ -97,9 +106,10 @@ export default function ReportPage() {
             <UserRanking data={data.userRanking} onUserClick={handleUserClick} />
             <IntentDistribution data={data.intents} onIntentClick={handleIntentClick} />
             <QualityMetrics data={data.quality} />
-            <WorkspaceUsage data={data.workspaces} />
+            <WorkspaceUsage data={data.workspaces} onWorkspaceClick={handleWorkspaceClick} />
             <FilesGenerated data={data.artifacts} />
             <PerformanceSection data={data.performance} />
+            <TokenUsage data={data.tokenUsage} />
           </>
         )}
 
@@ -125,6 +135,18 @@ export default function ReportPage() {
           dateFrom={dateRangeRef.current.from}
           dateTo={dateRangeRef.current.to}
           onClose={() => setUserModal(null)}
+        />
+      )}
+
+      {/* Workspace Detail Modal */}
+      {wsModal && (
+        <WorkspaceDetailModal
+          workspaceId={wsModal.workspaceId}
+          workspaceName={wsModal.name}
+          dateFrom={dateRangeRef.current.from}
+          dateTo={dateRangeRef.current.to}
+          initialTab={wsModal.tab}
+          onClose={() => setWsModal(null)}
         />
       )}
 

@@ -16,9 +16,15 @@ from app.services.chromadb_service import (
 PDF_OUTPUT_DIR = FilePath(__file__).parent.parent.parent.parent / "data" / "pdf_output"
 # PPT 출력 디렉토리
 PPT_OUTPUT_DIR = FilePath(__file__).parent.parent.parent.parent / "data" / "ppt_output"
+# DOCX 출력 디렉토리
+DOCX_OUTPUT_DIR = FilePath(__file__).parent.parent.parent.parent / "data" / "docx_output"
 # XLSX 디렉토리
 XLSX_UPLOAD_DIR = FilePath(__file__).parent.parent.parent.parent / "data" / "xlsx_upload"
 XLSX_OUTPUT_DIR = FilePath(__file__).parent.parent.parent.parent / "data" / "xlsx_output"
+# 사용자 업로드 디렉토리 (이미지 포함, 날짜/사용자ID별 정리)
+USER_UPLOAD_DIR = FilePath(__file__).parent.parent.parent.parent / "data" / "user_uploads"
+# 레거시 이미지 디렉토리 (기존 stored_filename 하위 호환용)
+IMAGE_OUTPUT_DIR_LEGACY = FilePath(__file__).parent.parent.parent.parent / "data" / "image_output"
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -122,7 +128,21 @@ async def upload_file(
             detail=f"파일 크기는 10MB를 초과할 수 없습니다. (현재: {file_size / (1024*1024):.2f}MB)"
         )
 
-    # 1-1. Excel 파일은 원본도 디스크에 저장 (XlsxWorker가 직접 조작하기 위해)
+    # 1-1. 업로드 원본 파일을 디스크에 보관 (user_uploads/{date}/{user_id}/)
+    try:
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d")
+        safe_uid = user_id.replace("/", "").replace("\\", "").replace("..", "").replace(" ", "_")
+        upload_dir = USER_UPLOAD_DIR / today / safe_uid
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        upload_path = upload_dir / file.filename
+        with open(upload_path, "wb") as f:
+            f.write(file_content)
+        logger.info(f"Original file saved: {upload_path}")
+    except Exception as e:
+        logger.warning(f"Failed to save original file: {e}")
+
+    # 1-2. Excel 파일은 XlsxWorker 작업용으로 별도 경로에도 저장
     if file.filename and file.filename.lower().endswith(('.xlsx', '.xls')):
         try:
             xlsx_dir = XLSX_UPLOAD_DIR / (session_id or "no_session")
@@ -254,13 +274,29 @@ async def upload_image(
         
         # Base64 인코딩
         base64_data = base64.b64encode(file_content).decode("utf-8")
-        
-        logger.info(f"Image uploaded: {file.filename} ({file.content_type}, {len(file_content)} bytes)")
-        
+
+        # 디스크에 저장 (채팅 히스토리 복원용, user_uploads/{date}/{user_id}/)
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d")
+        ext = FilePath(file.filename).suffix if file.filename else ".png"
+        safe_user_id = user_id.replace("/", "").replace("\\", "").replace("..", "").replace(" ", "_")
+        unique_name = f"{uuid.uuid4()}{ext}"
+
+        image_dir = USER_UPLOAD_DIR / today / safe_user_id
+        image_dir.mkdir(parents=True, exist_ok=True)
+        image_path = image_dir / unique_name
+        image_path.write_bytes(file_content)
+
+        # stored_filename에 상대 경로 포함 (날짜/사용자ID/파일명)
+        stored_filename = f"{today}/{safe_user_id}/{unique_name}"
+
+        logger.info(f"Image uploaded by {user_id}: {file.filename} ({file.content_type}, {len(file_content)} bytes) -> {stored_filename}")
+
         return {
             "media_type": file.content_type,
             "base64_data": base64_data,
             "filename": file.filename,
+            "stored_filename": stored_filename,
         }
         
     except HTTPException:
@@ -663,9 +699,62 @@ async def list_generated_pdfs():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/v1/image/download/{filename:path}")
+async def download_image(filename: str):
+    """이미지 파일 다운로드 (채팅 히스토리 복원용)
+
+    stored_filename 형식:
+    - 신규: {date}/{user_id}/{uuid}.ext (user_uploads/ 하위)
+    - 레거시: {user_id}_{uuid}.ext (image_output/ 하위)
+    """
+    from urllib.parse import unquote
+    import mimetypes
+
+    try:
+        decoded_filename = unquote(filename)
+        if ".." in decoded_filename:
+            raise HTTPException(status_code=400, detail="Invalid filename")
+
+        file_path = None
+
+        # 1) 신규 형식: user_uploads/{date}/{user_id}/{filename}
+        if "/" in decoded_filename:
+            candidate = USER_UPLOAD_DIR / decoded_filename
+            resolved = candidate.resolve()
+            # path traversal 방어
+            if str(resolved).startswith(str(USER_UPLOAD_DIR.resolve())):
+                if resolved.exists():
+                    file_path = resolved
+
+        # 2) 레거시 형식: image_output/{flat_filename}
+        if file_path is None:
+            safe_filename = decoded_filename.replace("/", "").replace("\\", "")
+            candidate = IMAGE_OUTPUT_DIR_LEGACY / safe_filename
+            if candidate.exists():
+                file_path = candidate
+
+        if file_path is None:
+            raise HTTPException(status_code=404, detail=f"Image not found: {decoded_filename}")
+
+        media_type, _ = mimetypes.guess_type(str(file_path))
+        if not media_type or not media_type.startswith("image/"):
+            media_type = "application/octet-stream"
+
+        return FileResponse(
+            path=str(file_path),
+            media_type=media_type,
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to download image: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/v1/pdf/download/{filename:path}")
-async def download_pdf(filename: str):
-    """PDF 파일 다운로드"""
+async def download_pdf(filename: str, inline: bool = False):
+    """PDF 파일 다운로드 (inline=true 시 브라우저에서 미리보기)"""
     from urllib.parse import quote, unquote
 
     try:
@@ -688,11 +777,14 @@ async def download_pdf(filename: str):
         # 한글 파일명 인코딩
         encoded_filename = quote(safe_filename)
 
+        # inline: 브라우저 내장 PDF 뷰어로 표시, attachment: 다운로드
+        disposition = "inline" if inline else "attachment"
+
         return FileResponse(
             path=str(file_path),
             media_type="application/pdf",
             headers={
-                "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
+                "Content-Disposition": f"{disposition}; filename*=UTF-8''{encoded_filename}"
             }
         )
     except HTTPException:
@@ -734,6 +826,41 @@ async def download_ppt(filename: str):
         raise
     except Exception as e:
         logger.error(f"Failed to download PPT: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/v1/docx/download/{filename:path}")
+async def download_docx(filename: str):
+    """DOCX(Word) 파일 다운로드"""
+    from urllib.parse import quote, unquote
+
+    try:
+        decoded_filename = unquote(filename)
+
+        if ".." in decoded_filename:
+            raise HTTPException(status_code=400, detail="Invalid filename")
+
+        safe_filename = decoded_filename.replace("/", "").replace("\\", "")
+
+        file_path = DOCX_OUTPUT_DIR / safe_filename
+
+        if not file_path.exists():
+            logger.error(f"DOCX not found: {file_path}")
+            raise HTTPException(status_code=404, detail=f"DOCX not found: {safe_filename}")
+
+        encoded_filename = quote(safe_filename)
+
+        return FileResponse(
+            path=str(file_path),
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={
+                "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to download DOCX: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

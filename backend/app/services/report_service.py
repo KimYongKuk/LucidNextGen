@@ -362,6 +362,7 @@ class ReportService:
         for r in top_rows:
             doc_count = self._get_workspace_doc_count(r["ws_uuid"])
             top_workspaces.append({
+                "workspaceId": r["ws_uuid"],
                 "name": r["name"],
                 "user": r["user"],
                 "messages": r["messages"],
@@ -396,6 +397,74 @@ class ReportService:
             return len(file_ids)
         except Exception:
             return 0
+
+    def get_workspace_detail(self, date_from: str, date_to: str, workspace_id: str, tab: str = "messages") -> dict:
+        """워크스페이스 상세 - 메시지 목록 또는 문서 목록"""
+        result: dict = {"workspaceId": workspace_id, "tab": tab}
+
+        if tab == "messages":
+            with self.db.get_cursor() as cursor:
+                cursor.execute("""
+                    SELECT
+                        DATE_FORMAT(cl.createDate, '%%m/%%d %%H:%%i') as datetime,
+                        LEFT(cl.inputLog, 150) as question,
+                        LEFT(cl.outputLog, 200) as answer,
+                        COALESCE(cl.intent, 'unknown') as intent,
+                        cl.worker_name,
+                        cl.response_time_ms
+                    FROM chat_log_new cl
+                    JOIN chat_sessions cs ON cl.session = cs.session_id
+                    WHERE cs.workspace_id = %s
+                      AND cl.createDate >= %s AND cl.createDate < DATE_ADD(%s, INTERVAL 1 DAY)
+                    ORDER BY cl.createDate DESC
+                    LIMIT 50
+                """, (workspace_id, date_from, date_to))
+                rows = cursor.fetchall()
+
+            messages = []
+            for r in rows:
+                intent_key = r["intent"]
+                messages.append({
+                    "datetime": r["datetime"],
+                    "question": r["question"],
+                    "answer": r["answer"],
+                    "intent": INTENT_LABEL.get(intent_key, intent_key or "미분류"),
+                    "responseTimeMs": r["response_time_ms"],
+                })
+            result["messages"] = messages
+
+        elif tab == "documents":
+            documents = []
+            try:
+                from app.services.chromadb_service import get_chromadb_service
+                chromadb = get_chromadb_service()
+                collection_name = f"workspace_{workspace_id}"
+                collection = chromadb.client.get_collection(
+                    collection_name,
+                    embedding_function=chromadb.embedding_function,
+                )
+                if collection.count() > 0:
+                    records = collection.get(include=["metadatas"])
+                    seen_files: dict = {}
+                    for meta in records.get("metadatas", []):
+                        if not meta:
+                            continue
+                        file_id = meta.get("file_id", "")
+                        if file_id and file_id not in seen_files:
+                            seen_files[file_id] = {
+                                "fileId": file_id,
+                                "fileName": meta.get("file_name", file_id),
+                                "fileType": meta.get("file_type", "unknown"),
+                                "chunks": 0,
+                            }
+                        if file_id:
+                            seen_files[file_id]["chunks"] += 1
+                    documents = list(seen_files.values())
+            except Exception:
+                pass
+            result["documents"] = documents
+
+        return result
 
     def get_artifacts(self, date_from: str, date_to: str) -> dict:
         """파일 & 생성물 현황 - 디렉토리 스캔 + DB 기반"""
@@ -543,21 +612,31 @@ class ReportService:
             """, (date_from, date_to))
             totals = cursor.fetchone()
 
-            # Top 30 users by message count
+            # Top 30 users by message count (with token usage)
             cursor.execute(f"""
                 SELECT
-                    userId,
+                    cl.userId,
                     COUNT(*) as message_count,
-                    COUNT(DISTINCT session) as session_count,
-                    DATE_FORMAT(MAX(createDate), '%%m/%%d %%H:%%i') as last_active,
-                    ROUND(AVG(response_time_ms)) as avg_response_ms
-                FROM chat_log_new
-                WHERE createDate >= %s AND createDate < DATE_ADD(%s, INTERVAL 1 DAY)
-                {_EXCLUDED_USERS_SQL}
-                GROUP BY userId
+                    COUNT(DISTINCT cl.session) as session_count,
+                    DATE_FORMAT(MAX(cl.createDate), '%%m/%%d %%H:%%i') as last_active,
+                    ROUND(AVG(cl.response_time_ms)) as avg_response_ms,
+                    COALESCE(t.total_tokens, 0) as total_tokens
+                FROM chat_log_new cl
+                LEFT JOIN (
+                    SELECT user_id,
+                           ROUND(SUM(input_tokens + output_tokens
+                                     + cache_read_tokens * 0.1
+                                     + cache_write_tokens * 1.25)) as total_tokens
+                    FROM token_usage_log
+                    WHERE created_at >= %s AND created_at < DATE_ADD(%s, INTERVAL 1 DAY)
+                    GROUP BY user_id
+                ) t ON cl.userId = t.user_id COLLATE utf8mb4_general_ci
+                WHERE cl.createDate >= %s AND cl.createDate < DATE_ADD(%s, INTERVAL 1 DAY)
+                {_EXCLUDED_USERS_SQL.replace('userId', 'cl.userId')}
+                GROUP BY cl.userId
                 ORDER BY message_count DESC
                 LIMIT 30
-            """, (date_from, date_to))
+            """, (date_from, date_to, date_from, date_to))
             user_rows = cursor.fetchall()
 
             # Per-user favorite intent (unknown 제외, 없으면 fallback)
@@ -581,6 +660,7 @@ class ReportService:
                     "rank": idx + 1,
                     "userId": user_id,
                     "messageCount": r["message_count"],
+                    "totalTokens": int(r.get("total_tokens") or 0),
                     "sessionCount": r["session_count"],
                     "lastActive": r["last_active"],
                     "avgResponseMs": int(r["avg_response_ms"] or 0),
@@ -625,6 +705,131 @@ class ReportService:
             })
 
         return {"messages": messages, "userId": user_id}
+
+
+    def get_token_usage(self, date_from: str, date_to: str) -> dict:
+        """토큰 사용량 모니터링 — 모델별, 워커(caller)별, 일별 추이"""
+        with self.db.get_cursor() as cursor:
+            # 1) 전체 합계
+            cursor.execute("""
+                SELECT
+                    COALESCE(SUM(input_tokens), 0) as total_input,
+                    COALESCE(SUM(output_tokens), 0) as total_output,
+                    COALESCE(SUM(cache_read_tokens), 0) as total_cache_read,
+                    COALESCE(SUM(cache_write_tokens), 0) as total_cache_write,
+                    COUNT(*) as total_calls
+                FROM token_usage_log
+                WHERE created_at >= %s AND created_at < DATE_ADD(%s, INTERVAL 1 DAY)
+            """, (date_from, date_to))
+            totals = cursor.fetchone()
+
+            # 2) 모델별
+            cursor.execute("""
+                SELECT
+                    model_type,
+                    SUM(input_tokens) as input_tokens,
+                    SUM(output_tokens) as output_tokens,
+                    COUNT(*) as call_count
+                FROM token_usage_log
+                WHERE created_at >= %s AND created_at < DATE_ADD(%s, INTERVAL 1 DAY)
+                GROUP BY model_type
+                ORDER BY input_tokens DESC
+            """, (date_from, date_to))
+            by_model = [
+                {
+                    "modelType": r["model_type"],
+                    "inputTokens": int(r["input_tokens"] or 0),
+                    "outputTokens": int(r["output_tokens"] or 0),
+                    "callCount": r["call_count"],
+                }
+                for r in cursor.fetchall()
+            ]
+
+            # 3) 워커(caller)별 — 모델별 구분 포함
+            cursor.execute("""
+                SELECT
+                    caller,
+                    model_type,
+                    SUM(input_tokens) as input_tokens,
+                    SUM(output_tokens) as output_tokens,
+                    COUNT(*) as call_count
+                FROM token_usage_log
+                WHERE created_at >= %s AND created_at < DATE_ADD(%s, INTERVAL 1 DAY)
+                GROUP BY caller, model_type
+                ORDER BY input_tokens DESC
+            """, (date_from, date_to))
+            by_caller = [
+                {
+                    "caller": r["caller"],
+                    "modelType": r["model_type"],
+                    "inputTokens": int(r["input_tokens"] or 0),
+                    "outputTokens": int(r["output_tokens"] or 0),
+                    "callCount": r["call_count"],
+                }
+                for r in cursor.fetchall()
+            ]
+
+            # 4) 일별 추이 — 모델별 분리
+            cursor.execute("""
+                SELECT
+                    DATE_FORMAT(created_at, '%%m/%%d') as date,
+                    model_type,
+                    SUM(input_tokens + output_tokens) as total_tokens
+                FROM token_usage_log
+                WHERE created_at >= %s AND created_at < DATE_ADD(%s, INTERVAL 1 DAY)
+                GROUP BY DATE(created_at), model_type
+                ORDER BY DATE(created_at)
+            """, (date_from, date_to))
+            daily_raw = cursor.fetchall()
+
+            # 날짜별로 sonnet/haiku 합산
+            daily_map = {}
+            for r in daily_raw:
+                d = r["date"]
+                if d not in daily_map:
+                    daily_map[d] = {"date": d, "sonnetTokens": 0, "haikuTokens": 0}
+                if r["model_type"] == "sonnet":
+                    daily_map[d]["sonnetTokens"] = int(r["total_tokens"] or 0)
+                else:
+                    daily_map[d]["haikuTokens"] = int(r["total_tokens"] or 0)
+            daily_trend = list(daily_map.values())
+
+            # 5) 사용자별 토큰 top 20
+            cursor.execute(f"""
+                SELECT
+                    user_id,
+                    ROUND(SUM(input_tokens + output_tokens
+                             + cache_read_tokens * 0.1
+                             + cache_write_tokens * 1.25)) as total_tokens,
+                    COUNT(*) as call_count
+                FROM token_usage_log
+                WHERE created_at >= %s AND created_at < DATE_ADD(%s, INTERVAL 1 DAY)
+                  AND user_id IS NOT NULL
+                  {_EXCLUDED_USERS_SQL.replace('userId', 'user_id')}
+                GROUP BY user_id
+                ORDER BY total_tokens DESC
+                LIMIT 20
+            """, (date_from, date_to))
+            top_users = [
+                {
+                    "userId": r["user_id"],
+                    "totalTokens": int(r["total_tokens"] or 0),
+                    "callCount": r["call_count"],
+                }
+                for r in cursor.fetchall()
+            ]
+
+        return {
+            "totalInputTokens": int(totals["total_input"] or 0),
+            "totalOutputTokens": int(totals["total_output"] or 0),
+            "totalCacheReadTokens": int(totals["total_cache_read"] or 0),
+            "totalCacheWriteTokens": int(totals["total_cache_write"] or 0),
+            "totalCalls": totals["total_calls"] or 0,
+            "byModel": by_model,
+            "byCaller": by_caller,
+            "dailyTrend": daily_trend,
+            "topUsers": top_users,
+        }
 
 
 _report_service: Optional[ReportService] = None

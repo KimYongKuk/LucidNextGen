@@ -150,7 +150,8 @@ class ChatLogService:
             response = await self.bedrock.generate_text(
                 prompt=prompt,
                 max_tokens=50,
-                temperature=0.3
+                temperature=0.3,
+                caller="title_generation",
             )
             title = response.strip()
             # 따옴표 제거
@@ -418,18 +419,20 @@ class ChatLogService:
                     print(f"[WARNING] Failed to parse metadata: {e}")
                     metadata = {}
 
-            # User message
-            messages.append({
+            # User message (이미지 참조가 있으면 첨부)
+            user_msg = {
                 "role": "user",
                 "content": row["inputLog"],
                 "timestamp": row["createDate"],
-            })
-            # Assistant response (with metadata)
+            }
+            if metadata.get("images"):
+                user_msg["images"] = metadata["images"]
+            messages.append(user_msg)
+            # Assistant response (with metadata, 이미지는 user 메시지에만 포함)
             assistant_msg = {
                 "role": "assistant",
                 "content": row["outputLog"],
                 "timestamp": row["createDate"],
-                "images": metadata.get("images", []),
                 "sources": metadata.get("sources", []),
             }
 
@@ -448,6 +451,24 @@ class ChatLogService:
             messages.append(assistant_msg)
 
         return messages
+
+    def get_last_intent(self, session_id: str) -> Optional[str]:
+        """세션의 마지막 채팅 로그에서 intent를 조회 (follow-up 판단용)"""
+        query = """
+            SELECT intent
+            FROM chat_log_new
+            WHERE session = %s AND intent IS NOT NULL
+            ORDER BY createDate DESC
+            LIMIT 1
+        """
+        try:
+            with self.db.get_cursor() as cursor:
+                cursor.execute(query, (session_id,))
+                row = cursor.fetchone()
+                return row["intent"] if row else None
+        except Exception as e:
+            print(f"[ChatLogService] get_last_intent error: {e}")
+            return None
 
 
 _chat_log_service: Optional[ChatLogService] = None

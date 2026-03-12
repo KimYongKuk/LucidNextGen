@@ -61,7 +61,41 @@ const EMPTY_RESPONSE: NotificationData = {
   approvals: EMPTY_APPROVALS,
 };
 
+export interface FastNotificationData {
+  notices: SectionData<NoticeItem>;
+  approvals: ApprovalData;
+}
+
 export { EMPTY_APPROVALS };
+
+export async function fetchFastNotifications(
+  userId: string
+): Promise<FastNotificationData> {
+  try {
+    const res = await fetch(
+      `${getApiUrl()}/api/v1/notifications/fast?user_id=${encodeURIComponent(userId)}`
+    );
+    if (!res.ok)
+      return { notices: { items: [], count: 0 }, approvals: EMPTY_APPROVALS };
+    return res.json();
+  } catch {
+    return { notices: { items: [], count: 0 }, approvals: EMPTY_APPROVALS };
+  }
+}
+
+export async function fetchMailNotifications(
+  userId: string
+): Promise<SectionData<MailItem>> {
+  try {
+    const res = await fetch(
+      `${getApiUrl()}/api/v1/notifications/mail?user_id=${encodeURIComponent(userId)}`
+    );
+    if (!res.ok) return { items: [], count: 0 };
+    return res.json();
+  } catch {
+    return { items: [], count: 0 };
+  }
+}
 
 export async function fetchTodayNotifications(
   userId: string

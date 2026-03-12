@@ -1,7 +1,7 @@
 # LFChatbot - NextJS + FastAPI
 
 ## 프로젝트 개요
-LF(Lucid Fund) 챗봇 시스템으로, Next.js 프론트엔드와 FastAPI 백엔드로 구성된 전체스택 웹 애플리케이션입니다. AWS Bedrock을 활용한 AI 챗봇 서비스를 제공합니다.
+Lucid AI 챗봇 시스템으로, Next.js 프론트엔드와 FastAPI 백엔드로 구성된 전체스택 웹 애플리케이션입니다. AWS Bedrock을 활용한 AI 챗봇 서비스를 제공합니다.
 
 ## 기술 스택
 

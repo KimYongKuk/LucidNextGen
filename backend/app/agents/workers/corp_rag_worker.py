@@ -68,6 +68,9 @@ TOOL DOMAINS:
 - search_hr_docs: 인사, 채용, 휴가, 급여, 복리후생 제도, 교육, 평가
 - search_safety_docs: 산업안전보건, 환경, 소방, 재해대응, ISO, 작업환경, 건강관리
 - execute_org_chart_query: 담당자 찾기, 부서/직무/근무지 검색, 조직도 조회
+  ⭐ HIERARCHICAL ORG CHART: When user asks for "XX 조직도", "XX 전체 인원", "XX 하위 부서" etc.,
+  you MUST use 2-step query: (1) find 부서ID + 부서경로 first, (2) query using 부서경로 LIKE 'path:부서ID:%' OR 부서ID = N.
+  See Case 10-12 in schema reference below. NEVER use simple 부서 ILIKE for org chart queries.
 (NOTE: IT/재경 문서는 각각 ITSupportWorker, AcctSupportWorker에서 담당)
 
 PARALLEL CALL STRATEGY:

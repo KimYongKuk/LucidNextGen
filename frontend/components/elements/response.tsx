@@ -10,21 +10,31 @@ import { CodeBlock, CodeBlockCopyButton } from "@/components/elements/code-block
 import { FileDown, TableIcon, CheckIcon, Eye } from "lucide-react";
 import { copyToClipboard } from "@/lib/clipboard";
 import { useXlsxViewer } from "@/hooks/use-xlsx-viewer";
+import { useDocumentViewer } from "@/hooks/use-document-viewer";
 
-// PDF 다운로드 링크 컴포넌트
+// PDF 다운로드 + 미리보기 링크 컴포넌트
 const PDFDownloadLink = ({ filename }: { filename: string }) => {
-  // 상대 경로 사용 - Next.js rewrites로 백엔드로 프록시
+  const { openFile } = useDocumentViewer();
   const downloadUrl = `/api/v1/pdf/download/${encodeURIComponent(filename)}`;
 
   return (
-    <a
-      href={downloadUrl}
-      download={filename}
-      className="inline-flex items-center gap-1.5 text-blue-600 dark:text-blue-400 hover:underline text-sm"
-    >
-      <FileDown className="w-4 h-4" />
-      {filename} 다운로드
-    </a>
+    <div className="inline-flex items-center gap-3">
+      <button
+        onClick={() => openFile(filename, "pdf")}
+        className="inline-flex items-center gap-1.5 text-blue-600 dark:text-blue-400 hover:underline text-sm cursor-pointer"
+      >
+        <Eye className="w-4 h-4" />
+        {filename} 미리보기
+      </button>
+      <a
+        href={downloadUrl}
+        download={filename}
+        className="inline-flex items-center gap-1.5 text-muted-foreground hover:text-foreground text-sm"
+      >
+        <FileDown className="w-4 h-4" />
+        다운로드
+      </a>
+    </div>
   );
 };
 
@@ -41,6 +51,32 @@ const PPTDownloadLink = ({ filename }: { filename: string }) => {
       <FileDown className="w-4 h-4" />
       {filename} 다운로드
     </a>
+  );
+};
+
+// DOCX 다운로드 + 미리보기 링크 컴포넌트
+const DocxDownloadLink = ({ filename }: { filename: string }) => {
+  const { openFile } = useDocumentViewer();
+  const downloadUrl = `/api/v1/docx/download/${encodeURIComponent(filename)}`;
+
+  return (
+    <div className="inline-flex items-center gap-3">
+      <button
+        onClick={() => openFile(filename, "docx")}
+        className="inline-flex items-center gap-1.5 text-indigo-600 dark:text-indigo-400 hover:underline text-sm cursor-pointer"
+      >
+        <Eye className="w-4 h-4" />
+        {filename} 미리보기
+      </button>
+      <a
+        href={downloadUrl}
+        download={filename}
+        className="inline-flex items-center gap-1.5 text-muted-foreground hover:text-foreground text-sm"
+      >
+        <FileDown className="w-4 h-4" />
+        다운로드
+      </a>
+    </div>
   );
 };
 
@@ -75,7 +111,8 @@ const XLSXDownloadLink = ({ filename }: { filename: string }) => {
 const processPDFContent = (content: string, workerName?: string): { processedContent: string; pdfFiles: string[] } => {
   const pdfFiles: string[] = [];
   // 워커 마커가 있으면 해당 워커만, 없으면 모든 패턴 활성 (기존 메시지 하위호환)
-  const useBroadPatterns = !workerName || workerName === 'visualization_worker';
+  // Note: 백엔드 INTENT_TO_WORKER는 PascalCase ("VisualizationWorker") 전송
+  const useBroadPatterns = !workerName || /^visualization/i.test(workerName);
 
   // 파일명에서 백틱, 따옴표, 별표 등 특수문자 제거
   const cleanFilename = (filename: string): string => {
@@ -96,9 +133,11 @@ const processPDFContent = (content: string, workerName?: string): { processedCon
 
   // 광범위 패턴 (해당 워커 또는 마커 없을 때만 활성)
   // 패턴 1: "파일명: xxx.pdf" 또는 "**파일명:** xxx.pdf" (백틱 포함 가능)
-  const filenamePattern = /\*?\*?파일명\*?\*?:\s*`?([^\n`]+\.pdf)`?/gi;
+  // (?<![가-힣]) — "첨부파일명:" 등 복합어 내 false positive 방지
+  const filenamePattern = /(?<![가-힣])\*?\*?파일명\*?\*?:\s*`?([^\n`]+\.pdf)`?/gi;
   // 패턴 2: "📄 파일: filename.pdf" 또는 "파일: filename.pdf" (백틱 포함 가능)
-  const filePattern = /(?:📄\s*)?\*?\*?파일\*?\*?:\s*`?([^\n`]+\.pdf)`?/gi;
+  // (?<![가-힣]) — "첨부파일:" 등 복합어 내 false positive 방지
+  const filePattern = /(?:📄\s*)?(?<![가-힣])\*?\*?파일\*?\*?:\s*`?([^\n`]+\.pdf)`?/gi;
   // 경로 기반 패턴 (항상 활성 — 충분히 구체적)
   // 패턴 3: "pdf_output/filename.pdf" 또는 "pdf_output\\filename.pdf"
   const pathPattern = /pdf_output[/\\]([^\s\n`'"]+\.pdf)/gi;
@@ -139,7 +178,7 @@ const processPDFContent = (content: string, workerName?: string): { processedCon
 
   // 경로 정보 라인 제거 (다운로드 버튼으로 대체) - bold 마크다운 포함
   let processedContent = content
-    .replace(/\*?\*?파일명\*?\*?:\s*[^\n]+\.pdf\n?/gi, '')
+    .replace(/\*?\*?파일명\*?\*?:\s*[^\n]+\.pdf\*?\*?\n?/gi, '')
     .replace(/\*?\*?파일 위치\*?\*?:\s*[^\n]+\n?/gi, '')
     .replace(/\*?\*?저장 위치\*?\*?:\s*[^\n]+\n?/gi, '')
     .replace(/📁\s*경로:\s*[^\n]+\.pdf\n?/gi, '')
@@ -151,7 +190,8 @@ const processPDFContent = (content: string, workerName?: string): { processedCon
 // PPT 경로에서 파일명 추출 및 다운로드 링크로 변환
 const processPPTContent = (content: string, workerName?: string): { processedContent: string; pptFiles: string[] } => {
   const pptFiles: string[] = [];
-  const useBroadPatterns = !workerName || workerName === 'ppt_worker';
+  // Note: 백엔드 INTENT_TO_WORKER는 PascalCase ("PPTWorker") 전송
+  const useBroadPatterns = !workerName || /^ppt/i.test(workerName);
 
   const cleanFilename = (filename: string): string => {
     let cleaned = filename
@@ -168,8 +208,9 @@ const processPPTContent = (content: string, workerName?: string): { processedCon
   };
 
   // 광범위 패턴 (해당 워커 또는 마커 없을 때만 활성)
-  const filenamePattern = /\*?\*?파일명\*?\*?:\s*`?([^\n`]+\.pptx)`?/gi;
-  const filePattern = /(?:📊\s*)?\*?\*?파일\*?\*?:\s*`?([^\n`]+\.pptx)`?/gi;
+  // (?<![가-힣]) — "첨부파일:" 등 복합어 내 false positive 방지
+  const filenamePattern = /(?<![가-힣])\*?\*?파일명\*?\*?:\s*`?([^\n`]+\.pptx)`?/gi;
+  const filePattern = /(?:📊\s*)?(?<![가-힣])\*?\*?파일\*?\*?:\s*`?([^\n`]+\.pptx)`?/gi;
   // 경로 기반 패턴 (항상 활성)
   const pathPattern = /ppt_output[/\\]([^\s\n`'"]+\.pptx)/gi;
   const fullPathPattern = /[A-Z]:[\\\/].*?[\\\/]ppt_output[\\\/]([^\s\n`'"]+\.pptx)/gi;
@@ -196,7 +237,7 @@ const processPPTContent = (content: string, workerName?: string): { processedCon
   }
 
   let processedContent = content
-    .replace(/\*?\*?파일명\*?\*?:\s*[^\n]+\.pptx\n?/gi, '')
+    .replace(/\*?\*?파일명\*?\*?:\s*[^\n]+\.pptx\*?\*?\n?/gi, '')
     .replace(/\*?\*?파일 위치\*?\*?:\s*[^\n]*ppt_output[^\n]*\n?/gi, '')
     .replace(/\*?\*?저장 위치\*?\*?:\s*[^\n]*ppt_output[^\n]*\n?/gi, '')
     .replace(/\*?\*?경로\*?\*?:\s*[^\n]*ppt_output[^\n]*\n?/gi, '');
@@ -207,7 +248,8 @@ const processPPTContent = (content: string, workerName?: string): { processedCon
 // XLSX 경로에서 파일명 추출 및 다운로드 링크로 변환
 const processXLSXContent = (content: string, workerName?: string): { processedContent: string; xlsxFiles: string[] } => {
   const xlsxFiles: string[] = [];
-  const useBroadPatterns = !workerName || workerName === 'xlsx_worker';
+  // Note: 백엔드 INTENT_TO_WORKER는 PascalCase ("XlsxWorker") 전송
+  const useBroadPatterns = !workerName || /^xlsx/i.test(workerName);
 
   const cleanFilename = (filename: string): string => {
     let cleaned = filename
@@ -224,8 +266,9 @@ const processXLSXContent = (content: string, workerName?: string): { processedCo
   };
 
   // 광범위 패턴 (해당 워커 또는 마커 없을 때만 활성)
-  const filenamePattern = /\*?\*?파일명\*?\*?:\s*`?([^\n`]+\.xlsx)`?/gi;
-  const filePattern = /(?:📊\s*)?\*?\*?파일\*?\*?:\s*`?([^\n`]+\.xlsx)`?/gi;
+  // (?<![가-힣]) — "첨부파일:" 등 복합어 내 false positive 방지
+  const filenamePattern = /(?<![가-힣])\*?\*?파일명\*?\*?:\s*`?([^\n`]+\.xlsx)`?/gi;
+  const filePattern = /(?:📊\s*)?(?<![가-힣])\*?\*?파일\*?\*?:\s*`?([^\n`]+\.xlsx)`?/gi;
   // 경로 기반 패턴 (항상 활성)
   const pathPattern = /xlsx_output[/\\]([^\s\n`'"]+\.xlsx)/gi;
   const fullPathPattern = /[A-Z]:[\\\/].*?[\\\/]xlsx_output[\\\/]([^\s\n`'"]+\.xlsx)/gi;
@@ -252,12 +295,66 @@ const processXLSXContent = (content: string, workerName?: string): { processedCo
   }
 
   let processedContent = content
-    .replace(/\*?\*?파일명\*?\*?:\s*[^\n]+\.xlsx\n?/gi, '')
+    .replace(/\*?\*?파일명\*?\*?:\s*[^\n]+\.xlsx\*?\*?\n?/gi, '')
     .replace(/\*?\*?파일 위치\*?\*?:\s*[^\n]*xlsx_output[^\n]*\n?/gi, '')
     .replace(/\*?\*?저장 위치\*?\*?:\s*[^\n]*xlsx_output[^\n]*\n?/gi, '')
     .replace(/\*?\*?경로\*?\*?:\s*[^\n]*xlsx_output[^\n]*\n?/gi, '');
 
   return { processedContent, xlsxFiles };
+};
+
+// DOCX 경로에서 파일명 추출 및 다운로드 링크로 변환
+const processDocxContent = (content: string, workerName?: string): { processedContent: string; docxFiles: string[] } => {
+  const docxFiles: string[] = [];
+  const useBroadPatterns = !workerName || /^visualization/i.test(workerName);
+
+  const cleanFilename = (filename: string): string => {
+    let cleaned = filename
+      .trim()
+      .replace(/^[`'"*_\s]+|[`'"*_\s]+$/g, '')
+      .replace(/[`'"]/g, '')
+      .replace(/\*{2,}/g, '')
+      .replace(/_{2,}/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .replace(/\s+\.docx$/i, '.docx')
+      .trim();
+    const parts = cleaned.split(/[\\\/]/);
+    return parts[parts.length - 1] || cleaned;
+  };
+
+  const filenamePattern = /(?<![가-힣])\*?\*?파일명\*?\*?:\s*`?([^\n`]+\.docx)`?/gi;
+  const filePattern = /(?:📄\s*)?(?<![가-힣])\*?\*?파일\*?\*?:\s*`?([^\n`]+\.docx)`?/gi;
+  const pathPattern = /docx_output[/\\]([^\s\n`'"]+\.docx)/gi;
+  const fullPathPattern = /[A-Z]:[\\\/].*?[\\\/]docx_output[\\\/]([^\s\n`'"]+\.docx)/gi;
+
+  let match;
+  if (useBroadPatterns) {
+    while ((match = filenamePattern.exec(content)) !== null) {
+      const filename = cleanFilename(match[1]);
+      if (filename && !docxFiles.includes(filename)) docxFiles.push(filename);
+    }
+    while ((match = filePattern.exec(content)) !== null) {
+      const rawFilename = cleanFilename(match[1]);
+      const justFilename = rawFilename.split(/[\\\/]/).pop() || rawFilename;
+      if (justFilename && !docxFiles.includes(justFilename)) docxFiles.push(justFilename);
+    }
+  }
+  while ((match = pathPattern.exec(content)) !== null) {
+    const filename = cleanFilename(match[1]);
+    if (filename && !docxFiles.includes(filename)) docxFiles.push(filename);
+  }
+  while ((match = fullPathPattern.exec(content)) !== null) {
+    const filename = cleanFilename(match[1]);
+    if (filename && !docxFiles.includes(filename)) docxFiles.push(filename);
+  }
+
+  let processedContent = content
+    .replace(/\*?\*?파일명\*?\*?:\s*[^\n]+\.docx\*?\*?\n?/gi, '')
+    .replace(/\*?\*?파일 위치\*?\*?:\s*[^\n]*docx_output[^\n]*\n?/gi, '')
+    .replace(/\*?\*?저장 위치\*?\*?:\s*[^\n]*docx_output[^\n]*\n?/gi, '')
+    .replace(/\*?\*?경로\*?\*?:\s*[^\n]*docx_output[^\n]*\n?/gi, '');
+
+  return { processedContent, docxFiles };
 };
 
 // 테이블 래퍼 컴포넌트 - 엑셀 복사 버튼 포함
@@ -362,12 +459,19 @@ const TypewriterText = ({
 
 type ResponseProps = ComponentProps<typeof Streamdown> & {
   isStreaming?: boolean;
+  workerName?: string;
 };
 
 export const Response = memo(
-  ({ className, isStreaming = false, ...props }: ResponseProps) => {
+  ({ className, isStreaming = false, workerName: workerNameProp, ...props }: ResponseProps) => {
+    const rawContent = props.children as string;
+
+    // workerName: prop으로 전달받은 값 사용, 하위호환을 위해 텍스트 마커도 fallback 처리
+    const legacyMatch = (rawContent || "").match(/^<!--WORKER:(\w+)-->/);
+    const workerName = workerNameProp || legacyMatch?.[1];
+    const content = legacyMatch ? (rawContent || "").slice(legacyMatch[0].length) : (rawContent || "");
+
     // Tool 상태, 대기 상태, Fallback 마커 감지 및 처리
-    const content = props.children as string;
     const toolStatusRegex = /__TOOL_STATUS__:(.*?)__END__/g;
     const waitingRegex = /__WAITING__:(.*?)__END__/g;
     const fallbackRegex = /__FALLBACK__:(.*?)__END__/g;
@@ -378,9 +482,9 @@ export const Response = memo(
     });
 
     // Tool 상태, 대기 상태, 또는 Fallback 메시지가 있는지 확인
-    const hasToolStatus = toolStatusRegex.test(content || '');
-    const hasWaiting = waitingRegex.test(content || '');
-    const hasFallback = fallbackRegex.test(content || '');
+    const hasToolStatus = /__TOOL_STATUS__:(.*?)__END__/.test(content || '');
+    const hasWaiting = /__WAITING__:(.*?)__END__/.test(content || '');
+    const hasFallback = /__FALLBACK__:(.*?)__END__/.test(content || '');
 
     if (hasToolStatus || hasWaiting || hasFallback) {
       // 애니메이션이 필요한 경우
@@ -442,17 +546,14 @@ export const Response = memo(
       );
     }
 
-    // 워커 마커 추출 및 제거 (<!--WORKER:worker_name--> 형식)
-    const workerMatch = (content || "").match(/^<!--WORKER:(\w+)-->/);
-    const workerName = workerMatch?.[1];
-    const contentWithoutMarker = workerMatch ? (content || "").slice(workerMatch[0].length) : (content || "");
-
     // PDF 파일 감지 및 처리 (workerName으로 false positive 방지)
-    const { processedContent: pdfProcessed, pdfFiles } = processPDFContent(contentWithoutMarker, workerName);
+    const { processedContent: pdfProcessed, pdfFiles } = processPDFContent(content, workerName);
     // PPT 파일 감지 및 처리
     const { processedContent: pptProcessed, pptFiles } = processPPTContent(pdfProcessed, workerName);
     // XLSX 파일 감지 및 처리
-    const { processedContent: markdownContent, xlsxFiles } = processXLSXContent(pptProcessed, workerName);
+    const { processedContent: xlsxProcessed, xlsxFiles } = processXLSXContent(pptProcessed, workerName);
+    // DOCX 파일 감지 및 처리
+    const { processedContent: markdownContent, docxFiles } = processDocxContent(xlsxProcessed, workerName);
 
     // 마크다운 렌더링
     return (
@@ -548,12 +649,22 @@ export const Response = memo(
             ))}
           </div>
         )}
+
+        {/* DOCX 다운로드 링크 */}
+        {docxFiles.length > 0 && (
+          <div className="mt-3 flex flex-col gap-1">
+            {docxFiles.map((filename, idx) => (
+              <DocxDownloadLink key={idx} filename={filename} />
+            ))}
+          </div>
+        )}
       </div>
     );
   },
   (prevProps, nextProps) =>
     prevProps.children === nextProps.children &&
-    prevProps.isStreaming === nextProps.isStreaming
+    prevProps.isStreaming === nextProps.isStreaming &&
+    prevProps.workerName === nextProps.workerName
 );
 
 Response.displayName = "Response";

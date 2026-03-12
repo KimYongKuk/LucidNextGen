@@ -21,6 +21,7 @@ class Intent(str, Enum):
     APPROVAL = "approval"           # 전자결재 조회, 기안/결재/참조/부서문서
     XLSX = "xlsx"                   # Excel 파일 생성, 수정, 조작
     BOARD = "board"                 # 사내 게시판 검색, 공지사항 조회
+    CLARIFY = "clarify"             # 어디서 조회해야 할지 모호한 요청 → 사용자에게 확인
     DIRECT = "direct"               # 일반 대화, 코딩, 번역 등
 
 
@@ -39,6 +40,7 @@ INTENT_TO_WORKER = {
     Intent.APPROVAL: "ApprovalWorker",
     Intent.XLSX: "XlsxWorker",
     Intent.BOARD: "BoardWorker",
+    Intent.CLARIFY: "DirectResponseWorker",
     Intent.DIRECT: "DirectResponseWorker",
 }
 

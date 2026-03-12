@@ -18,14 +18,13 @@ logger = logging.getLogger(__name__)
 # 기준 디렉토리 (backend/)
 BASE_DIR = Path(__file__).parent.parent.parent
 
-# 정리 대상 디렉토리 목록
-CLEANUP_TARGETS = [
-    {"dir": "data/pdf_output",   "pattern": "*.pdf"},
-    {"dir": "data/ppt_output",   "pattern": "*.pptx"},
-    {"dir": "data/chart_output", "pattern": "*.png"},
-    {"dir": "data/xlsx_output",  "pattern": "*.xlsx"},
-    {"dir": "data/xlsx_upload",  "pattern": "**/*.xlsx", "remove_empty_dirs": True},
-]
+# 업로드 파일 보관 기간 (기본값: 7일)
+UPLOAD_RETENTION_HOURS = int(os.getenv("UPLOAD_RETENTION_HOURS", "168"))
+
+# 정리 대상 디렉토리 목록 — 모든 사용자 파일 영구 보존 (자동 삭제 비활성화)
+# 필요 시 항목을 추가하여 자동 정리를 다시 활성화할 수 있음
+# 예: {"dir": "data/chart_output", "pattern": "*.png", "retention_hours": 8760}
+CLEANUP_TARGETS = []
 
 # 환경 변수에서 설정 읽기 (기본값: 1년 보관, 24시간 간격)
 FILE_RETENTION_HOURS = int(os.getenv("FILE_RETENTION_HOURS", "8760"))
@@ -45,8 +44,6 @@ def cleanup_old_files(retention_hours: Optional[int] = None) -> dict:
     if retention_hours is None:
         retention_hours = FILE_RETENTION_HOURS
 
-    cutoff_time = datetime.now() - timedelta(hours=retention_hours)
-
     total_deleted = 0
     total_errors = 0
     total_size_kb = 0.0
@@ -55,6 +52,9 @@ def cleanup_old_files(retention_hours: Optional[int] = None) -> dict:
         target_dir = BASE_DIR / target["dir"]
         pattern = target["pattern"]
         remove_empty_dirs = target.get("remove_empty_dirs", False)
+        # per-target retention (미지정 시 글로벌 값 사용)
+        target_retention = target.get("retention_hours", retention_hours)
+        target_cutoff = datetime.now() - timedelta(hours=target_retention)
 
         if not target_dir.exists():
             continue
@@ -65,7 +65,7 @@ def cleanup_old_files(retention_hours: Optional[int] = None) -> dict:
                 continue
             try:
                 file_mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
-                if file_mtime < cutoff_time:
+                if file_mtime < target_cutoff:
                     file_size = file_path.stat().st_size / 1024
                     file_path.unlink()
                     deleted += 1

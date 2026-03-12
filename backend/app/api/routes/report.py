@@ -55,6 +55,16 @@ def report_workspaces(
     return get_report_service().get_workspaces(date_from, date_to)
 
 
+@router.get("/workspaces/detail")
+def report_workspace_detail(
+    date_from: str = Query(..., description="Start date YYYY-MM-DD"),
+    date_to: str = Query(..., description="End date YYYY-MM-DD"),
+    workspace_id: str = Query(..., description="Workspace UUID"),
+    tab: str = Query("messages", description="Tab: messages or documents"),
+):
+    return get_report_service().get_workspace_detail(date_from, date_to, workspace_id, tab)
+
+
 @router.get("/artifacts")
 def report_artifacts(
     date_from: str = Query(..., description="Start date YYYY-MM-DD"),
@@ -69,6 +79,14 @@ def report_performance(
     date_to: str = Query(..., description="End date YYYY-MM-DD"),
 ):
     return get_report_service().get_performance(date_from, date_to)
+
+
+@router.get("/token-usage")
+def report_token_usage(
+    date_from: str = Query(..., description="Start date YYYY-MM-DD"),
+    date_to: str = Query(..., description="End date YYYY-MM-DD"),
+):
+    return get_report_service().get_token_usage(date_from, date_to)
 
 
 @router.get("/users")
@@ -193,3 +211,15 @@ def email_history(
 def email_test_smtp():
     """SMTP 연결 테스트"""
     return get_email_service().test_connection()
+
+
+# ─── 일일 개발 요약 API ───
+
+
+@router.post("/nightly-summary/run-now")
+async def nightly_summary_run_now(
+    target_date: str = Query(None, description="대상 날짜 YYYY-MM-DD (미지정 시 오늘)"),
+):
+    """일일 개발 요약 즉시 실행 (테스트/디버깅용)"""
+    from app.utils.nightly_summary_scheduler import nightly_summary_scheduler
+    return await nightly_summary_scheduler.run_now(target_date)

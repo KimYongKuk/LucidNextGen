@@ -584,11 +584,11 @@
         // ============================================================
         switch (action) {
 
-            // ----- 받은편지함 최근 N건 (v2: folder_no 추가) -----
+            // ----- 받은편지함 최근 N건 (v3: Inbox 하위폴더 포함) -----
             case "inbox":
                 query = "SELECT m.uid_no, m.msg_receive, m.msg_date, m.msg_subject, m.msg_from, m.msg_to, m.msg_preview, m.msg_flag, m.msg_size, m.folder_no " +
-                        "FROM mail_message m " +
-                        "WHERE m.folder_no = (SELECT folder_no FROM mail_folder WHERE folder_name = 'Inbox') " +
+                        "FROM mail_message m JOIN mail_folder f ON m.folder_no = f.folder_no " +
+                        "WHERE (f.folder_name = 'Inbox' OR f.folder_name LIKE 'Inbox.%') " +
                         "ORDER BY m.msg_receive DESC LIMIT " + limit;
                 result = executeSqlite(messageStore, query);
                 json.append("{\"action\": \"inbox\", \"data\": [");
@@ -652,44 +652,89 @@
                 json.append("]}");
                 break;
 
-            // ----- 키워드 검색 (v2: folder_no 추가) -----
+            // ----- 키워드 검색 (v4: 하이브리드 — SQL LIKE + Java MIME 디코딩) -----
+            // 1차: SQL LIKE로 msg_preview 전체 검색 (전 메일함, 건수 무제한)
+            // 2차: 최근 1000건에서 Java MIME 디코딩 후 제목 매칭
+            // 결과 병합 (uid_no 기준 중복 제거)
             case "search":
                 if (keyword == null || keyword.isEmpty()) {
                     out.print("{\"error\": \"keyword parameter required for search\", \"code\": 400}");
                     return;
                 }
-                String safeKeyword = keyword.replace("'", "''");
-                query = "SELECT m.uid_no, m.msg_receive, m.msg_date, m.msg_subject, m.msg_from, m.msg_to, m.msg_preview, m.msg_flag, m.msg_size, f.folder_name, m.folder_no " +
+
+                String lowerKeyword = keyword.toLowerCase();
+                String escapedKw = keyword.replace("'", "''");
+
+                // 1차: SQL LIKE — msg_preview에서 전체 메일 검색
+                String sqlSearchQuery = "SELECT m.uid_no, m.msg_receive, m.msg_date, m.msg_subject, m.msg_from, m.msg_to, m.msg_preview, m.msg_flag, m.msg_size, f.folder_name, m.folder_no " +
                         "FROM mail_message m JOIN mail_folder f ON m.folder_no = f.folder_no " +
-                        "WHERE (m.msg_preview LIKE '%" + safeKeyword + "%' " +
-                        "OR m.msg_subject LIKE '%" + safeKeyword + "%' " +
-                        "OR m.msg_from LIKE '%" + safeKeyword + "%') " +
+                        "WHERE m.msg_preview LIKE '%" + escapedKw + "%' " +
                         "ORDER BY m.msg_receive DESC LIMIT " + limit;
-                result = executeSqlite(messageStore, query);
-                json.append("{\"action\": \"search\", \"keyword\": \"").append(jsonEscape(keyword)).append("\", \"data\": [");
-                if (!result.isEmpty()) {
-                    String[] rows = result.split("\n");
-                    for (int i = 0; i < rows.length; i++) {
-                        String[] cols = rows[i].split("\\|", -1);
+                String sqlSearchResult = executeSqlite(messageStore, sqlSearchQuery);
+
+                // 2차: 최근 1000건에서 Java-side MIME 디코딩 후 제목/발신자 매칭
+                String recentQuery = "SELECT m.uid_no, m.msg_receive, m.msg_date, m.msg_subject, m.msg_from, m.msg_to, m.msg_preview, m.msg_flag, m.msg_size, f.folder_name, m.folder_no " +
+                        "FROM mail_message m JOIN mail_folder f ON m.folder_no = f.folder_no " +
+                        "ORDER BY m.msg_receive DESC LIMIT 1000";
+                String recentResult = executeSqlite(messageStore, recentQuery);
+
+                // 결과 병합 (uid_no 기준 중복 제거, 순서 보존)
+                LinkedHashMap<String, String[]> mergedResults = new LinkedHashMap<>();
+
+                // SQL LIKE 결과 먼저 추가 (preview 본문 매칭 — 전 메일함 대상)
+                if (!sqlSearchResult.isEmpty()) {
+                    String[] rows = sqlSearchResult.split("\n");
+                    for (String row : rows) {
+                        String[] cols = row.split("\\|", -1);
                         if (cols.length >= 10) {
-                            if (i > 0) json.append(",");
-                            json.append("{");
-                            json.append("\"uid\":").append(cols[0]).append(",");
-                            json.append("\"receive_ts\":").append(cols[1]).append(",");
-                            json.append("\"date\":\"").append(jsonEscape(stripQuotes(cols[2]))).append("\",");
-                            json.append("\"subject\":\"").append(jsonEscape(stripQuotes(decodeMime(stripQuotes(cols[3]))))).append("\",");
-                            json.append("\"from\":\"").append(jsonEscape(parseEnvelopeAddress(cols[4]))).append("\",");
-                            json.append("\"to\":\"").append(jsonEscape(parseEnvelopeAddress(cols[5]))).append("\",");
-                            json.append("\"preview\":\"").append(jsonEscape(cleanHtml(cols[6]))).append("\",");
-                            json.append("\"flag\":").append(cols[7]).append(",");
-                            json.append("\"size\":").append(cols[8]).append(",");
-                            json.append("\"folder\":\"").append(jsonEscape(cols[9])).append("\"");
-                            if (cols.length >= 11) {
-                                json.append(",\"folder_no\":").append(cols[10]);
-                            }
-                            json.append("}");
+                            mergedResults.put(cols[0], cols);
                         }
                     }
+                }
+
+                // Java MIME 디코딩 결과 추가 (제목/발신자 매칭, 중복 제외)
+                if (!recentResult.isEmpty()) {
+                    String[] rows = recentResult.split("\n");
+                    for (String row : rows) {
+                        String[] cols = row.split("\\|", -1);
+                        if (cols.length >= 10 && !mergedResults.containsKey(cols[0])) {
+                            String decodedSubject = decodeMime(stripQuotes(cols[3]));
+                            String fromAddr = parseEnvelopeAddress(cols[4]);
+                            if (decodedSubject.toLowerCase().contains(lowerKeyword)
+                                || fromAddr.toLowerCase().contains(lowerKeyword)) {
+                                mergedResults.put(cols[0], cols);
+                            }
+                        }
+                    }
+                }
+
+                // JSON 응답 생성
+                json.append("{\"action\": \"search\", \"keyword\": \"").append(jsonEscape(keyword)).append("\", \"data\": [");
+                int matchCount = 0;
+                for (Map.Entry<String, String[]> entry : mergedResults.entrySet()) {
+                    if (matchCount >= limit) break;
+                    String[] cols = entry.getValue();
+                    String decodedSubject = decodeMime(stripQuotes(cols[3]));
+                    String fromAddr = parseEnvelopeAddress(cols[4]);
+                    String previewText = cleanHtml(cols[6]);
+
+                    if (matchCount > 0) json.append(",");
+                    json.append("{");
+                    json.append("\"uid\":").append(cols[0]).append(",");
+                    json.append("\"receive_ts\":").append(cols[1]).append(",");
+                    json.append("\"date\":\"").append(jsonEscape(stripQuotes(cols[2]))).append("\",");
+                    json.append("\"subject\":\"").append(jsonEscape(decodedSubject)).append("\",");
+                    json.append("\"from\":\"").append(jsonEscape(fromAddr)).append("\",");
+                    json.append("\"to\":\"").append(jsonEscape(parseEnvelopeAddress(cols[5]))).append("\",");
+                    json.append("\"preview\":\"").append(jsonEscape(previewText)).append("\",");
+                    json.append("\"flag\":").append(cols[7]).append(",");
+                    json.append("\"size\":").append(cols[8]).append(",");
+                    json.append("\"folder\":\"").append(jsonEscape(cols[9])).append("\"");
+                    if (cols.length >= 11) {
+                        json.append(",\"folder_no\":").append(cols[10]);
+                    }
+                    json.append("}");
+                    matchCount++;
                 }
                 json.append("]}");
                 break;
@@ -719,14 +764,23 @@
                 json.append("]}");
                 break;
 
-            // ----- 안읽은 메일 조회 (v2: folder_no 추가) -----
+            // ----- 안읽은 메일 조회 (v2: folder_no 추가, v3: Inbox 하위폴더 포함) -----
             case "unread":
+                // Inbox + Inbox.* 하위폴더 전체에서 안 읽은 메일 조회
                 query = "SELECT m.uid_no, m.msg_receive, m.msg_date, m.msg_subject, m.msg_from, m.msg_to, m.msg_preview, m.msg_flag, m.msg_size, f.folder_name, m.folder_no " +
                         "FROM mail_message m JOIN mail_folder f ON m.folder_no = f.folder_no " +
-                        "WHERE f.folder_name = 'Inbox' AND (m.msg_flag & 2) = 0 " +
+                        "WHERE (f.folder_name = 'Inbox' OR f.folder_name LIKE 'Inbox.%') AND (m.msg_flag & 2) = 0 " +
                         "ORDER BY m.msg_receive DESC LIMIT " + limit;
                 result = executeSqlite(messageStore, query);
-                json.append("{\"action\": \"unread\", \"data\": [");
+
+                // 전체 안 읽은 메일 수 조회 (Inbox + 하위폴더)
+                String countQuery = "SELECT COUNT(*) FROM mail_message m JOIN mail_folder f ON m.folder_no = f.folder_no " +
+                        "WHERE (f.folder_name = 'Inbox' OR f.folder_name LIKE 'Inbox.%') AND (m.msg_flag & 2) = 0";
+                String countResult = executeSqlite(messageStore, countQuery);
+                int totalUnread = 0;
+                try { totalUnread = Integer.parseInt(countResult.trim()); } catch (Exception e) { /* ignore */ }
+
+                json.append("{\"action\": \"unread\", \"total_count\": ").append(totalUnread).append(", \"data\": [");
                 if (!result.isEmpty()) {
                     String[] rows = result.split("\n");
                     for (int i = 0; i < rows.length; i++) {

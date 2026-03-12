@@ -167,6 +167,32 @@ async def execute_board_query(sql_query: str) -> str:
     print("[검증 3/3] 통과 (읽기 전용 쿼리 확인)\n", file=sys.stderr)
     validation_steps.append("   통과 (읽기 전용 쿼리 확인)")
 
+    # 검증 4: JHC / L&F Plus 게시판 자동 제외 필터 주입 (모든 쿼리 대상)
+    EXCLUDED_BOARDS = ["JHC", "L&F Plus"]
+    exclusion_clauses = " AND ".join(
+        f"board_category NOT LIKE '{name}%'" for name in EXCLUDED_BOARDS
+    )
+
+    if re.search(r'\bWHERE\b', sql_query, re.IGNORECASE):
+        # 기존 WHERE 뒤에 AND로 추가
+        sql_query = re.sub(
+            r'\bWHERE\b',
+            f'WHERE ({exclusion_clauses}) AND',
+            sql_query,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    else:
+        # WHERE 절이 없는 경우 FROM ... 뒤에 WHERE 삽입
+        sql_query = re.sub(
+            r'(FROM\s+v_board_(?:search|post_detail))',
+            rf'\1 WHERE {exclusion_clauses}',
+            sql_query,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    print(f"[Board MCP] 제외 필터 적용됨: {EXCLUDED_BOARDS}", file=sys.stderr)
+
     # 일반 쿼리 실행 (v_board_search, v_board_post_detail 모두 직접 실행)
     validation_steps.append("4단계: PostgreSQL 쿼리 실행")
 

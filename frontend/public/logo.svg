@@ -1,0 +1,253 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+
+    <radialGradient id="ng1" cx="35%" cy="30%" r="65%">
+      <stop offset="0%" stop-color="#C4B5FD"/>
+      <stop offset="60%" stop-color="#7C3AED"/>
+      <stop offset="100%" stop-color="#3B0764"/>
+    </radialGradient>
+    <radialGradient id="ng2" cx="35%" cy="30%" r="65%">
+      <stop offset="0%" stop-color="#93C5FD"/>
+      <stop offset="60%" stop-color="#2563EB"/>
+      <stop offset="100%" stop-color="#1E3A8A"/>
+    </radialGradient>
+    <radialGradient id="ng3" cx="35%" cy="30%" r="65%">
+      <stop offset="0%" stop-color="#6EE7B7"/>
+      <stop offset="60%" stop-color="#059669"/>
+      <stop offset="100%" stop-color="#064E3B"/>
+    </radialGradient>
+
+    <linearGradient id="lg1" x1="100" y1="45" x2="55" y2="140" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#A78BFA"/>
+      <stop offset="100%" stop-color="#60A5FA"/>
+    </linearGradient>
+    <linearGradient id="lg2" x1="100" y1="45" x2="145" y2="140" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#A78BFA"/>
+      <stop offset="100%" stop-color="#34D399"/>
+    </linearGradient>
+    <linearGradient id="lg3" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#60A5FA"/>
+      <stop offset="100%" stop-color="#34D399"/>
+    </linearGradient>
+
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="softGlow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="lineGlow" x="-20%" y="-60%" width="140%" height="220%">
+      <feGaussianBlur stdDeviation="2.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+
+  </defs>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <!--  선 레이어                                             -->
+  <!-- ══════════════════════════════════════════════════════ -->
+
+  <line x1="100" y1="45" x2="55" y2="140"
+        stroke="url(#lg1)" stroke-linecap="round" filter="url(#lineGlow)">
+    <animate attributeName="stroke-width" values="2;2;4;2;4;2;2"
+      keyTimes="0;0.15;0.33;0.5;0.66;0.85;1" dur="3.6s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.5;0.5;1;0.5;1;0.5;0.5"
+      keyTimes="0;0.15;0.33;0.5;0.66;0.85;1" dur="3.6s" repeatCount="indefinite"/>
+  </line>
+
+  <line x1="100" y1="45" x2="145" y2="140"
+        stroke="url(#lg2)" stroke-linecap="round" filter="url(#lineGlow)">
+    <animate attributeName="stroke-width" values="4;2;2;2;2;4;4"
+      keyTimes="0;0.15;0.33;0.5;0.66;0.83;1" dur="3.6s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="1;0.5;0.5;0.5;0.5;1;1"
+      keyTimes="0;0.15;0.33;0.5;0.66;0.83;1" dur="3.6s" repeatCount="indefinite"/>
+  </line>
+
+  <!-- 선3: rect로 수평선 렌더링 버그 우회 -->
+  <rect x="55" y="138.5" width="90" height="3"
+        fill="url(#lg3)" rx="1.5" filter="url(#lineGlow)">
+    <animate attributeName="height" values="2;5;5;2;2;2;2"
+      keyTimes="0;0.2;0.5;0.66;0.75;0.9;1" dur="3.6s" repeatCount="indefinite"/>
+    <animate attributeName="y" values="139;137.5;137.5;139;139;139;139"
+      keyTimes="0;0.2;0.5;0.66;0.75;0.9;1" dur="3.6s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.5;1;1;0.5;0.5;0.5;0.5"
+      keyTimes="0;0.2;0.5;0.66;0.75;0.9;1" dur="3.6s" repeatCount="indefinite"/>
+  </rect>
+
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <!--  파티클                                                -->
+  <!-- ══════════════════════════════════════════════════════ -->
+
+  <circle r="2.5" fill="#C4B5FD" filter="url(#glow)">
+    <animateMotion dur="3.6s" repeatCount="indefinite" begin="0s"
+      keyTimes="0;0.333;1" calcMode="spline" keySplines="0.4 0 0.2 1;0.4 0 0.2 1">
+      <mpath><path d="M100,45 L145,140 L145,140"/></mpath>
+    </animateMotion>
+    <animate attributeName="opacity" values="0;1;0.8;0"
+      keyTimes="0;0.05;0.3;0.4" dur="3.6s" repeatCount="indefinite"/>
+  </circle>
+
+  <circle r="2.5" fill="#C4B5FD" filter="url(#glow)">
+    <animateMotion dur="3.6s" repeatCount="indefinite" begin="1.2s"
+      keyTimes="0;0.333;1" calcMode="spline" keySplines="0.4 0 0.2 1;0.4 0 0.2 1">
+      <mpath><path d="M145,140 L55,140 L55,140"/></mpath>
+    </animateMotion>
+    <animate attributeName="opacity" values="0;1;0.8;0"
+      keyTimes="0;0.05;0.3;0.4" dur="3.6s" repeatCount="indefinite" begin="1.2s"/>
+  </circle>
+
+  <circle r="2.5" fill="#93C5FD" filter="url(#glow)">
+    <animateMotion dur="3.6s" repeatCount="indefinite" begin="0s"
+      keyTimes="0;0.333;1" calcMode="spline" keySplines="0.4 0 0.2 1;0.4 0 0.2 1">
+      <mpath><path d="M55,140 L100,45 L100,45"/></mpath>
+    </animateMotion>
+    <animate attributeName="opacity" values="0;1;0.8;0"
+      keyTimes="0;0.05;0.3;0.4" dur="3.6s" repeatCount="indefinite"/>
+  </circle>
+
+  <circle r="2.5" fill="#6EE7B7" filter="url(#glow)">
+    <animateMotion dur="3.6s" repeatCount="indefinite" begin="0s"
+      keyTimes="0;0.333;1" calcMode="spline" keySplines="0.4 0 0.2 1;0.4 0 0.2 1">
+      <mpath><path d="M145,140 L55,140 L55,140"/></mpath>
+    </animateMotion>
+    <animate attributeName="opacity" values="0;1;0.8;0"
+      keyTimes="0;0.05;0.3;0.4" dur="3.6s" repeatCount="indefinite"/>
+  </circle>
+
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <!--  보라 구  P0(100,45) → P2(145,140) → P1(55,140) → P0 -->
+  <!-- ══════════════════════════════════════════════════════ -->
+
+  <!-- 후광: 초기 cx/cy 명시 -->
+  <circle cx="100" cy="45" r="22" fill="#7C3AED" opacity="0.2" filter="url(#softGlow)">
+    <animate attributeName="cx" values="100;145;55;100" dur="3.6s" repeatCount="indefinite"
+      calcMode="spline" keyTimes="0;0.333;0.666;1"
+      keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+    <animate attributeName="cy" values="45;140;140;45" dur="3.6s" repeatCount="indefinite"
+      calcMode="spline" keyTimes="0;0.333;0.666;1"
+      keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+  </circle>
+
+  <!-- 펄스 링: 초기 cx/cy 명시 -->
+  <circle cx="100" cy="45" r="15" fill="none" stroke="#A78BFA" stroke-width="1.5">
+    <animate attributeName="cx" values="100;145;55;100" dur="3.6s" repeatCount="indefinite"
+      calcMode="spline" keyTimes="0;0.333;0.666;1"
+      keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+    <animate attributeName="cy" values="45;140;140;45" dur="3.6s" repeatCount="indefinite"
+      calcMode="spline" keyTimes="0;0.333;0.666;1"
+      keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+    <animate attributeName="r" values="15;25;15" dur="1.2s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.8;0;0.8" dur="1.2s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- 구 본체: 초기 cx/cy 명시 -->
+  <circle cx="100" cy="45" r="15" fill="url(#ng1)" filter="url(#glow)" stroke="#C4B5FD" stroke-width="1">
+    <animate attributeName="cx" values="100;145;55;100" dur="3.6s" repeatCount="indefinite"
+      calcMode="spline" keyTimes="0;0.333;0.666;1"
+      keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+    <animate attributeName="cy" values="45;140;140;45" dur="3.6s" repeatCount="indefinite"
+      calcMode="spline" keyTimes="0;0.333;0.666;1"
+      keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+  </circle>
+
+  <!-- 하이라이트: 초기 cx/cy 명시 -->
+  <circle cx="95" cy="41" r="4.5" fill="white" opacity="0.3">
+    <animate attributeName="cx" values="95;140;50;95" dur="3.6s" repeatCount="indefinite"
+      calcMode="spline" keyTimes="0;0.333;0.666;1"
+      keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+    <animate attributeName="cy" values="41;136;136;41" dur="3.6s" repeatCount="indefinite"
+      calcMode="spline" keyTimes="0;0.333;0.666;1"
+      keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+  </circle>
+
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <!--  파랑 구  P1(55,140) → P0(100,45) → P2(145,140) → P1 -->
+  <!-- ══════════════════════════════════════════════════════ -->
+
+  <circle cx="55" cy="140" r="22" fill="#2563EB" opacity="0.2" filter="url(#softGlow)">
+    <animate attributeName="cx" values="55;100;145;55" dur="3.6s" repeatCount="indefinite"
+      calcMode="spline" keyTimes="0;0.333;0.666;1"
+      keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+    <animate attributeName="cy" values="140;45;140;140" dur="3.6s" repeatCount="indefinite"
+      calcMode="spline" keyTimes="0;0.333;0.666;1"
+      keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+  </circle>
+
+  <circle cx="55" cy="140" r="15" fill="none" stroke="#60A5FA" stroke-width="1.5">
+    <animate attributeName="cx" values="55;100;145;55" dur="3.6s" repeatCount="indefinite"
+      calcMode="spline" keyTimes="0;0.333;0.666;1"
+      keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+    <animate attributeName="cy" values="140;45;140;140" dur="3.6s" repeatCount="indefinite"
+      calcMode="spline" keyTimes="0;0.333;0.666;1"
+      keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+    <animate attributeName="r" values="15;25;15" dur="1.2s" repeatCount="indefinite" begin="1.2s"/>
+    <animate attributeName="opacity" values="0.8;0;0.8" dur="1.2s" repeatCount="indefinite" begin="1.2s"/>
+  </circle>
+
+  <circle cx="55" cy="140" r="15" fill="url(#ng2)" filter="url(#glow)" stroke="#93C5FD" stroke-width="1">
+    <animate attributeName="cx" values="55;100;145;55" dur="3.6s" repeatCount="indefinite"
+      calcMode="spline" keyTimes="0;0.333;0.666;1"
+      keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+    <animate attributeName="cy" values="140;45;140;140" dur="3.6s" repeatCount="indefinite"
+      calcMode="spline" keyTimes="0;0.333;0.666;1"
+      keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+  </circle>
+
+  <circle cx="50" cy="136" r="4.5" fill="white" opacity="0.3">
+    <animate attributeName="cx" values="50;95;140;50" dur="3.6s" repeatCount="indefinite"
+      calcMode="spline" keyTimes="0;0.333;0.666;1"
+      keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+    <animate attributeName="cy" values="136;41;136;136" dur="3.6s" repeatCount="indefinite"
+      calcMode="spline" keyTimes="0;0.333;0.666;1"
+      keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+  </circle>
+
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <!--  민트 구  P2(145,140) → P1(55,140) → P0(100,45) → P2 -->
+  <!-- ══════════════════════════════════════════════════════ -->
+
+  <circle cx="145" cy="140" r="22" fill="#059669" opacity="0.2" filter="url(#softGlow)">
+    <animate attributeName="cx" values="145;55;100;145" dur="3.6s" repeatCount="indefinite"
+      calcMode="spline" keyTimes="0;0.333;0.666;1"
+      keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+    <animate attributeName="cy" values="140;140;45;140" dur="3.6s" repeatCount="indefinite"
+      calcMode="spline" keyTimes="0;0.333;0.666;1"
+      keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+  </circle>
+
+  <circle cx="145" cy="140" r="15" fill="none" stroke="#34D399" stroke-width="1.5">
+    <animate attributeName="cx" values="145;55;100;145" dur="3.6s" repeatCount="indefinite"
+      calcMode="spline" keyTimes="0;0.333;0.666;1"
+      keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+    <animate attributeName="cy" values="140;140;45;140" dur="3.6s" repeatCount="indefinite"
+      calcMode="spline" keyTimes="0;0.333;0.666;1"
+      keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+    <animate attributeName="r" values="15;25;15" dur="1.2s" repeatCount="indefinite" begin="2.4s"/>
+    <animate attributeName="opacity" values="0.8;0;0.8" dur="1.2s" repeatCount="indefinite" begin="2.4s"/>
+  </circle>
+
+  <circle cx="145" cy="140" r="15" fill="url(#ng3)" filter="url(#glow)" stroke="#6EE7B7" stroke-width="1">
+    <animate attributeName="cx" values="145;55;100;145" dur="3.6s" repeatCount="indefinite"
+      calcMode="spline" keyTimes="0;0.333;0.666;1"
+      keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+    <animate attributeName="cy" values="140;140;45;140" dur="3.6s" repeatCount="indefinite"
+      calcMode="spline" keyTimes="0;0.333;0.666;1"
+      keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+  </circle>
+
+  <circle cx="140" cy="136" r="4.5" fill="white" opacity="0.3">
+    <animate attributeName="cx" values="140;50;95;140" dur="3.6s" repeatCount="indefinite"
+      calcMode="spline" keyTimes="0;0.333;0.666;1"
+      keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+    <animate attributeName="cy" values="136;136;41;136" dur="3.6s" repeatCount="indefinite"
+      calcMode="spline" keyTimes="0;0.333;0.666;1"
+      keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+  </circle>
+
+</svg>

@@ -19,6 +19,13 @@ interface Props {
   onUserClick?: (userId: string) => void
 }
 
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+  if (n === 0) return "-"
+  return n.toLocaleString()
+}
+
 export function UserRanking({ data, onUserClick }: Props) {
   const avgMessages = data.totalUsers > 0
     ? Math.round(data.totalMessages / data.totalUsers)
@@ -92,6 +99,7 @@ export function UserRanking({ data, onUserClick }: Props) {
                 <th className="px-4 py-2.5 text-center text-xs font-medium text-[#9CA3AF]">순위</th>
                 <th className="px-4 py-2.5 text-left text-xs font-medium text-[#9CA3AF]">사용자</th>
                 <th className="px-4 py-2.5 text-right text-xs font-medium text-[#9CA3AF]">메시지 수</th>
+                <th className="px-4 py-2.5 text-right text-xs font-medium text-[#9CA3AF]">토큰</th>
                 <th className="px-4 py-2.5 text-right text-xs font-medium text-[#9CA3AF]">세션 수</th>
                 <th className="px-4 py-2.5 text-left text-xs font-medium text-[#9CA3AF]">주 사용 기능</th>
                 <th className="px-4 py-2.5 text-right text-xs font-medium text-[#9CA3AF]">최근 활동</th>
@@ -117,6 +125,9 @@ export function UserRanking({ data, onUserClick }: Props) {
                   <td className="px-4 py-2.5 text-right font-mono font-medium text-[#3B82F6]">
                     {user.messageCount.toLocaleString()}
                   </td>
+                  <td className="px-4 py-2.5 text-right font-mono text-[#F59E0B]">
+                    {formatTokens(user.totalTokens || 0)}
+                  </td>
                   <td className="px-4 py-2.5 text-right font-mono text-[#F3F4F6]">
                     {user.sessionCount.toLocaleString()}
                   </td>
@@ -132,7 +143,7 @@ export function UserRanking({ data, onUserClick }: Props) {
               ))}
               {data.ranking.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-[#9CA3AF]">
+                  <td colSpan={7} className="px-4 py-8 text-center text-[#9CA3AF]">
                     해당 기간에 사용자 활동이 없습니다
                   </td>
                 </tr>

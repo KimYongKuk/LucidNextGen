@@ -38,7 +38,7 @@ export interface WorkspacesData {
   activeWorkspaces: number;
   totalSessions: number;
   memoryUpdates: number;
-  topWorkspaces: { name: string; user: string; messages: number; documents: number; lastActive: string }[];
+  topWorkspaces: { workspaceId: string; name: string; user: string; messages: number; documents: number; lastActive: string }[];
 }
 
 export interface ArtifactsData {
@@ -64,11 +64,24 @@ export interface UserRankingData {
     rank: number;
     userId: string;
     messageCount: number;
+    totalTokens: number;
     sessionCount: number;
     lastActive: string;
     avgResponseMs: number;
     favoriteIntent: string;
   }[];
+}
+
+export interface TokenUsageData {
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheReadTokens: number;
+  totalCacheWriteTokens: number;
+  totalCalls: number;
+  byModel: { modelType: string; inputTokens: number; outputTokens: number; callCount: number }[];
+  byCaller: { caller: string; modelType: string; inputTokens: number; outputTokens: number; callCount: number }[];
+  dailyTrend: { date: string; sonnetTokens: number; haikuTokens: number }[];
+  topUsers: { userId: string; totalTokens: number; callCount: number }[];
 }
 
 export interface UserDetailData {
@@ -83,6 +96,24 @@ export interface UserDetailData {
   userId: string;
 }
 
+export interface WorkspaceDetailData {
+  workspaceId: string;
+  tab: string;
+  messages?: {
+    datetime: string;
+    question: string;
+    answer: string;
+    intent: string;
+    responseTimeMs: number | null;
+  }[];
+  documents?: {
+    fileId: string;
+    fileName: string;
+    fileType: string;
+    chunks: number;
+  }[];
+}
+
 export interface AllReportData {
   overview: OverviewData;
   intents: IntentsData;
@@ -91,6 +122,7 @@ export interface AllReportData {
   artifacts: ArtifactsData;
   performance: PerformanceData;
   userRanking: UserRankingData;
+  tokenUsage: TokenUsageData;
 }
 
 // ============================================================
@@ -121,6 +153,8 @@ export const reportApi = {
   getPerformance: (f: string, t: string) => fetchReport<PerformanceData>('/performance', f, t),
   getUserRanking: (f: string, t: string) => fetchReport<UserRankingData>('/users', f, t),
   getUserDetail: (f: string, t: string, userId: string) => fetchReport<UserDetailData>('/users/detail', f, t, { user_id: userId }),
+  getWorkspaceDetail: (f: string, t: string, workspaceId: string, tab: string) => fetchReport<WorkspaceDetailData>('/workspaces/detail', f, t, { workspace_id: workspaceId, tab }),
+  getTokenUsage: (f: string, t: string) => fetchReport<TokenUsageData>('/token-usage', f, t),
 };
 
 // ============================================================
@@ -208,7 +242,7 @@ export const emailApi = {
 // ============================================================
 
 export async function fetchAllReportData(dateFrom: string, dateTo: string): Promise<AllReportData> {
-  const [overview, intents, quality, workspaces, artifacts, performance, userRanking] = await Promise.all([
+  const [overview, intents, quality, workspaces, artifacts, performance, userRanking, tokenUsage] = await Promise.all([
     reportApi.getOverview(dateFrom, dateTo),
     reportApi.getIntents(dateFrom, dateTo),
     reportApi.getQuality(dateFrom, dateTo),
@@ -216,6 +250,7 @@ export async function fetchAllReportData(dateFrom: string, dateTo: string): Prom
     reportApi.getArtifacts(dateFrom, dateTo),
     reportApi.getPerformance(dateFrom, dateTo),
     reportApi.getUserRanking(dateFrom, dateTo),
+    reportApi.getTokenUsage(dateFrom, dateTo),
   ]);
-  return { overview, intents, quality, workspaces, artifacts, performance, userRanking };
+  return { overview, intents, quality, workspaces, artifacts, performance, userRanking, tokenUsage };
 }

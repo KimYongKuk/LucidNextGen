@@ -5,6 +5,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { OnboardingProvider } from "@/components/onboarding/onboarding-provider";
 import { WhatsNewProvider } from "@/components/whats-new/whats-new-provider";
 import { NoticeToastProvider } from "@/components/notice-toast/notice-toast-provider";
+import { LunchboxRain } from "@/components/easter-egg/lunchbox-rain";
 
 import "./globals.css";
 
@@ -13,6 +14,9 @@ export const metadata: Metadata = {
   // metadataBase: new URL("https://chat.vercel.ai"),
   title: "Lucid AI",
   description: "Chatbot Lucid AI by L&F",
+  icons: {
+    icon: "/logo.png",
+  },
 };
 
 export const viewport = {
@@ -125,6 +129,7 @@ export default function RootLayout({
             <WhatsNewProvider>
               <NoticeToastProvider>
                 <Toaster position="top-center" />
+                <LunchboxRain />
                 {children}
               </NoticeToastProvider>
             </WhatsNewProvider>

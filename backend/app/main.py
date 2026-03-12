@@ -18,13 +18,57 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 import logging
+import logging.handlers
 
 from app.adapters.mcp_adapter import MCPAdapter
 from app.utils.file_cleanup import file_cleanup_scheduler
 from app.utils.chromadb_cleanup import session_cleanup_scheduler
 from app.utils.report_email_scheduler import report_email_scheduler
+from app.utils.nightly_summary_scheduler import nightly_summary_scheduler
 
 load_dotenv()
+
+# ── 로깅 설정: 콘솔 + 파일 동시 출력 ──
+_log_dir = os.path.join(os.path.dirname(__file__), "..", "logs")
+os.makedirs(_log_dir, exist_ok=True)
+_log_file = os.path.join(_log_dir, "server.log")
+
+_log_fmt = logging.Formatter(
+    "[%(asctime)s] %(levelname)-7s %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
+# 파일 핸들러: 10MB 로테이션, 최대 5개 백업
+_file_handler = logging.handlers.RotatingFileHandler(
+    _log_file, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+)
+_file_handler.setFormatter(_log_fmt)
+
+# 루트 로거에 파일 핸들러 추가
+logging.root.setLevel(logging.INFO)
+logging.root.addHandler(_file_handler)
+
+# print() 출력도 로그 파일로 복제 (콘솔 출력은 그대로 유지)
+class _TeeWriter:
+    """stdout/stderr를 가로채서 로그 파일에도 기록"""
+    def __init__(self, original, log_func):
+        self._original = original
+        self._log_func = log_func
+    def write(self, text):
+        if text and text.strip():
+            self._log_func(text.rstrip())
+        self._original.write(text)
+    def flush(self):
+        self._original.flush()
+    # subprocess/uvicorn이 fileno()를 호출할 수 있으므로 위임
+    def fileno(self):
+        return self._original.fileno()
+    def isatty(self):
+        return self._original.isatty()
+
+_print_logger = logging.getLogger("print")
+sys.stdout = _TeeWriter(sys.stdout, _print_logger.info)
+sys.stderr = _TeeWriter(sys.stderr, _print_logger.warning)
 
 # Global MCP Adapter instance
 _mcp_adapter: MCPAdapter = None
@@ -87,6 +131,10 @@ async def lifespan(app: FastAPI):
     print("[STARTUP] Weekly Report Email Scheduler starting...")
     report_email_scheduler.start()
 
+    # 일일 개발 요약 스케줄러 시작
+    print("[STARTUP] Nightly Summary Scheduler starting...")
+    nightly_summary_scheduler.start()
+
     startup_time = int((time.time() - startup_start) * 1000)
     print("="*70)
     print(f"[STARTUP] Server Ready! (Total time: {startup_time}ms)")
@@ -103,6 +151,7 @@ async def lifespan(app: FastAPI):
             file_cleanup_scheduler.stop()
             session_cleanup_scheduler.stop()
             report_email_scheduler.stop()
+            nightly_summary_scheduler.stop()
             await close_mcp_adapter()
             # Notification service pool cleanup
             from app.services.notice_service import _notification_service

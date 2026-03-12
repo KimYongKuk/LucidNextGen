@@ -220,13 +220,19 @@ async def stream_a2a_response(
     tool_call_counts: Dict[str, int] = {}  # 도구별 호출 횟수 (루프 감지용)
     tool_end_time = None  # 도구 완료 시간 (지연 분석용)
     last_content_time = None  # 마지막 콘텐츠 청크 시간 (지연 분석용)
-    MAX_SAME_TOOL_CALLS = 10  # 같은 도구 최대 호출 횟수
+    needs_newline_after_tool = False  # 도구 완료 후 다음 텍스트 앞에 개행 삽입 필요 여부
+    MAX_SAME_TOOL_CALLS = 50  # 같은 도구 최대 호출 횟수
 
     # 리포트용 수집 변수
     classified_intent = None
     classified_worker = None
     is_error = False
     collected_follow_ups = None  # 팔로우업 제안 (LLM 응답에서 파싱)
+    total_input_tokens = 0
+    total_output_tokens = 0
+    total_llm_calls = 0
+    total_cache_read_tokens = 0
+    total_cache_write_tokens = 0
 
     # 통합 이벤트 큐 (orchestrator + heartbeat 이벤트 병합)
     event_queue: asyncio.Queue = asyncio.Queue()
@@ -251,6 +257,19 @@ async def stream_a2a_response(
         "has_session_xlsx": _has_session_xlsx(session_id),
         "chat_mode": chat_mode,
     }
+
+    # 이전 턴의 intent 조회 (follow-up 판단용)
+    previous_intent = None
+    if session_id:
+        try:
+            from app.services.chat_log_service import get_chat_log_service
+            previous_intent = get_chat_log_service().get_last_intent(session_id)
+            if previous_intent:
+                print(f"[CHAT_STREAM] Previous intent: {previous_intent}")
+        except Exception as e:
+            print(f"[CHAT_STREAM] Previous intent lookup error (non-fatal): {e}")
+
+    req_context["previous_intent"] = previous_intent
 
     # Orchestrator 스트리밍
     orchestrator = get_orchestrator()
@@ -287,13 +306,26 @@ async def stream_a2a_response(
 
             # A2A 전용 이벤트 처리
             if event_type == "intent_classified":
-                classified_intent = event.get("intent")
-                classified_worker = event.get("worker")
+                if event.get("is_fallback"):
+                    # Fallback intent는 별도 저장 (primary 덮어쓰기 방지)
+                    print(f"[CHAT_STREAM] Fallback intent: {event.get('intent')} -> {event.get('worker')}")
+                else:
+                    classified_intent = event.get("intent")
+                    classified_worker = event.get("worker")
                 yield f"data: {json.dumps(event)}\n\n"
                 continue
 
             if event_type == "orchestrator_timing":
                 yield f"data: {json.dumps({'type': 'timing', 'step': 'orchestrator', 'timing': event})}\n\n"
+                continue
+
+            # 토큰 사용량 수집
+            if event_type == "token_usage":
+                total_input_tokens += event.get("input_tokens", 0)
+                total_output_tokens += event.get("output_tokens", 0)
+                total_llm_calls += event.get("llm_call_count", 0)
+                total_cache_read_tokens += event.get("cache_read_tokens", 0)
+                total_cache_write_tokens += event.get("cache_write_tokens", 0)
                 continue
 
             # Worker 이벤트 처리
@@ -359,6 +391,10 @@ async def stream_a2a_response(
                     heartbeat_stop_event.set()
                     heartbeat_active = False
                     print(f"[HEARTBEAT] Stopped (tool '{tool_name}' completed)")
+
+                # 도구 완료 전 이미 텍스트가 있었으면, 다음 텍스트 앞에 개행 삽입 필요
+                if collected_response:
+                    needs_newline_after_tool = True
 
                 # 응답 생성 중 상태 메시지 (다단계 도구는 중간 단계이므로 억제)
                 if tool_name not in MULTI_STEP_TOOLS:
@@ -490,19 +526,16 @@ async def stream_a2a_response(
                         elif hasattr(msg_chunk, "tool_calls") and msg_chunk.tool_calls:
                             has_tool_use = True
 
-                    # tool_use 블록 생성 감지 시 상태 메시지 전송 및 heartbeat 시작
-                    if has_tool_use and "tool_use_detected" not in tool_calls_made:
-                        tool_calls_made.append("tool_use_detected")
+                    # tool_use 블록 생성 감지 시 heartbeat 시작
+                    # 매 tool_use마다 재시작 (2번째+ 도구 인수 생성 중에도 피드백 제공)
+                    if has_tool_use and not heartbeat_active:
                         yield f"data: {json.dumps({'type': 'tool_status', 'tool': 'preparing', 'message': '🔧 도구를 준비하고 있습니다...'})}\n\n"
-
-                        # Heartbeat 시작 (긴 tool_use 생성 중 사용자 피드백)
-                        if not heartbeat_active:
-                            heartbeat_stop_event.clear()
-                            heartbeat_task = asyncio.create_task(
-                                heartbeat_producer(event_queue, HEARTBEAT_INTERVAL, heartbeat_stop_event)
-                            )
-                            heartbeat_active = True
-                            print(f"[HEARTBEAT] Started heartbeat task")
+                        heartbeat_stop_event.clear()
+                        heartbeat_task = asyncio.create_task(
+                            heartbeat_producer(event_queue, HEARTBEAT_INTERVAL, heartbeat_stop_event)
+                        )
+                        heartbeat_active = True
+                        print(f"[HEARTBEAT] Started for tool_use generation")
 
                     if content:
                         # 텍스트 콘텐츠 스트리밍 시작 시 하트비트 중지 (안전 장치)
@@ -530,6 +563,13 @@ async def stream_a2a_response(
                             else:
                                 print(f"[TIMING] First chunk received: {first_chunk_time}ms (no tool call)")
                                 yield f"data: {json.dumps({'type': 'timing', 'step': 'first_chunk', 'timing': {'ms': first_chunk_time}})}\n\n"
+
+                        # 도구 완료 후 첫 텍스트 → 개행 삽입 (텍스트 붙어버리는 문제 방지)
+                        if needs_newline_after_tool:
+                            separator = "\n\n"
+                            collected_response += separator
+                            yield f"data: {json.dumps({'type': 'content', 'chunk': separator})}\n\n"
+                            needs_newline_after_tool = False
 
                         chunk_count += 1
                         collected_response += content
@@ -608,7 +648,8 @@ async def stream_a2a_response(
             print(f"[FOLLOW_UP] Parsing failed: {e}")
             collected_follow_ups = None
 
-    # DB 저장용 텍스트에서 팔로우업 마커 제거 (항상 실행)
+    # DB 저장용 텍스트에서 마커 제거 (항상 실행)
+    collected_response = re.sub(r'<!--NO_RESULTS-->\s*', '', collected_response)
     collected_response = re.sub(r'\s*<!--FOLLOW_UP:.*?-->\s*$', '', collected_response).rstrip()
 
     total_time = int((time.time() - start_time) * 1000)
@@ -617,4 +658,11 @@ async def stream_a2a_response(
     yield f"data: {json.dumps({'complete': True, 'chat_mode': chat_mode})}\n\n"
 
     # 수집된 데이터 반환 (로그 저장용)
-    yield f"data: {json.dumps({'type': '_internal_collected', 'response': collected_response, 'sources': collected_sources, 'youtube_summary': collected_youtube_summary, 'corp_sources': all_searched_corp_sources, 'chart_data': collected_chart_data, 'intent': classified_intent, 'worker_name': classified_worker, 'response_time_ms': int((time.time() - start_time) * 1000), 'is_error': is_error, 'tools_used': tool_calls_made})}\n\n"
+    # 토큰 사용량 로깅
+    if total_input_tokens > 0:
+        cache_log = ""
+        if total_cache_read_tokens or total_cache_write_tokens:
+            cache_log = f" cache_read={total_cache_read_tokens:,} cache_write={total_cache_write_tokens:,}"
+        print(f"[CHAT_STREAM] Token usage: input={total_input_tokens:,} output={total_output_tokens:,}{cache_log} llm_calls={total_llm_calls}")
+
+    yield f"data: {json.dumps({'type': '_internal_collected', 'response': collected_response, 'sources': collected_sources, 'youtube_summary': collected_youtube_summary, 'corp_sources': all_searched_corp_sources, 'chart_data': collected_chart_data, 'intent': classified_intent, 'worker_name': classified_worker, 'response_time_ms': int((time.time() - start_time) * 1000), 'is_error': is_error, 'tools_used': tool_calls_made, 'input_tokens': total_input_tokens, 'output_tokens': total_output_tokens, 'cache_read_tokens': total_cache_read_tokens, 'cache_write_tokens': total_cache_write_tokens, 'llm_call_count': total_llm_calls})}\n\n"

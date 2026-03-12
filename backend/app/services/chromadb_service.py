@@ -28,6 +28,11 @@ import PyPDF2
 from docx import Document
 import openpyxl
 from pptx import Presentation
+from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+# PPTX 이미지 OCR 설정
+PPTX_IMAGE_MIN_SIZE_BYTES = 10 * 1024  # 10KB 미만 이미지는 로고/아이콘으로 간주하여 OCR 스킵
+PPTX_MAX_IMAGES_PER_FILE = 20          # 파일당 최대 OCR 대상 이미지 수 (비용 제한)
 from app.services.pdf_vision_service import get_pdf_vision_service
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 from sentence_transformers import SentenceTransformer
@@ -181,6 +186,86 @@ class ChromaDBService:
                 )
             raise
 
+    @staticmethod
+    def _extract_table_text(table) -> str:
+        """PPTX 표에서 마크다운 테이블 형식으로 텍스트 추출"""
+        rows = []
+        for row in table.rows:
+            cells = [cell.text.strip() for cell in row.cells]
+            rows.append("| " + " | ".join(cells) + " |")
+        if not rows:
+            return ""
+        # 첫 행 아래에 마크다운 구분선 삽입
+        header = rows[0]
+        separator = "| " + " | ".join("---" for _ in table.rows[0].cells) + " |"
+        return header + "\n" + separator + "\n" + "\n".join(rows[1:])
+
+    @staticmethod
+    def _extract_chart_text(chart) -> str:
+        """PPTX 차트에서 데이터(카테고리, 시리즈, 값) 텍스트 추출"""
+        try:
+            parts = []
+            # 차트 제목
+            if chart.has_title and chart.chart_title.has_text_frame:
+                parts.append(f"[차트: {chart.chart_title.text_frame.text}]")
+            else:
+                parts.append("[차트]")
+            # 시리즈 데이터
+            for plot in chart.plots:
+                categories = [str(c) for c in (plot.categories or [])]
+                if categories:
+                    parts.append(f"카테고리: {', '.join(categories)}")
+                for series in plot.series:
+                    name = series.tx.strRef.strCache[0].v if series.tx and series.tx.strRef else "데이터"
+                    values = [str(v) for v in (series.values or [])]
+                    parts.append(f"{name}: {', '.join(values)}")
+            return "\n".join(parts)
+        except Exception:
+            return "[차트]"
+
+    @staticmethod
+    def _extract_shapes_text_sync(shapes, images_list: list) -> str:
+        """PPTX shape들을 재귀적으로 순회하여 텍스트 추출, 이미지는 리스트에 수집
+
+        Args:
+            shapes: shape 이터러블 (slide.shapes 또는 group_shape.shapes)
+            images_list: 이미지 바이트를 수집할 리스트 (mutable)
+
+        Returns:
+            추출된 텍스트
+        """
+        parts = []
+        for shape in shapes:
+            try:
+                # 표
+                if shape.has_table:
+                    parts.append(ChromaDBService._extract_table_text(shape.table))
+                    continue
+                # 차트
+                if hasattr(shape, "has_chart") and shape.has_chart:
+                    parts.append(ChromaDBService._extract_chart_text(shape.chart))
+                    continue
+                # 그룹 shape → 재귀 탐색
+                if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+                    parts.append(ChromaDBService._extract_shapes_text_sync(shape.shapes, images_list))
+                    continue
+                # 이미지
+                if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
+                    try:
+                        blob = shape.image.blob
+                        if len(blob) >= PPTX_IMAGE_MIN_SIZE_BYTES and len(images_list) < PPTX_MAX_IMAGES_PER_FILE:
+                            images_list.append(blob)
+                    except Exception:
+                        pass  # 외부 링크 이미지 등 blob 접근 불가
+                    continue
+                # 일반 텍스트
+                if hasattr(shape, "text") and shape.text.strip():
+                    parts.append(shape.text)
+            except Exception as e:
+                print(f"[PPTX] Shape 처리 오류: {e}", file=sys.stderr)
+                continue
+        return "\n".join(parts)
+
     def _extract_excel_sheets(self, file_path: str) -> List[Dict]:
         """엑셀 파일에서 시트별 구조화된 데이터 추출
 
@@ -278,12 +363,47 @@ class ChromaDBService:
 
         elif ext in ['pptx', 'ppt']:
             prs = Presentation(file_path)
-            text = ""
-            for slide in prs.slides:
-                for shape in slide.shapes:
-                    if hasattr(shape, "text"):
-                        text += shape.text + "\n"
-            return text
+            all_text_parts = []
+            all_images = []  # (slide_idx, image_bytes) 튜플 리스트
+
+            for slide_idx, slide in enumerate(prs.slides):
+                all_text_parts.append(f"\n--- 슬라이드 {slide_idx + 1} ---\n")
+                slide_images = []
+                text = self._extract_shapes_text_sync(slide.shapes, slide_images)
+                all_text_parts.append(text)
+                all_images.extend([(slide_idx, img) for img in slide_images])
+
+            # 이미지 Vision API 일괄 OCR 처리
+            if all_images:
+                t0 = time.time()
+                pdf_vision = get_pdf_vision_service()
+                semaphore = asyncio.Semaphore(pdf_vision.vision_concurrency)
+
+                async def ocr_image(slide_idx, img_bytes):
+                    async with semaphore:
+                        return (slide_idx, await pdf_vision.extract_text_from_image(img_bytes))
+
+                print(f"[PPTX] Vision API OCR: {len(all_images)}개 이미지 처리 시작", file=sys.stderr)
+                results = await asyncio.gather(
+                    *[ocr_image(si, ib) for si, ib in all_images],
+                    return_exceptions=True
+                )
+
+                # 슬라이드별 OCR 텍스트 병합
+                ocr_by_slide: Dict[int, List[str]] = {}
+                for r in results:
+                    if isinstance(r, tuple):
+                        si, ocr_text = r
+                        if ocr_text and ocr_text.strip():
+                            ocr_by_slide.setdefault(si, []).append(ocr_text)
+
+                for si in sorted(ocr_by_slide.keys()):
+                    all_text_parts.append(f"\n[슬라이드 {si + 1} 이미지 내용]\n")
+                    all_text_parts.append("\n".join(ocr_by_slide[si]))
+
+                _log_timing("PPTX Vision OCR", t0, f"{len(all_images)} images")
+
+            return "\n".join(all_text_parts)
 
         elif ext == 'txt':
             with open(file_path, 'r', encoding='utf-8') as f:

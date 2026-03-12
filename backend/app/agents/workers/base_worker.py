@@ -2,14 +2,23 @@
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import List, Dict, Any, AsyncIterator, Optional
+from typing import List, Dict, Any, AsyncIterator, Iterator, Optional
 from botocore.config import Config as BotoConfig
 from langchain_aws import ChatBedrockConverse
-from langchain_core.messages import BaseMessage
+from langchain_aws.chat_models.bedrock_converse import (
+    _messages_to_bedrock,
+    _parse_response,
+    _parse_stream_event,
+    _snake_to_camel_keys,
+)
+from langchain_core.callbacks import CallbackManagerForLLMRun
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.outputs import ChatResult, ChatGeneration, ChatGenerationChunk
 from langchain_core.tools import BaseTool
 from langgraph.prebuilt import create_react_agent
 
 from app.core.model_config import get_worker_config, ModelConfig
+from app.core.region_fallback import get_region_fallback_manager
 
 # Bedrock API 타임아웃 (복잡한 도구 호출 시 기본 60초 초과 방지)
 BEDROCK_CONFIG = BotoConfig(read_timeout=120, connect_timeout=10)
@@ -18,6 +27,109 @@ BEDROCK_CONFIG = BotoConfig(read_timeout=120, connect_timeout=10)
 # LangGraph에서 recursion_limit은 graph step 단위 (LLM호출 + 도구실행 = 2 step)
 # 예: 20 = 최대 10회 도구 호출 가능
 AGENT_RECURSION_LIMIT = 20
+
+# ============================================================================
+# 이전 Tool 결과 압축 설정 (ReAct loop 토큰 누적 방지)
+# ============================================================================
+COMPACT_KEEP_RECENT_PAIRS = 2    # 최근 N개 tool call 쌍은 원본 유지
+COMPACT_SUMMARY_MAX_CHARS = 200  # 압축된 tool result 최대 길이
+
+# ============================================================================
+# Haiku 대화 요약 파이프라인 설정 (멀티턴 토큰 누적 방지)
+# ============================================================================
+SUMMARIZATION_MESSAGE_THRESHOLD = 6   # 최소 메시지 개수
+SUMMARIZATION_CHAR_THRESHOLD = 5000   # 최소 총 문자 수
+
+DEFAULT_SUMMARIZATION_PROMPT = """다음 대화 내용을 요약해줘.
+
+## 요약 지침
+1. 핵심 데이터, 숫자, 통계는 정확히 보존
+2. 주요 주제와 결론 포함
+3. 테이블 데이터가 있으면 구조 유지 (헤더, 행, 열)
+4. 사용자의 최종 요청 명확히 기록
+5. 마크다운 형식으로 정리
+6. 최대 800단어
+
+## ⚠️ 중요 - 반드시 보존할 정보:
+- 이전에 생성된 파일명이 있다면 기록
+- 사용자가 요청한 구체적인 데이터, 형식, 조건
+- 이전 도구 호출 결과의 핵심 내용
+
+## 대화 내용:
+{conversation}
+
+---
+## 요약:"""
+
+
+# ============================================================================
+# Prompt Caching 지원 ChatBedrockConverse
+# ============================================================================
+class CachedChatBedrockConverse(ChatBedrockConverse):
+    """system prompt에 cachePoint를 추가하여 Bedrock Prompt Caching 활성화.
+
+    Agent loop에서 동일 system prompt가 반복 전송될 때,
+    첫 호출은 cache write, 이후 호출은 cache read (입력 토큰 90% 절감).
+    """
+
+    def _generate(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        bedrock_messages, system = _messages_to_bedrock(messages)
+        if system:
+            system.append({"cachePoint": {"type": "default"}})
+        params = self._converse_params(
+            stop=stop,
+            **_snake_to_camel_keys(
+                kwargs, excluded_keys={"inputSchema", "properties", "thinking"}
+            ),
+        )
+        response = self.client.converse(
+            messages=bedrock_messages, system=system, **params
+        )
+        response_message = _parse_response(response)
+        response_message.response_metadata["model_name"] = self.model_id
+        return ChatResult(generations=[ChatGeneration(message=response_message)])
+
+    def _stream(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> Iterator[ChatGenerationChunk]:
+        bedrock_messages, system = _messages_to_bedrock(messages)
+        if system:
+            system.append({"cachePoint": {"type": "default"}})
+        params = self._converse_params(
+            stop=stop,
+            **_snake_to_camel_keys(
+                kwargs, excluded_keys={"inputSchema", "properties", "thinking"}
+            ),
+        )
+        response = self.client.converse_stream(
+            messages=bedrock_messages, system=system, **params
+        )
+        added_model_name = False
+        for event in response["stream"]:
+            if message_chunk := _parse_stream_event(event):
+                if (
+                    hasattr(message_chunk, "usage_metadata")
+                    and message_chunk.usage_metadata
+                    and not added_model_name
+                ):
+                    message_chunk.response_metadata["model_name"] = self.model_id
+                    added_model_name = True
+                generation_chunk = ChatGenerationChunk(message=message_chunk)
+                if run_manager:
+                    run_manager.on_llm_new_token(
+                        generation_chunk.text, chunk=generation_chunk
+                    )
+                yield generation_chunk
 
 # ============================================================================
 # 루시드AI (LucidAI) 아이덴티티 및 기능 정의
@@ -33,16 +145,18 @@ LUCID_AI_IDENTITY = """## 루시드AI (LucidAI) - AI 어시스턴트
 4. **조직도 조회** - 부서, 근무지, 담당자 등 사내 조직 정보 검색
 5. **파일 분석** - 업로드한 PDF, DOCX, XLSX, PPTX, TXT, CSV 파일 분석 및 질의응답
 6. **PDF 문서 생성** - 보고서, 기술 문서 등을 PDF 파일로 생성
-7. **차트/그래프 생성** - 라인, 막대, 파이, 복합 차트 등 데이터 시각화
-8. **PPT 프레젠테이션 생성** - 발표자료 및 슬라이드 자동 생성 (표, 차트 포함)
-9. **YouTube 영상 요약** - YouTube URL을 입력하면 핵심 내용 요약
-10. **URL 콘텐츠 분석** - 뉴스 기사, 블로그, 웹 페이지 콘텐츠 추출 및 분석
-11. **IT 지원** - IT 관련 문의 사례(VOC) 검색 및 IT 문제 해결 가이드
-12. **회계/재경 지원** - 회계 관련 문의 사례(VOC) 검색, 전표 처리, 세금계산서 등 재경 업무 지원
-13. **워크스페이스** - 독립적 작업 공간에서 문서 업로드, 커스텀 지시사항 설정, 대화 기억 등 프로젝트별 관리
-14. **메일 조회** - 받은편지함, 보낸편지함 조회, 메일 검색, 안 읽은 메일 확인
-15. **전자결재 조회** - 결재 대기함, 기안함, 결재 완료함, 참조함, 부서 문서함 조회, 결재 병목 분석
-16. **엑셀(XLSX) 생성/수정** - 엑셀 파일 새로 생성, 기존 파일 수정, 서식 적용, 차트/피벗테이블
+7. **Word(DOCX) 문서 생성** - 편집 가능한 Word 문서 생성 (보고서, 기안서 등)
+8. **차트/그래프 생성** - 라인, 막대, 파이, 복합 차트 등 데이터 시각화
+9. **PPT 프레젠테이션 생성** - 발표자료 및 슬라이드 자동 생성 (표, 차트 포함)
+10. **YouTube 영상 요약** - YouTube URL을 입력하면 핵심 내용 요약
+11. **URL 콘텐츠 분석** - 뉴스 기사, 블로그, 웹 페이지 콘텐츠 추출 및 분석
+12. **IT 지원** - IT 관련 문의 사례(VOC) 검색 및 IT 문제 해결 가이드
+13. **회계/재경 지원** - 회계 관련 문의 사례(VOC) 검색, 전표 처리, 세금계산서 등 재경 업무 지원
+14. **워크스페이스** - 독립적 작업 공간에서 문서 업로드, 커스텀 지시사항 설정, 대화 기억 등 프로젝트별 관리
+15. **메일 조회** - 받은편지함, 보낸편지함 조회, 메일 검색, 안 읽은 메일 확인, 메일 요약, 답장 초안 작성
+16. **전자결재 조회** - 결재 대기함, 기안함, 결재 완료함, 참조함, 부서 문서함 조회, 결재 병목 분석
+17. **엑셀(XLSX) 생성/수정** - 엑셀 파일 새로 생성, 기존 파일 수정, 서식 적용, 차트/피벗테이블
+18. **사내 게시판 검색** - 사내 게시판 게시글 검색, 공지사항 조회, 본문 상세 조회
 
 사용자가 루시드AI의 기능이나 할 수 있는 일에 대해 물어보면 위 목록을 바탕으로 친절하게 안내하세요.
 당신 자신을 소개할 때는 "루시드AI"라는 이름을 사용하세요.
@@ -140,6 +254,76 @@ DEFAULT_FOLLOW_UP_CAPABILITIES = [
 ]
 
 
+def _compact_tool_messages(
+    messages: List[BaseMessage],
+    keep_last_n: int = COMPACT_KEEP_RECENT_PAIRS,
+    max_chars: int = COMPACT_SUMMARY_MAX_CHARS,
+) -> List[BaseMessage]:
+    """이전 단계의 ToolMessage content를 축약하여 토큰 누적 방지.
+
+    - AIMessage(tool_calls) + ToolMessage 쌍을 식별
+    - 최근 keep_last_n 쌍은 원본 유지
+    - 이전 쌍의 ToolMessage.content만 축약 (메시지 자체는 유지)
+    - tool_call_id 페어링 유지 (LangGraph ValidationError 방지)
+    """
+    # 1. tool call 쌍 인덱스 수집: (ai_index, [tool_msg_indices])
+    chains: List[tuple] = []
+    for i, msg in enumerate(messages):
+        if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
+            tool_indices = []
+            for j in range(i + 1, len(messages)):
+                if isinstance(messages[j], ToolMessage):
+                    tool_indices.append(j)
+                elif isinstance(messages[j], AIMessage):
+                    break
+            if tool_indices:
+                chains.append((i, tool_indices))
+
+    if len(chains) <= keep_last_n:
+        return messages  # 압축 불필요
+
+    # 2. 압축 대상 ToolMessage 인덱스
+    compact_indices: set = set()
+    for _, tool_indices in chains[:-keep_last_n]:
+        compact_indices.update(tool_indices)
+
+    # 3. 메시지 복사 + 압축
+    result = []
+    compacted_count = 0
+    original_chars = 0
+    compacted_chars = 0
+
+    for i, msg in enumerate(messages):
+        if i in compact_indices and isinstance(msg, ToolMessage):
+            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            original_chars += len(content)
+
+            if len(content) > max_chars:
+                short = content[:max_chars].rstrip()
+                new_content = f"[이전 결과] {short}... ({len(content):,}자 중 {max_chars}자 표시)"
+                compacted_chars += len(new_content)
+                compacted_count += 1
+                result.append(ToolMessage(
+                    content=new_content,
+                    tool_call_id=msg.tool_call_id,
+                    name=getattr(msg, "name", None) or "tool",
+                ))
+            else:
+                compacted_chars += len(content)
+                result.append(msg)
+        else:
+            result.append(msg)
+
+    if compacted_count > 0:
+        print(
+            f"[COMPACT] {compacted_count}개 ToolMessage 압축: "
+            f"{original_chars:,}자 → {compacted_chars:,}자 "
+            f"({(1 - compacted_chars / max(original_chars, 1)) * 100:.0f}% 절감)"
+        )
+
+    return result
+
+
 class BaseWorker(ABC):
     """
     Worker Agent 추상 기본 클래스
@@ -176,6 +360,28 @@ class BaseWorker(ABC):
         """Agent 최대 반복 횟수 (도구 호출이 많은 Worker에서 override)"""
         return AGENT_RECURSION_LIMIT
 
+    @property
+    def compact_previous_results(self) -> bool:
+        """이전 단계 Tool 결과 압축 여부 (기본: False)
+
+        True로 설정 시 ReAct agent loop에서 이전 tool 결과를 축약하여
+        토큰 누적을 방지합니다. 다단계 도구 호출이 많은 Worker에서 사용.
+        """
+        return False
+
+    @property
+    def summarization_prompt(self) -> str:
+        """Haiku 요약용 프롬프트 (Worker별 커스터마이즈 가능)"""
+        return DEFAULT_SUMMARIZATION_PROMPT
+
+    @property
+    def skip_summarization(self) -> bool:
+        """대화 요약을 건너뛸지 여부 (기본: False)
+
+        DirectWorker 등 특수 워커에서 직접 요약을 관리하는 경우 True로 오버라이드.
+        """
+        return False
+
     def get_model_config(self) -> ModelConfig:
         """모델 설정 반환"""
         return get_worker_config(use_sonnet=self.use_sonnet)
@@ -186,12 +392,75 @@ class BaseWorker(ABC):
             return []
         return [t for t in all_tools if t.name in self.tool_names]
 
+    # Output 파일을 생성하는 MCP 도구 목록 (아카이브 대상)
+    ARCHIVABLE_TOOLS = {
+        "create_document_pdf", "create_table_spec_pdf",
+        "create_presentation",
+        "create_line_chart", "create_bar_chart", "create_pie_chart", "create_multi_chart",
+        "create_workbook", "write_data_to_excel",
+    }
+
     def prepare_tools(
         self,
         tools: List[BaseTool],
         context: Dict[str, Any]
     ) -> List[BaseTool]:
-        """도구 후처리 훅 (하위 클래스에서 보안 래핑 등에 오버라이드)"""
+        """도구 후처리 훅 — 기본: Output 파일 아카이브 래핑"""
+        return self._wrap_tools_for_archive(tools, context)
+
+    def _wrap_tools_for_archive(
+        self,
+        tools: List[BaseTool],
+        context: Dict[str, Any],
+    ) -> List[BaseTool]:
+        """Output 파일 생성 도구에 아카이브 복사 후처리를 래핑"""
+        from app.utils.file_archive import archive_file, extract_output_filepath
+
+        user_id = context.get("user_id", "unknown")
+        archivable = self.ARCHIVABLE_TOOLS
+
+        for tool in tools:
+            if tool.name not in archivable:
+                continue
+
+            # 이미 아카이브 래핑된 경우 스킵
+            if getattr(tool, "_archive_wrapped", False):
+                continue
+
+            # 항상 현재 ainvoke를 사용 (보안 래핑이 이미 적용된 경우 보존)
+            original_ainvoke = tool.ainvoke
+
+            async def archive_ainvoke(
+                input_data,
+                config=None,
+                *,
+                _original=original_ainvoke,
+                _user_id=user_id,
+                _tool_name=tool.name,
+                **kwargs,
+            ):
+                result = await _original(input_data, config, **kwargs)
+
+                # 도구 결과에서 파일 경로 추출 후 아카이브
+                try:
+                    result_text = ""
+                    if hasattr(result, "content"):
+                        result_text = str(result.content)
+                    elif isinstance(result, str):
+                        result_text = result
+
+                    if result_text:
+                        filepath = extract_output_filepath(result_text)
+                        if filepath:
+                            archive_file(filepath, _user_id)
+                except Exception as e:
+                    print(f"[Archive] Warning: {_tool_name} archive failed: {e}")
+
+                return result
+
+            object.__setattr__(tool, "ainvoke", archive_ainvoke)
+            object.__setattr__(tool, "_archive_wrapped", True)
+
         return tools
 
     def build_system_prompt(
@@ -219,9 +488,9 @@ class BaseWorker(ABC):
 이 사용자에 대해 알려진 정보:
 {facts_text}
 
-주의: 위 정보는 사용자의 개인적 특성입니다.
-- 대화 주제와 직접 관련될 때만 자연스럽게 활용하세요.
-- 불필요하게 언급하지 마세요.
+당신은 이 사용자와의 이전 대화 내용을 기억하고 있습니다.
+- 사용자가 자신에 대해 물어보거나(이름, 관심사, 선호도 등), 이전 대화/기억에 대해 질문하면 위 정보를 기반으로 답변하세요.
+- 그 외에는 불필요하게 언급하지 마세요.
 
 """
             prompt = user_memory_section + prompt
@@ -248,30 +517,44 @@ class BaseWorker(ABC):
 
         # 날짜 정보 추가
         current_date = _get_current_date_info()
-        prompt = f"""## Today's Date: {current_date}
+        prompt = f"""## Today: {current_date}
 
-## CRITICAL - 검색 결과 날짜 준수 (MUST FOLLOW):
-오늘 날짜는 {current_date}입니다. 이 날짜를 기준으로 답변하세요.
-
-**절대 규칙:**
-1. 검색/도구 결과에서 가져온 날짜와 연도를 **절대로 수정하지 마세요**
-2. 검색 결과에 나온 날짜를 **그대로** 출력하세요
-3. 검색 결과의 정보를 답변에 사용하세요
-4. 뉴스 기사의 날짜가 검색 결과에 명시되어 있으면 해당 날짜를 그대로 인용하세요
-5. "최근 뉴스"를 요청받으면 검색 결과의 실제 날짜를 사용하세요
-
-**금지 사항:**
-- 검색 결과의 날짜를 임의로 수정하는 것
-- 과거 날짜로 바꾸거나 추정하는 것
-
-## 학습 데이터/지식 cutoff 관련 질문 대응:
-사용자가 "언제까지 학습되었나요?", "데이터가 언제까지인가요?", "지식 cutoff가 언제인가요?" 등을 물으면:
-- 특정 연도나 날짜를 언급하지 마세요
-- 대신 이렇게 답변하세요: "저는 루시드AI로, 최신 정보는 웹 검색 기능을 통해 제공해 드릴 수 있습니다. 궁금하신 내용이 있으시면 질문해 주세요!"
+**날짜 규칙**: 검색/도구 결과의 날짜를 절대 수정하지 마세요. 결과에 나온 날짜를 그대로 출력하세요.
+**학습 데이터 질문**: "저는 루시드AI로, 최신 정보는 웹 검색 기능을 통해 제공해 드릴 수 있습니다. 궁금하신 내용이 있으시면 질문해 주세요!"로 답변하세요.
 
 {LUCID_AI_IDENTITY}
 
 {prompt}"""
+
+        # ============ CLARIFY 모드: 사용자에게 조회 범위 확인 ============
+        if context.get("clarify_mode"):
+            clarify_instruction = """
+## CLARIFY MODE — 사용자에게 조회 범위 확인 (최우선 지시)
+
+사용자의 요청이 **어디에서 찾아야 할지 모호**합니다.
+도구를 호출하지 말고, 아래 형식으로 사용자에게 조회 범위를 확인하세요.
+
+**응답 형식:**
+
+해당 건을 어디에서 조회할지 확인하고 싶습니다. 아래 중 어디에서 찾아볼까요?
+
+- **전자결재** — 결재/기안/상신 문서에서 검색
+- **메일** — 받은편지함/보낸편지함에서 검색
+- **게시판** — 사내 게시판/공지사항에서 검색
+- **사내문서** — 인사/회계/IT/안전 규정에서 검색
+- **IT 지원 VOC** — IT/보안 관련 문의 사례에서 검색
+- **회계 VOC** — 회계/재경 관련 문의 사례에서 검색
+- **웹 검색** — 인터넷에서 검색
+
+원하시는 범위를 말씀해 주세요! (예: "전자결재에서 찾아줘", "게시판에서 검색해줘")
+
+**규칙:**
+1. 위 형식을 기반으로 하되, 사용자의 원래 질문 내용을 자연스럽게 포함하세요
+2. 사용자가 언급한 키워드(건명, 주제 등)를 그대로 인용하세요
+3. 짧고 친절하게, 마크다운 형식으로 응답하세요
+4. 절대 추측하여 조회하지 마세요
+"""
+            prompt = clarify_instruction + "\n\n" + prompt
 
         # 세션 ID 주입
         session_id = context.get("session_id")
@@ -287,6 +570,52 @@ class BaseWorker(ABC):
         workspace_instructions = context.get("workspace_instructions")
         if workspace_instructions:
             prompt = f"{workspace_instructions}\n\n{prompt}"
+
+        # ============ 검색 실패 시 NO_RESULTS 마커 (도구 사용 워커 전용) ============
+        if self.tool_names:
+            is_final = context.get("is_final_attempt", False)
+            already_searched = context.get("already_searched", "")
+
+            if is_final:
+                # 2순위 워커 (마지막 시도) — 여기서도 못 찾으면 대안 제시
+                fallback_instruction = f"""
+
+## SEARCH FALLBACK — 검색 결과가 없거나 부족할 때
+
+도구를 사용하여 검색했으나 **관련 결과를 찾지 못한 경우**:
+1. 응답 맨 처음에 `<!--NO_RESULTS-->` 마커를 출력하세요 (반드시 첫 줄에)
+2. 검색 결과가 없음을 안내하세요
+3. 다른 검색 범위를 제안하세요 (이미 검색한 범위 제외)
+
+**이미 검색 완료된 범위:** {already_searched} (제외할 것)
+
+**제안 범위 (위 제외 후 남은 것만):**
+- **전자결재** — 결재/기안 문서에서 검색
+- **메일** — 받은편지함/보낸편지함에서 검색
+- **게시판** — 사내 게시판/공지사항에서 검색
+- **사내문서** — 인사/회계/IT/안전 규정에서 검색
+- **IT 지원 VOC** — IT/보안 관련 문의 사례에서 검색
+- **회계 VOC** — 회계/재경 관련 문의 사례에서 검색
+- **웹 검색** — 인터넷에서 검색
+
+**규칙:**
+- 결과를 찾은 경우에는 마커와 대안 제안을 하지 마세요 (정상 응답만)
+"""
+            else:
+                # 1순위 워커 — 못 찾으면 마커만 (시스템이 자동 fallback)
+                fallback_instruction = """
+
+## SEARCH FALLBACK — 검색 결과가 없거나 부족할 때
+
+도구를 사용하여 검색했으나 **관련 결과를 찾지 못한 경우**:
+1. 응답 맨 처음에 `<!--NO_RESULTS-->` 마커를 출력하세요 (반드시 첫 줄에)
+2. 검색 결과가 없음을 간단히 안내하세요
+3. 대안 검색 범위 목록은 제시하지 마세요 (시스템이 자동으로 다른 곳에서 검색합니다)
+
+**규칙:**
+- 결과를 찾은 경우에는 마커를 출력하지 마세요 (정상 응답만)
+"""
+            prompt += fallback_instruction
 
         # ============ 후속 질문 제안 생성 지시 ============
         capabilities = WORKER_FOLLOW_UP_CAPABILITIES.get(
@@ -328,6 +657,75 @@ class BaseWorker(ABC):
 
         return prompt
 
+    # ========================================================================
+    # Haiku 대화 요약 파이프라인 (멀티턴 토큰 누적 방지)
+    # ========================================================================
+
+    async def _summarize_history_if_needed(
+        self,
+        messages: List[BaseMessage],
+    ) -> List[BaseMessage]:
+        """히스토리가 임계값을 초과하면 Haiku로 요약
+
+        조건: 메시지 6개 이상 AND 총 5,000자 이상
+        결과: [이전 대화 요약] + 현재 메시지 (2개)로 압축
+        """
+        if len(messages) < SUMMARIZATION_MESSAGE_THRESHOLD:
+            return messages
+
+        total_chars = sum(
+            len(msg.content) if isinstance(msg.content, str) else len(str(msg.content))
+            for msg in messages
+        )
+
+        if total_chars < SUMMARIZATION_CHAR_THRESHOLD:
+            return messages
+
+        print(f"[{self.name}] History exceeds threshold: {len(messages)} messages, {total_chars:,} chars")
+        print(f"[{self.name}] Summarizing with Haiku...")
+
+        try:
+            from langchain_aws import ChatBedrockConverse as _ChatBedrock
+
+            haiku_config = get_worker_config(use_sonnet=False)
+            haiku_llm = _ChatBedrock(
+                model=haiku_config.model_id,
+                temperature=0.3,
+                max_tokens=1500,
+                config=BEDROCK_CONFIG,
+            )
+
+            conversation_text = self._format_messages_for_summary(messages[:-1])
+            current_message = messages[-1]
+
+            summary_prompt = self.summarization_prompt.format(conversation=conversation_text)
+            response = await haiku_llm.ainvoke([
+                HumanMessage(content=summary_prompt),
+            ])
+
+            summary = response.content.strip()
+            print(f"[{self.name}] Summary generated: {len(summary)} chars")
+
+            return [
+                HumanMessage(content=f"[이전 대화 요약]\n{summary}"),
+                current_message,
+            ]
+
+        except Exception as e:
+            print(f"[{self.name}] Summarization failed: {e}, using original messages")
+            return messages
+
+    def _format_messages_for_summary(self, messages: List[BaseMessage]) -> str:
+        """메시지를 요약용 텍스트로 포맷팅"""
+        lines = []
+        for msg in messages:
+            role = "User" if isinstance(msg, HumanMessage) else "Assistant"
+            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            if len(content) > 2000:
+                content = content[:2000] + "... [truncated]"
+            lines.append(f"{role}: {content}")
+        return "\n\n".join(lines)
+
     async def stream_response(
         self,
         messages: List[BaseMessage],
@@ -350,18 +748,44 @@ class BaseWorker(ABC):
             astream_events 이벤트 딕셔너리
         """
         import time
+
+        # Phase 0: 대화 히스토리가 길면 Haiku로 사전 요약
+        if not self.skip_summarization:
+            summarize_start = time.time()
+            processed_messages = await self._summarize_history_if_needed(messages)
+
+            if len(processed_messages) < len(messages):
+                summarize_time = int((time.time() - summarize_start) * 1000)
+                print(f"[{self.name}] [TIMING] Haiku summarization: {summarize_time}ms")
+                print(f"[{self.name}] Messages reduced: {len(messages)} -> {len(processed_messages)}")
+
+                yield {
+                    "event": "summarization_complete",
+                    "original_count": len(messages),
+                    "summarized_count": len(processed_messages),
+                    "timing_ms": summarize_time,
+                }
+
+                messages = processed_messages
+
         worker_internal_start = time.time()
 
-        # 모델 생성
+        # 모델 생성 (Prompt Caching 활성화 + 리전 폴백)
         model_start = time.time()
         config = self.get_model_config()
-        llm = ChatBedrockConverse(
-            model=config.model_id,
+        region_mgr = get_region_fallback_manager()
+        effective_model_id = region_mgr.get_model_id(config.model_id)
+        llm_kwargs = dict(
+            model=effective_model_id,
             temperature=0.7,
             max_tokens=config.max_tokens,
             disable_streaming=False,
             config=BEDROCK_CONFIG,
         )
+        if region_mgr.is_fallback_active:
+            llm_kwargs["region_name"] = region_mgr.fallback_region
+            print(f"[{self.name}] Using fallback region: {region_mgr.fallback_region} ({effective_model_id})")
+        llm = CachedChatBedrockConverse(**llm_kwargs)
         model_time = int((time.time() - model_start) * 1000)
         print(f"[{self.name}] [TIMING] Model creation: {model_time}ms")
 
@@ -383,13 +807,27 @@ class BaseWorker(ABC):
         if user_memory_context:
             print(f"[{self.name}] User memory injected: {len(user_memory_context.get('key_facts', []))} facts")
 
-        # Agent 생성
+        # Agent 생성 (이전 tool result 압축 모드 지원)
         agent_start = time.time()
-        if filtered_tools:
-            agent = create_react_agent(llm, filtered_tools, state_modifier=system_prompt)
+        if self.compact_previous_results:
+            _sys_prompt = system_prompt
+            _keep_n = COMPACT_KEEP_RECENT_PAIRS
+            _max_chars = COMPACT_SUMMARY_MAX_CHARS
+            _worker_name = self.name
+
+            def compact_state_modifier(state):
+                compacted = _compact_tool_messages(
+                    state["messages"], _keep_n, _max_chars
+                )
+                return [SystemMessage(content=_sys_prompt)] + compacted
+
+            modifier = compact_state_modifier
+            print(f"[{self.name}] [COMPACT] 이전 tool result 압축 모드 활성화 (keep_recent={_keep_n}, max_chars={_max_chars})")
         else:
-            # 도구 없는 경우 (DirectResponseWorker)
-            agent = create_react_agent(llm, [], state_modifier=system_prompt)
+            modifier = system_prompt
+
+        tools_for_agent = filtered_tools if filtered_tools else []
+        agent = create_react_agent(llm, tools_for_agent, state_modifier=modifier)
         agent_time = int((time.time() - agent_start) * 1000)
         print(f"[{self.name}] [TIMING] Agent creation: {agent_time}ms")
 
@@ -419,6 +857,10 @@ class BaseWorker(ABC):
         first_token = False
         tool_started = False
         llm_call_count = 0
+        total_input_tokens = 0
+        total_output_tokens = 0
+        total_cache_read_tokens = 0
+        total_cache_write_tokens = 0
         stream_start = time.time()
 
         async for event in agent.astream_events(
@@ -434,10 +876,28 @@ class BaseWorker(ABC):
                 print(f"[{self.name}] [TIMING] LLM call started: {elapsed}ms")
                 llm_started = True
 
-            # LLM 호출 완료 → tool_calls 확인 (핵심 디버깅)
+            # LLM 호출 완료 → tool_calls 확인 + 토큰 수집
             if event_kind == "on_chat_model_end":
                 llm_call_count += 1
                 output = event.get("data", {}).get("output", None)
+                # 토큰 사용량 수집
+                if output and hasattr(output, "usage_metadata") and output.usage_metadata:
+                    um = output.usage_metadata
+                    step_in = um.get("input_tokens", 0)
+                    step_out = um.get("output_tokens", 0)
+                    total_input_tokens += step_in
+                    total_output_tokens += step_out
+                    # Prompt Caching 메트릭
+                    cache_read = 0
+                    cache_write = 0
+                    details = um.get("input_token_details") or {}
+                    if details:
+                        cache_read = details.get("cache_read", 0)
+                        cache_write = details.get("cache_creation", 0)
+                    total_cache_read_tokens += cache_read
+                    total_cache_write_tokens += cache_write
+                    cache_info = f" cache_read={cache_read:,} cache_write={cache_write:,}" if (cache_read or cache_write) else ""
+                    print(f"[{self.name}] [TOKEN #{llm_call_count}] in={step_in:,} out={step_out:,}{cache_info} (cumul: in={total_input_tokens:,} out={total_output_tokens:,})")
                 if output and hasattr(output, "tool_calls") and output.tool_calls:
                     tc_summary = [{"name": tc.get("name"), "args_keys": list(tc.get("args", {}).keys())} for tc in output.tool_calls]
                     print(f"[{self.name}] [LLM_END #{llm_call_count}] tool_calls: {tc_summary}")
@@ -466,3 +926,35 @@ class BaseWorker(ABC):
                 tool_started = True
 
             yield event
+
+        # 스트리밍 완료 후 토큰 사용량 이벤트 전달
+        if total_input_tokens > 0 or total_output_tokens > 0:
+            cache_summary = ""
+            if total_cache_read_tokens or total_cache_write_tokens:
+                cache_summary = f" cache_read={total_cache_read_tokens:,} cache_write={total_cache_write_tokens:,}"
+            print(f"[{self.name}] [TOKEN_TOTAL] input={total_input_tokens:,} output={total_output_tokens:,}{cache_summary} llm_calls={llm_call_count}")
+            yield {
+                "event": "token_usage",
+                "input_tokens": total_input_tokens,
+                "output_tokens": total_output_tokens,
+                "cache_read_tokens": total_cache_read_tokens,
+                "cache_write_tokens": total_cache_write_tokens,
+                "llm_call_count": llm_call_count,
+            }
+
+            # token_usage_log 테이블에 기록
+            try:
+                from app.services.token_usage_service import get_token_usage_service
+                import asyncio
+                asyncio.create_task(get_token_usage_service().log(
+                    caller=self.name,
+                    model_id=config.model_id,
+                    input_tokens=total_input_tokens,
+                    output_tokens=total_output_tokens,
+                    cache_read_tokens=total_cache_read_tokens,
+                    cache_write_tokens=total_cache_write_tokens,
+                    session_id=context.get("session_id") if context else None,
+                    user_id=context.get("user_id") if context else None,
+                ))
+            except Exception:
+                pass

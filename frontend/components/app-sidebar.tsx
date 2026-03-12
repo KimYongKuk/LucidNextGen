@@ -75,8 +75,9 @@ export function AppSidebar({ user }: { user: User | undefined }) {
                   router.refresh();
                 }}
               >
-                <span className="rounded-md px-2 font-semibold text-lg hover:bg-muted">
-                  &nbsp;Lucid AI
+                <span className="flex items-center gap-2 rounded-md px-2 font-semibold text-lg hover:bg-muted">
+                  <img src="/logo.svg" alt="Lucid AI" className="size-7" />
+                  Lucid AI
                 </span>
               </div>
               <div className="flex flex-row gap-1">

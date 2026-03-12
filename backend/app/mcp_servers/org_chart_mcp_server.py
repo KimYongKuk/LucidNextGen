@@ -135,7 +135,7 @@ async def execute_org_chart_query(sql_query: str) -> str:
             validation_steps.append(f"   성공: {len(rows)}건 조회됨")
 
             # 허용된 컬럼만 반환 (사번 등 개인정보 제외)
-            ALLOWED_COLUMNS = {'이름', '직책', '부서', '직무', '메모_근무지', '인원수'}
+            ALLOWED_COLUMNS = {'이름', '직책', '부서ID', '부서', '부서경로', '직무', '메모_근무지', '인원수'}
             first_row = dict(rows[0])
             all_columns = list(first_row.keys())
             columns = [col for col in all_columns if col in ALLOWED_COLUMNS]

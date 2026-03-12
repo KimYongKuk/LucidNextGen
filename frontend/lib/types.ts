@@ -124,6 +124,7 @@ export type ChatMessage = UIMessage<
   youtubeSummary?: YoutubeSummary; // History에서 복원된 유튜브 요약
   corpSources?: CorpSource[]; // History에서 복원된 사내 문서 출처
   createdAt?: Date;
+  workerName?: string; // Intent 분류 결과 워커 이름 (아티팩트 감지 조건부 실행용)
 };
 
 export type Attachment = {
@@ -132,6 +133,7 @@ export type Attachment = {
   contentType: string;
   status?: 'uploading' | 'processing' | 'ready' | 'error';
   error?: string;
+  storedFilename?: string;
 };
 
 // Anonymous feedback types

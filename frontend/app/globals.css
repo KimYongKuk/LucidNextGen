@@ -85,6 +85,21 @@
   }
 }
 
+@keyframes sparkle {
+  0% {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.85) rotate(180deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(360deg);
+  }
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -200,5 +215,34 @@
     -webkit-font-smoothing: auto;
     -moz-osx-font-smoothing: auto;
     text-rendering: optimizeLegibility;
+  }
+
+  /* docx-preview 스타일 — Word 문서 미리보기 */
+  .docx-preview-wrapper {
+    padding: 8px;
+    overflow-x: hidden;
+  }
+
+  .docx-preview-wrapper .docx-wrapper {
+    background: transparent !important;
+    padding: 0 !important;
+    overflow-x: hidden !important;
+  }
+
+  .docx-preview-wrapper .docx-wrapper > section.docx {
+    margin: 0 auto 16px auto !important;
+    padding: 30px 36px !important;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.06) !important;
+    background: white !important;
+    min-height: auto !important;
+    max-width: 100% !important;
+    width: auto !important;
+    box-sizing: border-box !important;
+  }
+
+  .dark .docx-preview-wrapper .docx-wrapper > section.docx {
+    background: hsl(var(--card)) !important;
+    color: hsl(var(--card-foreground)) !important;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3) !important;
   }
 }

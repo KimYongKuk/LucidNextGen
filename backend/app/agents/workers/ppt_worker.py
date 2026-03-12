@@ -1,43 +1,11 @@
 """PPTWorker - 사내 템플릿 기반 PPT 생성 담당 Worker"""
 
-import time
 from typing import List, Dict, Any, AsyncIterator, Optional
 
-from langchain_aws import ChatBedrockConverse
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langchain_core.messages import BaseMessage
 from langchain_core.tools import BaseTool
 
 from .base_worker import BaseWorker
-from app.core.model_config import get_worker_config
-
-
-# ============================================================================
-# Haiku 요약 파이프라인 설정 (VisualizationWorker와 동일 패턴)
-# ============================================================================
-SUMMARIZATION_MESSAGE_THRESHOLD = 6
-SUMMARIZATION_CHAR_THRESHOLD = 5000
-
-SUMMARIZATION_PROMPT = """다음 대화 내용을 PPT 프레젠테이션 생성을 위해 요약해줘.
-
-## 요약 지침
-1. 핵심 데이터, 숫자, 통계는 정확히 보존
-2. 주요 주제와 결론 포함
-3. 테이블 데이터가 있으면 구조 유지
-4. 사용자의 최종 요청 명확히 기록
-5. 마크다운 형식으로 정리
-6. 최대 800단어
-
-## ⚠️ 중요 - PPT 관련 정보 보존:
-- 사용자가 요청한 PPT 주제, 구성, 슬라이드 수
-- 포함할 데이터 (표, 차트, 텍스트 등)
-- 이전에 생성된 PPT 파일명이 있다면 기록
-- 수정 요청 사항
-
-## 대화 내용:
-{conversation}
-
----
-## 요약:"""
 
 
 class PPTWorker(BaseWorker):
@@ -78,11 +46,42 @@ class PPTWorker(BaseWorker):
             # 파일 검색 도구
             "search_user_files",
             "search_workspace_docs",
+            # 웹 검색 도구 (시장 현황, 트렌드 등 최신 정보 필요 시)
+            "tavily_search",
         ]
 
     @property
     def use_sonnet(self) -> bool:
         return True
+
+    @property
+    def compact_previous_results(self) -> bool:
+        """이전 단계 Tool 결과 압축 활성화 (다단계 도구 호출 토큰 누적 방지)"""
+        return True
+
+    @property
+    def summarization_prompt(self) -> str:
+        return """다음 대화 내용을 PPT 프레젠테이션 생성을 위해 요약해줘.
+
+## 요약 지침
+1. 핵심 데이터, 숫자, 통계는 정확히 보존
+2. 주요 주제와 결론 포함
+3. 테이블 데이터가 있으면 구조 유지
+4. 사용자의 최종 요청 명확히 기록
+5. 마크다운 형식으로 정리
+6. 최대 800단어
+
+## ⚠️ 중요 - PPT 관련 정보 보존:
+- 사용자가 요청한 PPT 주제, 구성, 슬라이드 수
+- 포함할 데이터 (표, 차트, 텍스트 등)
+- 이전에 생성된 PPT 파일명이 있다면 기록
+- 수정 요청 사항
+
+## 대화 내용:
+{conversation}
+
+---
+## 요약:"""
 
     @property
     def system_prompt(self) -> str:
@@ -102,18 +101,23 @@ ROLE: 사내 .pptx 템플릿 기반 PPT 초안 생성 전문가.
 - PPT: create_presentation (핵심), list_ppt_templates (메타데이터 조회), list_generated_ppts
 - Charts (이미지용): create_line_chart, create_bar_chart, create_pie_chart, create_multi_chart
 - File Search: search_user_files(session_id="{session_id}"), search_workspace_docs(workspace_uuid="{workspace_uuid}")
+- Web Search: tavily_search (최신 정보 조사용)
 
 ## 워크플로우
 1. 사용자 요청 분석 (주제, 구성, 슬라이드 수 파악)
-2. 파일/데이터 참조가 필요하면 → search_user_files / search_workspace_docs 먼저 호출
-3. 슬라이드 구성 설계:
+2. **최신 정보가 필요한 주제인지 판단** → 해당되면 tavily_search로 먼저 조사!
+   - 해당 주제: 시장 현황/동향, 트렌드, 산업 분석, 기술 전망, 경쟁사 분석, 통계/수치 데이터 등
+   - 검색 팁: 핵심 키워드 2~3개로 검색. 필요시 여러 번 검색하여 데이터 수집
+   - 검색 결과의 구체적 수치, 통계, 최신 사례를 PPT에 반영
+3. 파일/데이터 참조가 필요하면 → search_user_files / search_workspace_docs 호출
+5. 슬라이드 구성 설계:
    - 표지 (layout_index=0): 제목, 날짜, 작성자
    - 목차 (layout_index=1): items 배열 필수! 예: items: ["Ⅰ. 개요", "Ⅱ. 현황"] 또는 items: [{"major": "Ⅰ. 개요", "minor": ["배경", "목적"]}]
    - 간지 (layout_index=2): 섹션 구분 (대분류 3개 이상일 때)
    - 내용 (layout_index=3): 메인 콘텐츠 (텍스트, 테이블, 차트)
    - E.O.D (layout_index=4): 끝 페이지
-4. create_presentation 호출
-5. "파일명: {실제파일명}.pptx" 안내
+6. create_presentation 호출
+7. "파일명: {실제파일명}.pptx" 안내
 
 ## 내용 슬라이드 (layout_index=3) 구성
 헤더 요소 (선택):
@@ -310,94 +314,6 @@ you MUST call search_workspace_docs(workspace_uuid="{workspace_uuid}", query="..
 
         return prompt
 
-    # ========================================================================
-    # Haiku 요약 파이프라인 (VisualizationWorker와 동일 패턴)
-    # ========================================================================
-
-    async def stream_response(
-        self,
-        messages: List[BaseMessage],
-        context: Dict[str, Any],
-        all_tools: List[BaseTool],
-        memory_context: Optional[Dict[str, Any]] = None,
-        user_memory_context: Optional[Dict[str, Any]] = None,
-    ) -> AsyncIterator[Dict[str, Any]]:
-        """Haiku 사전 요약을 포함한 스트리밍 응답 생성"""
-        # Phase 0: 히스토리가 길면 Haiku로 사전 요약
-        summarize_start = time.time()
-        processed_messages = await self._summarize_history_if_needed(messages)
-
-        if len(processed_messages) < len(messages):
-            summarize_time = int((time.time() - summarize_start) * 1000)
-            print(f"[{self.name}] [TIMING] Haiku summarization: {summarize_time}ms")
-            print(f"[{self.name}] Messages reduced: {len(messages)} -> {len(processed_messages)}")
-
-            yield {
-                "event": "summarization_complete",
-                "original_count": len(messages),
-                "summarized_count": len(processed_messages),
-                "timing_ms": summarize_time,
-            }
-
-        async for event in super().stream_response(processed_messages, context, all_tools, memory_context, user_memory_context):
-            yield event
-
-    async def _summarize_history_if_needed(
-        self,
-        messages: List[BaseMessage],
-    ) -> List[BaseMessage]:
-        """히스토리가 임계값을 초과하면 Haiku로 요약"""
-        if len(messages) < SUMMARIZATION_MESSAGE_THRESHOLD:
-            return messages
-
-        total_chars = sum(
-            len(msg.content) if isinstance(msg.content, str) else len(str(msg.content))
-            for msg in messages
-        )
-
-        if total_chars < SUMMARIZATION_CHAR_THRESHOLD:
-            return messages
-
-        print(f"[{self.name}] History exceeds threshold: {len(messages)} messages, {total_chars} chars")
-        print(f"[{self.name}] Summarizing with Haiku...")
-
-        try:
-            from .base_worker import BEDROCK_CONFIG
-            haiku_config = get_worker_config(use_sonnet=False)
-            haiku_llm = ChatBedrockConverse(
-                model=haiku_config.model_id,
-                temperature=0.3,
-                max_tokens=1500,
-                config=BEDROCK_CONFIG,
-            )
-
-            conversation_text = self._format_messages_for_summary(messages[:-1])
-            current_message = messages[-1]
-
-            summary_prompt = SUMMARIZATION_PROMPT.format(conversation=conversation_text)
-            response = await haiku_llm.ainvoke([
-                HumanMessage(content=summary_prompt),
-            ])
-
-            summary = response.content.strip()
-            print(f"[{self.name}] Summary generated: {len(summary)} chars")
-
-            return [
-                HumanMessage(content=f"[이전 대화 요약]\n{summary}"),
-                current_message,
-            ]
-
-        except Exception as e:
-            print(f"[{self.name}] Summarization failed: {e}, using original messages")
-            return messages
-
-    def _format_messages_for_summary(self, messages: List[BaseMessage]) -> str:
-        """메시지를 요약용 텍스트로 포맷팅"""
-        lines = []
-        for msg in messages:
-            role = "User" if isinstance(msg, HumanMessage) else "Assistant"
-            content = msg.content if isinstance(msg.content, str) else str(msg.content)
-            if len(content) > 2000:
-                content = content[:2000] + "... [truncated]"
-            lines.append(f"{role}: {content}")
-        return "\n\n".join(lines)
+    # PPTWorker는 BaseWorker의 stream_response()를 그대로 사용
+    # - Haiku 대화 요약: BaseWorker 기본 (summarization_prompt 오버라이드로 PPT 특화)
+    # - ReAct loop 압축: compact_previous_results=True

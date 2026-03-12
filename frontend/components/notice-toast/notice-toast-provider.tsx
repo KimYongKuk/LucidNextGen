@@ -11,7 +11,8 @@ import {
 } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import {
-  fetchTodayNotifications,
+  fetchFastNotifications,
+  fetchMailNotifications,
   streamNotificationSummary,
   EMPTY_APPROVALS,
   type NoticeItem,
@@ -22,8 +23,6 @@ import {
 import { getUserId } from "@/lib/utils";
 import { NoticeModal } from "./notice-modal";
 
-// TODO: 테스트 후 제거 — 허용 사번 목록
-const ALLOWED_USERS = ["A2304013"];
 
 const DISMISSED_KEY_PREFIX = "lucid-ai-notifications-dismissed:";
 const SUMMARY_CACHE_KEY = "lucid-ai-notification-summary";
@@ -90,6 +89,7 @@ interface NotificationContextType {
   notices: SectionData<NoticeItem>;
   mail: SectionData<MailItem>;
   approvals: ApprovalData;
+  isDataReady: boolean;
   closeNotifications: () => void;
   dismissNotifications: () => void;
   openNotifications: () => void;
@@ -102,6 +102,7 @@ const NotificationContext = createContext<NotificationContextType>({
   notices: EMPTY_SECTION,
   mail: EMPTY_SECTION,
   approvals: EMPTY_APPROVALS,
+  isDataReady: false,
   closeNotifications: () => {},
   dismissNotifications: () => {},
   openNotifications: () => {},
@@ -117,6 +118,7 @@ export function NoticeToastProvider({ children }: { children: ReactNode }) {
     useState<SectionData<NoticeItem>>(EMPTY_SECTION);
   const [mail, setMail] = useState<SectionData<MailItem>>(EMPTY_SECTION);
   const [approvals, setApprovals] = useState<ApprovalData>(EMPTY_APPROVALS);
+  const [isDataReady, setIsDataReady] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
   const [hasData, setHasData] = useState(false);
   const summaryStreamedRef = useRef(false);
@@ -150,6 +152,7 @@ export function NoticeToastProvider({ children }: { children: ReactNode }) {
     []
   );
 
+  // 데이터 로드 + 모달 즉시 표시 (로딩 UI)
   useEffect(() => {
     cleanupOldKeys();
 
@@ -159,50 +162,61 @@ export function NoticeToastProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    // 허용 사번 체크
     const userId = getUserId();
-    if (!userId || !ALLOWED_USERS.includes(userId)) {
+    if (!userId) {
       setIsInitialized(true);
       return;
     }
 
-    // 데이터 로드 (dismiss 여부와 무관하게 항상)
     let cancelled = false;
-    (async () => {
-      try {
-        const data = await fetchTodayNotifications(userId);
-        if (cancelled) return;
-        const totalCount =
-          data.notices.count +
-          data.mail.count +
-          data.approvals.pending.count +
-          data.approvals.received.count +
-          data.approvals.referenced.count;
 
-        setNotices(data.notices);
-        setMail(data.mail);
-        setApprovals(data.approvals);
-        setIsInitialized(true);
+    // 모달 즉시 열기 (로딩 UI 표시)
+    if (!isDismissedToday()) {
+      setIsOpen(true);
+    }
+    setIsInitialized(true);
 
-        if (totalCount > 0) {
-          setHasData(true);
+    // 두 API 병렬 호출, 모두 완료 후 한꺼번에 표시
+    Promise.all([
+      fetchFastNotifications(userId),
+      fetchMailNotifications(userId),
+    ]).then(([fastData, mailData]) => {
+      if (cancelled) return;
 
-          // "오늘 다시 보지 않기" 설정된 경우 모달은 안 띄움
-          if (!isDismissedToday()) {
-            setIsOpen(true);
-            // 캐시된 요약이 있으면 재사용, 없으면 새로 스트리밍
-            if (!restoreCachedSummary()) {
-              startSummaryStream(data);
-            }
-          }
-        }
-      } catch {
-        if (!cancelled) setIsInitialized(true);
-      }
-    })();
+      setNotices(fastData.notices);
+      setApprovals(fastData.approvals);
+      setMail(mailData);
+      setIsDataReady(true);
+
+      const totalCount =
+        fastData.notices.count +
+        mailData.count +
+        fastData.approvals.pending.count +
+        fastData.approvals.received.count +
+        fastData.approvals.referenced.count;
+
+      if (totalCount > 0) setHasData(true);
+    });
 
     return () => { cancelled = true; };
-  }, [pathname, searchParams, startSummaryStream]);
+  }, [pathname, searchParams]);
+
+  // 데이터 준비 완료 시 요약 스트리밍 시작
+  useEffect(() => {
+    if (!isDataReady || !isOpen) return;
+    if (summaryStreamedRef.current) return;
+
+    const totalCount =
+      notices.count + mail.count +
+      approvals.pending.count +
+      approvals.received.count +
+      approvals.referenced.count;
+    if (totalCount === 0) return;
+
+    if (!restoreCachedSummary()) {
+      startSummaryStream({ notices, mail, approvals });
+    }
+  }, [isDataReady, isOpen, notices, mail, approvals, restoreCachedSummary, startSummaryStream]);
 
   // 그냥 닫기 — 다음 새로고침 때 다시 뜸
   const closeNotifications = useCallback(() => {
@@ -218,13 +232,12 @@ export function NoticeToastProvider({ children }: { children: ReactNode }) {
   // 종 아이콘으로 다시 열기
   const openNotifications = useCallback(() => {
     setIsOpen(true);
-    // 요약이 아직 안 됐으면 캐시 확인 후 스트리밍
-    if (!summaryStreamedRef.current) {
+    if (isDataReady && !summaryStreamedRef.current) {
       if (!restoreCachedSummary()) {
         startSummaryStream({ notices, mail, approvals });
       }
     }
-  }, [notices, mail, approvals, startSummaryStream, restoreCachedSummary]);
+  }, [isDataReady, notices, mail, approvals, startSummaryStream, restoreCachedSummary]);
 
   return (
     <NotificationContext.Provider
@@ -234,6 +247,7 @@ export function NoticeToastProvider({ children }: { children: ReactNode }) {
         notices,
         mail,
         approvals,
+        isDataReady,
         closeNotifications,
         dismissNotifications,
         openNotifications,

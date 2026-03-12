@@ -1,7 +1,7 @@
 "use client";
 import type { UseChatHelpers } from "@ai-sdk/react";
 import equal from "fast-deep-equal";
-import { memo, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import type { ChatMessage } from "@/lib/types";
 // Mock Vote type since DB is removed
 type Vote = {
@@ -22,7 +22,7 @@ import {
   ToolInput,
   ToolOutput,
 } from "./elements/tool";
-import { SparklesIcon } from "./icons";
+
 import { MessageActions } from "./message-actions";
 import { MessageEditor } from "./message-editor";
 import { MessageReasoning } from "./message-reasoning";
@@ -105,8 +105,12 @@ const PurePreviewMessage = ({
         })}
       >
         {message.role === "assistant" && (
-          <div className="-mt-1 flex size-8 shrink-0 items-center justify-center rounded-full bg-background ring-1 ring-border">
-            <SparklesIcon size={14} />
+          <div className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-full">
+            <img
+              src={isLoading ? "/logo.svg" : "/logo.png"}
+              alt="Lucid AI"
+              className="size-8"
+            />
           </div>
         )}
 
@@ -168,14 +172,7 @@ const PurePreviewMessage = ({
                   return (
                     <div key={key}>
                       <MessageContent className="w-fit rounded-2xl px-3 py-2 text-left text-muted-foreground">
-                        <div className="relative inline-flex items-center gap-2">
-                          <span className="absolute inset-0 animate-pulse text-muted-foreground/40 blur">
-                            루시드가 생각을 정리하고 있습니다. 잠시만 기다려주세요.
-                          </span>
-                          <span className="relative animate-[pulse_1.6s_ease-in-out_infinite]">
-                          루시드가 생각을 정리하고 있습니다. 잠시만 기다려주세요.
-                          </span>
-                        </div>
+                        <LoadingPlaceholderText />
                       </MessageContent>
                     </div>
                   );
@@ -198,7 +195,7 @@ const PurePreviewMessage = ({
                       {message.role === "user" ? (
                         <div className="whitespace-pre-wrap">{sanitizeText(part.text)}</div>
                       ) : (
-                        <Response isStreaming={isLoading}>{sanitizeText(part.text)}</Response>
+                        <Response isStreaming={isLoading} workerName={message.workerName}>{sanitizeText(part.text)}</Response>
                       )}
                     </MessageContent>
                   </div>
@@ -394,7 +391,44 @@ export const PreviewMessage = memo(
   }
 );
 
+const LoadingPlaceholderText = () => {
+  const text = "루시드가 생각을 정리하고 있습니다. 잠시만 기다려주세요.";
+  const [displayed, setDisplayed] = useState("");
+
+  useEffect(() => {
+    let i = 0;
+    const timer = setInterval(() => {
+      i++;
+      setDisplayed(text.slice(0, i));
+      if (i >= text.length) clearInterval(timer);
+    }, 60);
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="relative inline-flex items-center">
+      <span className="animate-pulse">{displayed}</span>
+      {displayed.length < text.length && (
+        <span className="ml-0.5 inline-block w-[2px] h-3.5 bg-muted-foreground/60 animate-pulse" />
+      )}
+    </div>
+  );
+};
+
 export const ThinkingMessage = () => {
+  const text = "Thinking...";
+  const [displayed, setDisplayed] = useState("");
+
+  useEffect(() => {
+    let i = 0;
+    const timer = setInterval(() => {
+      i++;
+      setDisplayed(text.slice(0, i));
+      if (i >= text.length) clearInterval(timer);
+    }, 80);
+    return () => clearInterval(timer);
+  }, []);
+
   return (
     <div
       className="group/message fade-in w-full animate-in duration-300"
@@ -402,20 +436,16 @@ export const ThinkingMessage = () => {
       data-testid="message-assistant-loading"
     >
       <div className="flex items-start justify-start gap-3">
-        <div className="-mt-1 flex size-8 shrink-0 items-center justify-center rounded-full bg-background ring-1 ring-border">
-          <div className="animate-pulse">
-            <SparklesIcon size={14} />
-          </div>
+        <div className="-mt-1 flex size-8 shrink-0 items-center justify-center rounded-full">
+          <img src="/logo.svg" alt="Lucid AI" className="size-8" />
         </div>
 
         <div className="flex w-full flex-col gap-2 md:gap-4">
           <div className="flex items-center gap-1 p-0 text-muted-foreground text-sm">
-            <span className="animate-pulse">Thinking</span>
-            <span className="inline-flex">
-              <span className="animate-bounce [animation-delay:0ms]">.</span>
-              <span className="animate-bounce [animation-delay:150ms]">.</span>
-              <span className="animate-bounce [animation-delay:300ms]">.</span>
-            </span>
+            <span className="animate-pulse">{displayed}</span>
+            {displayed.length < text.length && (
+              <span className="ml-0.5 inline-block w-[2px] h-3.5 bg-muted-foreground/60 animate-pulse" />
+            )}
           </div>
         </div>
       </div>

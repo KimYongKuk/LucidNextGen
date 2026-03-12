@@ -35,6 +35,7 @@ BEDROCK_SEMAPHORE = asyncio.Semaphore(15)
 class ImageData(BaseModel):
     media_type: str
     base64_data: str
+    stored_filename: Optional[str] = None
 
 
 class MessageHistory(BaseModel):
@@ -556,8 +557,20 @@ async def chat_stream(
                             metadata["is_error"] = True
                         if a2a_collected_data.get("tools_used"):
                             metadata["tools_used"] = a2a_collected_data["tools_used"]
+                        if a2a_collected_data.get("input_tokens"):
+                            metadata["input_tokens"] = a2a_collected_data["input_tokens"]
+                            metadata["output_tokens"] = a2a_collected_data.get("output_tokens", 0)
+                            metadata["llm_call_count"] = a2a_collected_data.get("llm_call_count", 0)
+                            metadata["cache_read_tokens"] = a2a_collected_data.get("cache_read_tokens", 0)
+                            metadata["cache_write_tokens"] = a2a_collected_data.get("cache_write_tokens", 0)
                         if request.images:
                             metadata["image_count"] = len(request.images)
+                            image_refs = [
+                                {"stored_filename": img.stored_filename, "media_type": img.media_type}
+                                for img in request.images if img.stored_filename
+                            ]
+                            if image_refs:
+                                metadata["images"] = image_refs
 
                         print(f"[CHAT_STREAM] A2A scheduling background save: {len(a2a_collected_data.get('response', ''))} chars")
                         background_tasks.add_task(

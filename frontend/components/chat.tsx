@@ -21,6 +21,10 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useArtifactSelector } from "@/hooks/use-artifact";
 import { useXlsxViewer, useXlsxViewerSelector } from "@/hooks/use-xlsx-viewer";
+import {
+  useDocumentViewer,
+  useDocumentViewerSelector,
+} from "@/hooks/use-document-viewer";
 import { useAutoResume } from "@/hooks/use-auto-resume";
 // import type { Vote } from "@/lib/db/schema";
 import { ChatSDKError } from "@/lib/errors";
@@ -35,6 +39,7 @@ import { workspaceApi, type Workspace } from "@/lib/api/workspaces";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { Artifact } from "./artifact";
 import { XlsxViewerPanel } from "./xlsx-viewer-panel";
+import { DocumentViewerPanel } from "./document-viewer-panel";
 import { useDataStream } from "./data-stream-provider";
 import { Messages } from "./messages";
 import { MultimodalInput } from "./multimodal-input";
@@ -169,15 +174,16 @@ export function Chat({
   const isArtifactVisible = useArtifactSelector((state) => state.isVisible);
   const isXlsxViewerOpen = useXlsxViewerSelector((state) => state.isOpen);
   const { openFile: openXlsxFile, closeViewer: closeXlsxViewer } = useXlsxViewer();
+  const isDocViewerOpen = useDocumentViewerSelector((state) => state.isOpen);
+  const { closeViewer: closeDocViewer } = useDocumentViewer();
 
-  // 세션 전환 시 XLSX 뷰어 닫기
-  // Note: useRef(id) doesn't work here because React remounts with new id,
-  // so ref always equals current id. Instead, close on every id change/mount.
+  // 세션 전환 시 뷰어 닫기
   useEffect(() => {
     return () => {
       closeXlsxViewer();
+      closeDocViewer();
     };
-  }, [id, closeXlsxViewer]);
+  }, [id, closeXlsxViewer, closeDocViewer]);
 
   // 세션에 업로드된 문서 파일 추적 (이미지는 base64로 저장되므로 제외)
   const [hasUploadedSessionFiles, setHasUploadedSessionFiles] = useState(false);
@@ -230,7 +236,7 @@ export function Chat({
     <>
       <PanelGroup direction="horizontal" className="h-dvh">
         {/* Chat Panel */}
-        <Panel defaultSize={isXlsxViewerOpen ? 50 : 100} minSize={30}>
+        <Panel defaultSize={isXlsxViewerOpen || isDocViewerOpen ? 50 : 100} minSize={30}>
           <div className="overscroll-behavior-contain flex h-full min-w-0 touch-pan-y flex-col bg-background">
             <ChatHeader
               chatId={id}
@@ -291,6 +297,16 @@ export function Chat({
             <PanelResizeHandle className="w-1.5 bg-border hover:bg-primary/20 transition-colors" />
             <Panel defaultSize={50} minSize={25}>
               <XlsxViewerPanel />
+            </Panel>
+          </>
+        )}
+
+        {/* Document Viewer Panel (PDF / DOCX) */}
+        {isDocViewerOpen && !isXlsxViewerOpen && (
+          <>
+            <PanelResizeHandle className="w-1.5 bg-border hover:bg-primary/20 transition-colors" />
+            <Panel defaultSize={50} minSize={25}>
+              <DocumentViewerPanel />
             </Panel>
           </>
         )}

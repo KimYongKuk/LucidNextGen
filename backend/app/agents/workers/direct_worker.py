@@ -1,11 +1,10 @@
 """DirectResponseWorker - 도구 없이 직접 응답하는 Worker"""
 
 from typing import List, Dict, Any, AsyncIterator, Optional
-from langchain_aws import ChatBedrockConverse
 from langchain_core.messages import BaseMessage, SystemMessage
 
 from app.core.model_config import get_worker_config
-from .base_worker import BaseWorker, BEDROCK_CONFIG
+from .base_worker import BaseWorker, CachedChatBedrockConverse, BEDROCK_CONFIG
 
 
 class DirectResponseWorker(BaseWorker):
@@ -66,10 +65,29 @@ RESPONSE FORMAT:
         도구가 없으므로 create_react_agent 대신 직접 LLM 호출
         """
         import time
+
+        # Phase 0: 대화 히스토리가 길면 Haiku로 사전 요약
+        summarize_start = time.time()
+        processed_messages = await self._summarize_history_if_needed(messages)
+
+        if len(processed_messages) < len(messages):
+            summarize_time = int((time.time() - summarize_start) * 1000)
+            print(f"[{self.name}] [TIMING] Haiku summarization: {summarize_time}ms")
+            print(f"[{self.name}] Messages reduced: {len(messages)} -> {len(processed_messages)}")
+
+            yield {
+                "event": "summarization_complete",
+                "original_count": len(messages),
+                "summarized_count": len(processed_messages),
+                "timing_ms": summarize_time,
+            }
+
+            messages = processed_messages
+
         setup_start = time.time()
 
         config = self.get_model_config()
-        llm = ChatBedrockConverse(
+        llm = CachedChatBedrockConverse(
             model=config.model_id,
             temperature=0.7,
             max_tokens=config.max_tokens,

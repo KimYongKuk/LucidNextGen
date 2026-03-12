@@ -51,7 +51,7 @@ export function CorpSourcesCarousel({ sources }: CorpSourcesCarouselProps) {
               onClick={() => hasChunks(source) && toggleExpand(index)}
             >
               {/* 번호 배지 */}
-              <span className="flex items-center justify-center w-6 h-6 bg-primary/10 text-primary rounded-full text-xs font-semibold shrink-0">
+              <span className="flex items-center justify-center w-6 h-6 bg-[#FF4000]/10 text-[#FF4000] rounded-full text-xs font-semibold shrink-0">
                 {index + 1}
               </span>
 

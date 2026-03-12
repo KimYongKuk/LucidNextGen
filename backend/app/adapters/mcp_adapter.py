@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -246,21 +247,38 @@ class MCPAdapter:
             print(f"[MCP] Using cached tools (age: {cache_age}s, TTL: {MCPAdapter.CACHE_TTL}s)")
             return MCPAdapter._global_tools_cache
 
-        # 캐시 미스 - 서버에서 가져오기
+        # 캐시 미스 - 서버별 개별 로드 (한 서버 실패 시 나머지 정상 동작)
+        # 단일 MCP 서버가 죽은 경우 터지니까 그걸 헷지하기 위함
         print("[MCP] Fetching tools from MCP servers...")
-        tools = await self._client.get_tools()
+        server_names = list(self._client.connections.keys())
+
+        async def _load_server_tools(name: str):
+            """개별 서버에서 도구 로드 (실패 시 빈 리스트 반환)"""
+            try:
+                return await self._client.get_tools(server_name=name)
+            except Exception as e:
+                print(f"[MCP] WARNING: Server '{name}' failed to load: {type(e).__name__}: {e}")
+                return []
+
+        results = await asyncio.gather(*[_load_server_tools(n) for n in server_names])
+
+        tools = []
+        for name, server_tools in zip(server_names, results):
+            if server_tools:
+                tools.extend(server_tools)
+                print(f"[MCP]   {name}: {len(server_tools)} tools loaded")
+            # 실패 서버는 _load_server_tools에서 이미 로그됨
 
         # 직접 호출 RAG 도구 추가 (MCP 프로세스 오버헤드 제거)
         from app.agents.tools.rag_direct_tools import get_direct_rag_tools
         direct_rag_tools = get_direct_rag_tools()
-        tools = list(tools)  # 리스트로 변환 (불변 객체일 수 있음)
         tools.extend(direct_rag_tools)
         print(f"[MCP] Added {len(direct_rag_tools)} direct RAG tools")
 
         # 글로벌 캐시 업데이트
         MCPAdapter._global_tools_cache = tools
         MCPAdapter._cache_timestamp = now
-        print(f"[MCP] Tools cached: {len(tools)} tools")
+        print(f"[MCP] Tools cached: {len(tools)} tools (from {len(server_names)} servers)")
 
         return tools
 

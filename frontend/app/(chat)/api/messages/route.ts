@@ -50,10 +50,24 @@ export async function GET(request: Request) {
 
     const data = await res.json();
 
-    // Vercel AI SDK 형식으로 변환 (youtube_summary + 텍스트 + sources + corp_sources 순서)
+    // Vercel AI SDK 형식으로 변환 (이미지 + youtube_summary + 텍스트 + sources + corp_sources 순서)
     const messages =
       data.messages?.map((msg: any, index: number) => {
         const parts: any[] = [];
+
+        // 0. 이미지 파일 복원 (user 메시지에 첨부된 이미지)
+        if (msg.images && msg.images.length > 0) {
+          for (const img of msg.images) {
+            if (img.stored_filename) {
+              parts.push({
+                type: "file",
+                url: `/api/v1/image/download/${encodeURIComponent(img.stored_filename)}`,
+                filename: img.stored_filename,
+                mediaType: img.media_type,
+              });
+            }
+          }
+        }
 
         // 1. 유튜브 요약 먼저 (있는 경우)
         if (msg.youtube_summary) {

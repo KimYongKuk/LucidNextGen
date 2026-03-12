@@ -88,6 +88,10 @@ backend/data/ppt_output/
 backend/data/report_output/
 backend/data/xlsx_output/
 backend/data/xlsx_upload/
+backend/data/docx_output/
+backend/data/file_archive/
+backend/data/image_output/
+backend/data/user_uploads/
 
 # 이메일 백업 참조
 backend/email_backup_reference/

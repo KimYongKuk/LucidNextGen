@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -15,6 +16,7 @@ import {
   Mail,
   FileCheck,
   Sparkles,
+  Loader2,
 } from "lucide-react";
 import { useNotifications } from "./notice-toast-provider";
 import type {
@@ -32,6 +34,28 @@ function generateUUID() {
   });
 }
 
+/* ── 타이핑 애니메이션 훅 ──────────────────────────────────── */
+
+function useTypingText(text: string, speed = 60) {
+  const [displayed, setDisplayed] = useState("");
+
+  useEffect(() => {
+    setDisplayed("");
+    if (!text) return;
+
+    let i = 0;
+    const timer = setInterval(() => {
+      i++;
+      setDisplayed(text.slice(0, i));
+      if (i >= text.length) clearInterval(timer);
+    }, speed);
+
+    return () => clearInterval(timer);
+  }, [text, speed]);
+
+  return displayed;
+}
+
 export function NoticeModal() {
   const {
     isOpen,
@@ -39,9 +63,15 @@ export function NoticeModal() {
     notices,
     mail,
     approvals,
+    isDataReady,
     closeNotifications,
     dismissNotifications,
   } = useNotifications();
+
+  const typedTitle = useTypingText(
+    isOpen ? "Today's Briefing" : "",
+    50
+  );
 
   const approvalItemCount =
     approvals.pending.items.length +
@@ -49,7 +79,7 @@ export function NoticeModal() {
     approvals.referenced.items.length;
   const totalCount =
     notices.count + mail.count + approvalItemCount;
-  if (totalCount === 0 && !isOpen) return null;
+  if (!isOpen) return null;
 
   const askLucid = (query: string) => {
     closeNotifications();
@@ -62,48 +92,62 @@ export function NoticeModal() {
       open={isOpen}
       onOpenChange={(open) => !open && closeNotifications()}
     >
-      <DialogContent className="flex max-h-[80vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-lg">
+      <DialogContent
+        className="flex max-h-[80vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-lg"
+        onInteractOutside={(e) => e.preventDefault()}
+      >
         {/* Header */}
         <DialogHeader className="flex-shrink-0 border-b bg-gradient-to-r from-slate-50 to-slate-100/80 p-4 pb-3 dark:from-slate-900 dark:to-slate-800/80">
           <DialogTitle className="text-base font-semibold">
-            Today's Briefing
+            {typedTitle}
+            {typedTitle.length < "Today's Briefing".length ? (
+              <span className="ml-0.5 inline-block w-[2px] h-4 bg-foreground/60 animate-pulse align-middle" />
+            ) : (
+              <span className="ml-1 inline-block animate-[sparkle_1.5s_ease-in-out_infinite] align-middle">
+                ✨
+              </span>
+            )}
           </DialogTitle>
           <DialogDescription className="text-sm text-muted-foreground">
-            {totalCount > 0
-              ? `아래 ${totalCount}건의 항목 중, 내용을 선택하여 인사이트를 나눠보세요.`
-              : "새로운 알림이 없습니다"}
+            {!isDataReady
+              ? "알림을 불러오는 중입니다..."
+              : totalCount > 0
+                ? `아래 ${totalCount}건의 항목 중, 내용을 선택하여 인사이트를 나눠보세요.`
+                : "새로운 알림이 없습니다"}
           </DialogDescription>
         </DialogHeader>
 
-        {/* AI Summary */}
-        <SummaryStrip summary={summary} />
+        {/* Content: 로딩 중 or 실제 데이터 */}
+        {!isDataReady ? (
+          <LoadingIndicator />
+        ) : (
+          <>
+            {/* AI Summary */}
+            <SummaryStrip summary={summary} />
 
-        {/* Sections */}
-        <div className="flex-1 overflow-y-auto">
-          {/* 공지사항 */}
-          <NoticeSection
-            items={notices.items}
-            count={notices.count}
-            onAskLucid={askLucid}
-          />
-
-          {/* 메일 */}
-          <MailSection
-            items={mail.items}
-            count={mail.count}
-            onAskLucid={askLucid}
-          />
-
-          {/* 전자결재 */}
-          <ApprovalSection approvals={approvals} onAskLucid={askLucid} />
-        </div>
+            {/* Sections — 공지 → 메일 → 전자결재 순 */}
+            <div className="flex-1 overflow-y-auto">
+              <NoticeSection
+                items={notices.items}
+                count={notices.count}
+                onAskLucid={askLucid}
+              />
+              <MailSection
+                items={mail.items}
+                count={mail.count}
+                onAskLucid={askLucid}
+              />
+              <ApprovalSection approvals={approvals} onAskLucid={askLucid} />
+            </div>
+          </>
+        )}
 
         {/* Footer */}
         <div className="flex flex-shrink-0 items-center justify-between border-t p-3">
           <button
             type="button"
             onClick={dismissNotifications}
-            className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+            className="text-xs text-foreground/60 underline underline-offset-2 hover:text-foreground/80"
           >
             오늘 다시 보지 않기
           </button>
@@ -113,6 +157,19 @@ export function NoticeModal() {
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/* ── 로딩 인디케이터 ───────────────────────────────────────── */
+
+function LoadingIndicator() {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-3 py-12">
+      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground/60" />
+      <p className="text-xs text-muted-foreground">
+        공지사항, 메일, 전자결재를 확인하고 있습니다...
+      </p>
+    </div>
   );
 }
 
@@ -262,7 +319,7 @@ function MailSection({
   );
 }
 
-/* ── 전자결재 섹션 (서브카테고리 3개, 각 최대 5건) ─────────── */
+/* ── 전자결재 섹션 (서브카테고리 3개, 각 최대 3건) ─────────── */
 
 function ApprovalSection({
   approvals,
@@ -290,7 +347,6 @@ function ApprovalSection({
         label="결재 미결"
         items={approvals.pending.items}
         onAskLucid={onAskLucid}
-        dateField="drafted_at"
         queryPrefix="내 결재 대기함의"
       />
 
@@ -299,7 +355,6 @@ function ApprovalSection({
         label="수신문서"
         items={approvals.received.items}
         onAskLucid={onAskLucid}
-        dateField="drafted_at"
         queryPrefix="내 수신문서함의"
       />
 
@@ -308,7 +363,6 @@ function ApprovalSection({
         label="참조/열람 대기"
         items={approvals.referenced.items}
         onAskLucid={onAskLucid}
-        dateField="drafted_at"
         queryPrefix="내 참조함의"
       />
     </div>
@@ -319,13 +373,11 @@ function ApprovalSubSection({
   label,
   items,
   onAskLucid,
-  dateField,
   queryPrefix,
 }: {
   label: string;
   items: (ApprovalItem | ReferencedItem)[];
   onAskLucid: (q: string) => void;
-  dateField: "drafted_at";
   queryPrefix: string;
 }) {
   const buildQuery = (a: ApprovalItem | ReferencedItem) =>
