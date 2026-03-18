@@ -133,10 +133,28 @@ class Orchestrator:
             print(f"[ORCHESTRATOR] CLARIFY intent → injecting clarify_mode into context")
 
         # ============================================================
-        # Phase 2: Worker Dispatch
+        # Phase 2: Worker Dispatch (+ 도구 가용성 체크)
         # ============================================================
         worker_dispatch_start = time.time()
         worker = get_worker(worker_name)
+
+        # 도구 기반 Worker의 도구가 0개면 DirectWorker로 폴백
+        # (예: tavily-mcp 로드 실패 시 WebSearchWorker 도구 없음)
+        if worker.tool_names:
+            available = worker.filter_tools(all_tools)
+            if not available:
+                original_worker = worker_name
+                worker_name = "DirectResponseWorker"
+                worker = get_worker(worker_name)
+                print(f"[ORCHESTRATOR] Tool fallback: {original_worker} → {worker_name} (no tools available)")
+                yield {
+                    "type": "intent_classified",
+                    "intent": "direct",
+                    "worker": worker_name,
+                    "timing_ms": classify_time,
+                    "tool_fallback": True,
+                }
+
         worker_dispatch_time = int((time.time() - worker_dispatch_start) * 1000)
         print(f"[ORCHESTRATOR] [TIMING] Worker dispatch: {worker_dispatch_time}ms")
         print(f"[ORCHESTRATOR] Dispatching to {worker_name}")
