@@ -86,6 +86,8 @@ function PureChatHeader({
         </div>
       )}
 
+      <div className="order-3 ml-auto" />
+
       {isAdmin && (
         <Button
           asChild
@@ -120,7 +122,7 @@ function PureChatHeader({
       )}
 
       <Button
-        className="relative order-5 ml-auto h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
+        className="relative order-5 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
         onClick={openWhatsNew}
         variant="ghost"
         size="icon"
