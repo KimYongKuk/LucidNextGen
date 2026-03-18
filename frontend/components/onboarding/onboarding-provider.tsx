@@ -37,7 +37,9 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     const completed = localStorage.getItem(LOCALSTORAGE_KEY);
     const version = localStorage.getItem(LOCALSTORAGE_VERSION_KEY);
 
-    const shouldShow = !completed || version !== CURRENT_ONBOARDING_VERSION;
+    // 온보딩 비활성화 (필요 시 아래 주석 해제하여 복원)
+    // const shouldShow = !completed || version !== CURRENT_ONBOARDING_VERSION;
+    const shouldShow = false;
 
     setHasCompletedOnboarding(!shouldShow);
     setIsInitialized(true);

@@ -223,6 +223,10 @@ async def stream_a2a_response(
     needs_newline_after_tool = False  # 도구 완료 후 다음 텍스트 앞에 개행 삽입 필요 여부
     MAX_SAME_TOOL_CALLS = 50  # 같은 도구 최대 호출 횟수
 
+    # tool_call/tool_response 태그 필터링 상태
+    _inside_tool_tag = False  # <tool_call> 또는 <tool_response> 내부 여부
+    _tag_buffer = ""  # 부분 태그 감지용 버퍼
+
     # 리포트용 수집 변수
     classified_intent = None
     classified_worker = None
@@ -553,6 +557,45 @@ async def stream_a2a_response(
                         if not content:
                             continue
 
+                        # <tool_call>/<tool_response> 태그 필터링 (상태 기반)
+                        # 모델이 tool_use 대신 텍스트로 도구 호출을 출력하는 경우 방지
+                        filtered_content = ""
+                        for char in content:
+                            if _inside_tool_tag:
+                                _tag_buffer += char
+                                # 종료 태그 감지
+                                if _tag_buffer.endswith("</tool_call>") or _tag_buffer.endswith("</tool_response>"):
+                                    _inside_tool_tag = False
+                                    _tag_buffer = ""
+                            else:
+                                _tag_buffer += char
+                                # 시작 태그 감지
+                                if _tag_buffer.endswith("<tool_call>") or _tag_buffer.endswith("<tool_response>"):
+                                    # 시작 태그 이전의 텍스트는 유지
+                                    tag_name = "<tool_call>" if _tag_buffer.endswith("<tool_call>") else "<tool_response>"
+                                    pre_tag = _tag_buffer[:-len(tag_name)]
+                                    filtered_content += pre_tag
+                                    _inside_tool_tag = True
+                                    _tag_buffer = ""
+                                elif len(_tag_buffer) > 20:
+                                    # 버퍼가 충분히 길면 태그가 아님 → flush
+                                    filtered_content += _tag_buffer
+                                    _tag_buffer = ""
+                                elif "<" not in _tag_buffer:
+                                    # '<'가 없으면 태그 시작 불가 → flush
+                                    filtered_content += _tag_buffer
+                                    _tag_buffer = ""
+
+                        # 태그 내부가 아니고 버퍼에 남은 것이 있으면 (부분 태그 가능)
+                        # 다음 청크에서 이어서 처리하므로 flush하지 않음
+                        if not _inside_tool_tag and _tag_buffer and "<" not in _tag_buffer:
+                            filtered_content += _tag_buffer
+                            _tag_buffer = ""
+
+                        content = filtered_content
+                        if not content:
+                            continue
+
                         # Note: Heartbeat는 on_tool_end(모든 도구) 또는 content 수신 시 중지됨
                         # tool_use arguments 생성 중에는 content가 없으므로 하트비트 유지
 
@@ -651,7 +694,9 @@ async def stream_a2a_response(
             print(f"[FOLLOW_UP] Parsing failed: {e}")
             collected_follow_ups = None
 
-    # DB 저장용 텍스트에서 마커 제거 (항상 실행)
+    # DB 저장용 텍스트에서 마커 및 tool 태그 제거 (항상 실행)
+    collected_response = re.sub(r'<tool_call>[\s\S]*?</tool_call>\s*', '', collected_response)
+    collected_response = re.sub(r'<tool_response>[\s\S]*?</tool_response>\s*', '', collected_response)
     collected_response = re.sub(r'<!--NO_RESULTS-->\s*', '', collected_response)
     collected_response = re.sub(r'<!--HANDOFF:\w+-->\s*', '', collected_response)
     collected_response = re.sub(r'\s*<!--FOLLOW_UP:.*?-->\s*$', '', collected_response).rstrip()
