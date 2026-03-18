@@ -557,37 +557,43 @@ async def stream_a2a_response(
                         if not content:
                             continue
 
-                        # <tool_call>/<tool_response> 태그 필터링 (상태 기반)
-                        # 모델이 tool_use 대신 텍스트로 도구 호출을 출력하는 경우 방지
+                        # 모델이 tool_use 대신 텍스트로 도구 호출을 출력하는 경우 필터링
+                        # 두 가지 형식 모두 처리: <tool_call>, <function_calls> 등
+                        _FILTER_OPEN_TAGS = ["<tool_call>", "<tool_response>", "<function_calls>", "<function_result>"]
+                        _FILTER_CLOSE_TAGS = ["</tool_call>", "</tool_response>", "</function_calls>", "</function_result>"]
+                        _MAX_TAG_LEN = max(len(t) for t in _FILTER_OPEN_TAGS + _FILTER_CLOSE_TAGS)  # 18
+
                         filtered_content = ""
                         for char in content:
+                            _tag_buffer += char
                             if _inside_tool_tag:
-                                _tag_buffer += char
                                 # 종료 태그 감지
-                                if _tag_buffer.endswith("</tool_call>") or _tag_buffer.endswith("</tool_response>"):
+                                if any(_tag_buffer.endswith(t) for t in _FILTER_CLOSE_TAGS):
                                     _inside_tool_tag = False
                                     _tag_buffer = ""
+                                elif len(_tag_buffer) > 50000:
+                                    # 안전장치: 종료 태그 없이 너무 길면 버림
+                                    _tag_buffer = ""
                             else:
-                                _tag_buffer += char
                                 # 시작 태그 감지
-                                if _tag_buffer.endswith("<tool_call>") or _tag_buffer.endswith("<tool_response>"):
-                                    # 시작 태그 이전의 텍스트는 유지
-                                    tag_name = "<tool_call>" if _tag_buffer.endswith("<tool_call>") else "<tool_response>"
-                                    pre_tag = _tag_buffer[:-len(tag_name)]
+                                matched_tag = None
+                                for t in _FILTER_OPEN_TAGS:
+                                    if _tag_buffer.endswith(t):
+                                        matched_tag = t
+                                        break
+                                if matched_tag:
+                                    pre_tag = _tag_buffer[:-len(matched_tag)]
                                     filtered_content += pre_tag
                                     _inside_tool_tag = True
                                     _tag_buffer = ""
-                                elif len(_tag_buffer) > 20:
-                                    # 버퍼가 충분히 길면 태그가 아님 → flush
+                                elif len(_tag_buffer) > _MAX_TAG_LEN:
                                     filtered_content += _tag_buffer
                                     _tag_buffer = ""
                                 elif "<" not in _tag_buffer:
-                                    # '<'가 없으면 태그 시작 불가 → flush
                                     filtered_content += _tag_buffer
                                     _tag_buffer = ""
 
-                        # 태그 내부가 아니고 버퍼에 남은 것이 있으면 (부분 태그 가능)
-                        # 다음 청크에서 이어서 처리하므로 flush하지 않음
+                        # 태그 내부가 아니고 버퍼에 태그 시작 가능성 없으면 flush
                         if not _inside_tool_tag and _tag_buffer and "<" not in _tag_buffer:
                             filtered_content += _tag_buffer
                             _tag_buffer = ""
@@ -697,6 +703,8 @@ async def stream_a2a_response(
     # DB 저장용 텍스트에서 마커 및 tool 태그 제거 (항상 실행)
     collected_response = re.sub(r'<tool_call>[\s\S]*?</tool_call>\s*', '', collected_response)
     collected_response = re.sub(r'<tool_response>[\s\S]*?</tool_response>\s*', '', collected_response)
+    collected_response = re.sub(r'<function_calls>[\s\S]*?</function_calls>\s*', '', collected_response)
+    collected_response = re.sub(r'<function_result>[\s\S]*?</function_result>\s*', '', collected_response)
     collected_response = re.sub(r'<!--NO_RESULTS-->\s*', '', collected_response)
     collected_response = re.sub(r'<!--HANDOFF:\w+-->\s*', '', collected_response)
     collected_response = re.sub(r'\s*<!--FOLLOW_UP:.*?-->\s*$', '', collected_response).rstrip()
