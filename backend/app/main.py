@@ -57,7 +57,12 @@ class _TeeWriter:
     def write(self, text):
         if text and text.strip():
             self._log_func(text.rstrip())
-        self._original.write(text)
+        try:
+            self._original.write(text)
+        except UnicodeEncodeError:
+            # cp949 등 콘솔 인코딩이 이모지를 지원하지 않을 때 안전하게 출력
+            encoding = getattr(self._original, "encoding", "utf-8") or "utf-8"
+            self._original.write(text.encode(encoding, errors="replace").decode(encoding))
     def flush(self):
         self._original.flush()
     # subprocess/uvicorn이 fileno()를 호출할 수 있으므로 위임
