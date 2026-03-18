@@ -116,12 +116,9 @@ async def _batch_lookup_users(employee_numbers: list) -> dict:
         try:
             rows = await conn.fetch(
                 """
-                SELECT u.employee_number, u.name, dep.name AS dept_name
-                FROM go_users u
-                LEFT JOIN go_dept_members dm ON u.id = dm.user_id AND dm.deleted_at IS NULL
-                LEFT JOIN go_departments dep ON dm.department_id = dep.id
-                WHERE u.employee_number = ANY($1)
-                  AND u.deleted_at IS NULL
+                SELECT employee_number, name, dept_name
+                FROM v_user_info_mapping
+                WHERE employee_number = ANY($1)
                 """,
                 employee_numbers
             )

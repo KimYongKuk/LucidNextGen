@@ -180,12 +180,9 @@ async def execute_approval_query(employee_number: str, sql_query: str) -> str:
             async with pool.acquire() as conn:
                 row = await conn.fetchrow(
                     """
-                    SELECT u.id AS user_id, u.login_id, u.name,
-                           dm.department_id AS dept_id, dep.name AS dept_name
-                    FROM go_users u
-                    JOIN go_dept_members dm ON u.id = dm.user_id AND dm.deleted_at IS NULL
-                    JOIN go_departments dep ON dm.department_id = dep.id
-                    WHERE u.employee_number = $1 AND u.deleted_at IS NULL
+                    SELECT user_id, login_id, name, dept_id, dept_name
+                    FROM v_user_info_mapping
+                    WHERE employee_number = $1
                     """,
                     employee_number
                 )
