@@ -45,6 +45,24 @@ INTENT_TO_WORKER = {
 }
 
 
+# Intent → 사람이 읽을 수 있는 기능 설명 (HANDOFF 프롬프트용)
+WORKER_CAPABILITIES = {
+    Intent.MAIL: "메일 조회/검색/요약 (받은편지함, 보낸편지함, 메일 본문, 답장 초안)",
+    Intent.APPROVAL: "전자결재 조회 (결재 대기함, 기안함, 결재 완료함, 참조함)",
+    Intent.WEB_SEARCH: "실시간 웹 검색 (뉴스, 날씨, 주가, 최신 정보)",
+    Intent.CORP_RAG: "사내 문서 검색 (인사, 회계, IT, 안전 규정)",
+    Intent.USER_FILES: "업로드 파일 분석 (PDF, DOCX, XLSX, TXT)",
+    Intent.IT_SUPPORT: "IT 지원 VOC 검색 (IT/보안 문의 사례)",
+    Intent.ACCT_SUPPORT: "회계/재경 VOC 검색 (회계 문의 사례)",
+    Intent.BOARD: "사내 게시판 검색 (공지사항, 게시글)",
+    Intent.XLSX: "엑셀 파일 생성/수정 (서식, 차트, 피벗테이블)",
+    Intent.VISUALIZATION: "PDF/Word 문서 생성, 차트/그래프 시각화",
+    Intent.PPT_GENERATION: "PPT 프레젠테이션 생성",
+    Intent.YOUTUBE: "YouTube 영상 요약",
+    Intent.URL_FETCH: "웹 페이지 콘텐츠 추출",
+}
+
+
 class AgentState(TypedDict):
     """Orchestrator와 Worker 간 공유 상태"""
     # 메시지 히스토리 (누적)

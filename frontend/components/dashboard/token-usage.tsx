@@ -41,16 +41,10 @@ const CALLER_COLORS = [
 ]
 
 export function TokenUsage({ data }: Props) {
-  // 캐시 할인 적용 계산
-  // input_tokens: 정가, cache_read: 10%, cache_write: 125%
-  const rawInput = data.totalInputTokens + data.totalCacheReadTokens + data.totalCacheWriteTokens
-  const discountedInput = Math.round(
-    data.totalInputTokens * 1.0
-    + data.totalCacheReadTokens * 0.1
-    + data.totalCacheWriteTokens * 1.25
-  )
-  const totalTokens = discountedInput + data.totalOutputTokens
-  const savedTokens = rawInput - discountedInput
+  // 실질 소비 토큰: input + cache_write + output (cache_read = 절감분 제외)
+  const effectiveInput = data.totalInputTokens + data.totalCacheWriteTokens
+  const totalTokens = effectiveInput + data.totalOutputTokens
+  const savedTokens = data.totalCacheReadTokens
 
   // 워커별 합산 (모델 무관)
   const callerMap = new Map<string, { caller: string; total: number; sonnet: number; haiku: number }>()
@@ -76,8 +70,8 @@ export function TokenUsage({ data }: Props) {
       <SectionHeader title="토큰 사용량" subtitle="Token Usage" />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
-        <KpiCard label="총 토큰 (과금)" value={formatTokens(totalTokens)} icon={Zap} accent="blue" />
-        <KpiCard label="Input (캐시 할인)" value={formatTokens(discountedInput)} icon={Cpu} accent="green" />
+        <KpiCard label="실질 소비 토큰" value={formatTokens(totalTokens)} icon={Zap} accent="blue" />
+        <KpiCard label="Input (실질)" value={formatTokens(effectiveInput)} icon={Cpu} accent="green" />
         <KpiCard label="Output 토큰" value={formatTokens(data.totalOutputTokens)} icon={Cpu} accent="orange" />
         <KpiCard label="캐시 절감" value={formatTokens(savedTokens)} icon={TrendingDown} accent="green" />
       </div>
@@ -105,7 +99,7 @@ export function TokenUsage({ data }: Props) {
                 </Pie>
                 <Tooltip
                   contentStyle={{ backgroundColor: "#1F2937", border: "1px solid #334155", borderRadius: "8px", color: "#F3F4F6" }}
-                  formatter={(value: number) => [formatTokens(value), "토큰"]}
+                  formatter={(value) => [formatTokens(Number(value)), "토큰"]}
                 />
                 <Legend
                   wrapperStyle={{ fontSize: 12 }}
@@ -127,7 +121,7 @@ export function TokenUsage({ data }: Props) {
                 <YAxis tick={{ fill: "#9CA3AF", fontSize: 12 }} axisLine={{ stroke: "#334155" }} tickLine={false} tickFormatter={(v) => formatTokens(v)} />
                 <Tooltip
                   contentStyle={{ backgroundColor: "#1F2937", border: "1px solid #334155", borderRadius: "8px", color: "#F3F4F6" }}
-                  formatter={(value: number, name: string) => [formatTokens(value), name]}
+                  formatter={(value, name) => [formatTokens(Number(value)), String(name)]}
                 />
                 <Legend wrapperStyle={{ fontSize: 12, color: "#9CA3AF" }} />
                 <Line type="monotone" dataKey="sonnetTokens" name="Sonnet" stroke="#3B82F6" strokeWidth={2} dot={{ r: 4, fill: "#3B82F6" }} />

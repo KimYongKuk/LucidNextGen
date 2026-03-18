@@ -309,6 +309,9 @@ async def stream_a2a_response(
                 if event.get("is_fallback"):
                     # Fallback intent는 별도 저장 (primary 덮어쓰기 방지)
                     print(f"[CHAT_STREAM] Fallback intent: {event.get('intent')} -> {event.get('worker')}")
+                elif event.get("is_handoff"):
+                    # Handoff 선행 워커 intent는 primary 덮어쓰기 방지
+                    print(f"[CHAT_STREAM] Handoff intent: {event.get('intent')} -> {event.get('worker')}")
                 else:
                     classified_intent = event.get("intent")
                     classified_worker = event.get("worker")
@@ -650,6 +653,7 @@ async def stream_a2a_response(
 
     # DB 저장용 텍스트에서 마커 제거 (항상 실행)
     collected_response = re.sub(r'<!--NO_RESULTS-->\s*', '', collected_response)
+    collected_response = re.sub(r'<!--HANDOFF:\w+-->\s*', '', collected_response)
     collected_response = re.sub(r'\s*<!--FOLLOW_UP:.*?-->\s*$', '', collected_response).rstrip()
 
     total_time = int((time.time() - start_time) * 1000)

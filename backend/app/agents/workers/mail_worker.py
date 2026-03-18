@@ -7,8 +7,18 @@ Sonnet 모델 사용: 메일 본문 요약 및 답장 초안 작성에 고품질
 """
 
 from typing import List, Dict, Any, Optional
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
 from .base_worker import BaseWorker
+
+# 도구별 tool result 최대 길이
+# - 목록 도구(inbox/sent/unread/search): 충분히 크게 (50건 목록 ≈ 15K)
+# - 상세 도구(detail): 본문 요약/답장에 필요한 최소한
+MAIL_LIST_RESULT_MAX_CHARS = 16000   # 목록: 50건까지 커버
+MAIL_DETAIL_RESULT_MAX_CHARS = 6000  # 상세: 본문 truncation
+
+# 목록 도구 이름 (truncation 차등 적용용)
+_MAIL_LIST_TOOLS = {"get_inbox_mail", "get_sent_mail", "get_unread_mail", "search_mail", "get_mail_folders"}
 
 
 class MailWorker(BaseWorker):
@@ -38,6 +48,25 @@ class MailWorker(BaseWorker):
         return 24
 
     @property
+    def compact_previous_results(self) -> bool:
+        """이전 단계 Tool 결과 압축 활성화 (토큰 누적 방지)
+
+        메일 워크플로우: inbox(대) → detail#1(8K) → detail#2(8K) → ...
+        압축 없이 매 LLM 호출마다 이전 결과 전부 재전송 → 토큰 폭증.
+        """
+        return True
+
+    @property
+    def compact_keep_recent_pairs(self) -> int:
+        """최근 6쌍 원본 유지 (다건 메일 요약 워크플로우 보호)
+
+        "최근 메일 5건 요약해줘" → inbox(1) + detail x5 = 6 tool call 쌍
+        모두 원본 유지해야 LLM이 5건 각각 제대로 요약 가능.
+        개별 truncation(6K)이 있으므로 6쌍 유지해도 최대 36K chars ≈ 18K tokens.
+        """
+        return 6
+
+    @property
     def system_prompt(self) -> str:
         return """You are a mail assistant for 루시드AI.
 
@@ -46,7 +75,7 @@ class MailWorker(BaseWorker):
 
 ## CRITICAL RULES
 1. 도구 호출 시 employee_number에 반드시 "{employee_number}" 값을 사용하세요
-2. 도구를 즉시 호출하세요. "조회하겠습니다"와 같은 사전 안내 없이 바로 호출
+2. 먼저 한 문장으로 간단히 안내한 뒤 (예: "받은 메일함을 확인해볼게요!"), 사용자의 요청 의도에 맞는 도구와 파라미터를 선택하여 호출하세요
 3. 각 도구는 동일 파라미터로 1번만 호출하세요 (재시도 금지)
 4. 본인 인증된 계정의 메일함만 조회할 수 있습니다. 다른 사람의 메일함 조회 요청은 정중히 거절하세요.
 5. 메일 발송/전달/삭제는 지원하지 않습니다. 사용자가 요청하면 그룹웨어에서 직접 처리하도록 안내하세요.
@@ -142,7 +171,7 @@ search_mail 사용 시 주의:
                         input_data["employee_number"] = _uid
                 try:
                     result = await _original(input_data, config, **kwargs)
-                    return result
+                    return _truncate_mail_result(result, _tname)
                 except Exception as e:
                     print(f"[MailWorker] [SECURE_INVOKE] {_tname} ERROR: {type(e).__name__}: {e}")
                     raise
@@ -172,3 +201,35 @@ search_mail 사용 시 주의:
             print(f"[MailWorker] WARNING: No user_id available for mail query")
 
         return prompt
+
+
+def _truncate_mail_result(result, tool_name: str):
+    """도구별 차등 truncation: 목록 도구는 넉넉하게, 상세 도구는 절약.
+
+    - 목록 도구 (inbox/sent/unread/search): 16K (50건 목록 커버)
+    - 상세 도구 (detail): 6K (요약/답장에 충분한 본문)
+    """
+    if tool_name in _MAIL_LIST_TOOLS:
+        max_chars = MAIL_LIST_RESULT_MAX_CHARS
+    else:
+        max_chars = MAIL_DETAIL_RESULT_MAX_CHARS
+
+    if isinstance(result, ToolMessage):
+        content = result.content if isinstance(result.content, str) else str(result.content)
+        if len(content) > max_chars:
+            truncated = content[:max_chars].rstrip()
+            new_content = f"{truncated}\n\n[결과가 {len(content):,}자 중 {max_chars:,}자로 잘렸습니다]"
+            print(f"[MailWorker] [TRUNCATE] {tool_name}: {len(content):,} → {max_chars:,}자")
+            return ToolMessage(
+                content=new_content,
+                tool_call_id=result.tool_call_id,
+                name=getattr(result, "name", None) or tool_name,
+            )
+        return result
+
+    if isinstance(result, str) and len(result) > max_chars:
+        truncated = result[:max_chars].rstrip()
+        print(f"[MailWorker] [TRUNCATE] {tool_name}: {len(result):,} → {max_chars:,}자")
+        return f"{truncated}\n\n[결과가 {len(result):,}자 중 {max_chars:,}자로 잘렸습니다]"
+
+    return result

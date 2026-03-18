@@ -102,7 +102,7 @@ export default function ReportPage() {
 
         {data && !loading && (
           <>
-            <UsageOverview data={data.overview} />
+            <UsageOverview data={data.overview} tokenData={data.tokenUsage} />
             <UserRanking data={data.userRanking} onUserClick={handleUserClick} />
             <IntentDistribution data={data.intents} onIntentClick={handleIntentClick} />
             <QualityMetrics data={data.quality} />

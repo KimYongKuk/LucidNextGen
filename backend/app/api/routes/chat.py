@@ -3,6 +3,8 @@ import json
 import time
 import logging
 import os
+import base64
+import io
 from datetime import datetime
 from typing import Optional, List, Union, Any
 from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks
@@ -51,6 +53,79 @@ class ChatRequest(BaseModel):
     images: Optional[List[ImageData]] = None
     message_history: Optional[List[MessageHistory]] = None
     workspace_id: Optional[str] = None  # UUID string
+
+
+# ============================================================================
+# Image Compression (Bedrock 5MB limit)
+# ============================================================================
+
+# Bedrock ConverseStream API는 이미지를 base64 → bytes로 변환 후 전송
+# bytes 기준 5MB(5,242,880) 제한 → base64 기준 약 3.93MB
+BEDROCK_IMAGE_MAX_BYTES = 5 * 1024 * 1024  # 5MB (bytes 기준)
+
+def _compress_image_if_needed(base64_data: str, media_type: str) -> tuple[str, str]:
+    """Bedrock 5MB 제한 초과 시 이미지를 JPEG 압축하여 반환.
+
+    Returns:
+        (compressed_base64, updated_media_type)
+    """
+    try:
+        raw_bytes = base64.b64decode(base64_data)
+        if len(raw_bytes) <= BEDROCK_IMAGE_MAX_BYTES:
+            return base64_data, media_type
+
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(raw_bytes))
+
+        # RGBA → RGB 변환 (JPEG는 알파 미지원)
+        if img.mode in ("RGBA", "LA", "P"):
+            img = img.convert("RGB")
+
+        # 1단계: 해상도 축소 (긴 변 4096px 제한)
+        max_dim = 4096
+        if max(img.size) > max_dim:
+            ratio = max_dim / max(img.size)
+            new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+            img = img.resize(new_size, Image.LANCZOS)
+
+        # 2단계: JPEG quality 단계적 하향
+        for quality in (85, 70, 50, 30):
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=quality, optimize=True)
+            if buf.tell() <= BEDROCK_IMAGE_MAX_BYTES:
+                compressed = base64.b64encode(buf.getvalue()).decode("utf-8")
+                logger.info(
+                    f"[Image Compress] {len(raw_bytes)/1024/1024:.1f}MB → "
+                    f"{buf.tell()/1024/1024:.1f}MB (quality={quality})"
+                )
+                return compressed, "image/jpeg"
+
+        # 3단계: 그래도 초과하면 추가 리사이즈
+        for max_d in (2048, 1024):
+            ratio = max_d / max(img.size)
+            resized = img.resize(
+                (int(img.size[0] * ratio), int(img.size[1] * ratio)),
+                Image.LANCZOS,
+            )
+            buf = io.BytesIO()
+            resized.save(buf, format="JPEG", quality=50, optimize=True)
+            if buf.tell() <= BEDROCK_IMAGE_MAX_BYTES:
+                compressed = base64.b64encode(buf.getvalue()).decode("utf-8")
+                logger.info(
+                    f"[Image Compress] {len(raw_bytes)/1024/1024:.1f}MB → "
+                    f"{buf.tell()/1024/1024:.1f}MB (resize={max_d}px)"
+                )
+                return compressed, "image/jpeg"
+
+        # 최종 폴백: 가장 작은 결과라도 반환
+        logger.warning("[Image Compress] Could not compress below 5MB, using best effort")
+        compressed = base64.b64encode(buf.getvalue()).decode("utf-8")
+        return compressed, "image/jpeg"
+
+    except Exception as e:
+        logger.warning(f"[Image Compress] Failed, using original: {e}")
+        return base64_data, media_type
 
 
 # ============================================================================
@@ -351,7 +426,7 @@ def build_message_payload(request) -> list:
             elif msg.role == "assistant":
                 messages.append(AIMessage(content=msg.content))
 
-    # 현재 메시지 (이미지 포함 가능)
+    # 현재 메시지 (이미지 포함 가능, Bedrock 5MB 제한 초과 시 자동 압축)
     if request.images:
         image_contents = []
         for img in request.images:
@@ -364,6 +439,7 @@ def build_message_payload(request) -> list:
                 data = img.get("base64_data", "")
 
             if data:
+                data, media_type = _compress_image_if_needed(data, media_type)
                 image_contents.append({
                     "type": "image",
                     "source": {
@@ -513,10 +589,15 @@ async def chat_stream(
                     if request.message_history:
                         msg_history = [{"role": m.role, "content": m.content} for m in request.message_history]
 
-                    # 이미지 변환
+                    # 이미지 변환 (Bedrock 5MB 제한 초과 시 자동 압축)
                     img_data = None
                     if request.images:
-                        img_data = [{"media_type": i.media_type, "base64_data": i.base64_data} for i in request.images]
+                        img_data = []
+                        for i in request.images:
+                            compressed_data, compressed_type = _compress_image_if_needed(
+                                i.base64_data, i.media_type
+                            )
+                            img_data.append({"media_type": compressed_type, "base64_data": compressed_data})
 
                     # A2A 스트리밍 위임
                     a2a_collected_data = {}

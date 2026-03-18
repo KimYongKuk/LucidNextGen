@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Toaster } from "sonner";
 import { ThemeProvider } from "@/components/theme-provider";
@@ -127,11 +128,13 @@ export default function RootLayout({
         >
           <OnboardingProvider>
             <WhatsNewProvider>
-              <NoticeToastProvider>
-                <Toaster position="top-center" />
-                <LunchboxRain />
-                {children}
-              </NoticeToastProvider>
+              <Suspense>
+                <NoticeToastProvider>
+                  <Toaster position="top-center" />
+                  <LunchboxRain />
+                  {children}
+                </NoticeToastProvider>
+              </Suspense>
             </WhatsNewProvider>
           </OnboardingProvider>
         </ThemeProvider>
