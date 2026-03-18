@@ -50,6 +50,8 @@ DEFAULT_SUMMARIZATION_PROMPT = """다음 대화 내용을 요약해줘.
 4. 사용자의 최종 요청 명확히 기록
 5. 마크다운 형식으로 정리
 6. 최대 800단어
+7. 테이블/표 데이터는 마크다운 테이블 형식을 최대한 유지 (상위 10행 + "총 N행")
+8. "[이전 단계에서 가져온 데이터]"로 시작하는 메시지는 데이터 원본을 최대한 보존
 
 ## ⚠️ 중요 - 반드시 보존할 정보:
 - 이전에 생성된 파일명이 있다면 기록
@@ -426,6 +428,15 @@ class BaseWorker(ABC):
         return False
 
     @property
+    def compact_keep_recent_pairs(self) -> int:
+        """원본 유지할 최근 tool call 쌍 개수 (기본: COMPACT_KEEP_RECENT_PAIRS=1)
+
+        - XlsxWorker 등 순차 빌드 패턴: 1 (이전 결과 불필요)
+        - MailWorker 등 병렬 수집 패턴: 5+ (다건 상세 조회 후 종합 필요)
+        """
+        return COMPACT_KEEP_RECENT_PAIRS
+
+    @property
     def summarization_prompt(self) -> str:
         """Haiku 요약용 프롬프트 (Worker별 커스터마이즈 가능)"""
         return DEFAULT_SUMMARIZATION_PROMPT
@@ -582,6 +593,19 @@ class BaseWorker(ABC):
 
 {prompt}"""
 
+        # ============ 대화 히스토리 데이터 활용 ============
+        prompt += """
+
+## CONVERSATION DATA — 대화 히스토리 데이터 활용
+
+이전 대화에서 다른 기능(메일 조회, 웹 검색, 문서 검색 등)을 통해 가져온 데이터가 히스토리에 포함되어 있을 수 있습니다.
+
+**규칙:**
+1. 사용자가 이전 데이터를 참조하는 요청("이걸로 엑셀 만들어줘", "위 내용을 정리해줘" 등)을 하면, 히스토리에서 해당 데이터를 찾아 직접 활용하세요.
+2. 히스토리에 필요한 데이터가 있는데 "접근할 수 없습니다" / "지원하지 않습니다"라고 답하지 마세요. 히스토리의 데이터는 당신이 사용할 수 있습니다.
+3. 히스토리 데이터가 불완전하면 가용한 부분만 활용하고 부족한 부분을 안내하세요.
+"""
+
         # ============ CLARIFY 모드: 사용자에게 조회 범위 확인 ============
         if context.get("clarify_mode"):
             clarify_instruction = """
@@ -672,6 +696,37 @@ class BaseWorker(ABC):
 - 결과를 찾은 경우에는 마커를 출력하지 마세요 (정상 응답만)
 """
             prompt += fallback_instruction
+
+        # ============ HANDOFF — 다른 워커의 데이터가 필요할 때 ============
+        if self.tool_names and not context.get("is_handoff_target"):
+            from app.agents.state import WORKER_CAPABILITIES, INTENT_TO_WORKER as _ITW
+            # 자기 자신 제외한 다른 워커 능력 목록
+            other_caps = {k: v for k, v in WORKER_CAPABILITIES.items()
+                          if _ITW.get(k) != self.name}
+            caps_lines = "\n".join(f"  - `{k.value}`: {v}" for k, v in other_caps.items())
+
+            handoff_instruction = f"""
+
+## HANDOFF — 다른 기능의 데이터가 필요할 때
+
+사용자 요청을 처리하려면 **당신이 보유하지 않은 기능**의 데이터가 필요할 수 있습니다.
+
+**대화 히스토리에 필요한 데이터가 이미 있으면**: HANDOFF 없이 직접 사용하세요.
+
+**히스토리에 없고, 아래 기능에서 가져와야 하는 경우**:
+응답 맨 처음에 `<!--HANDOFF:인텐트값-->` 마커를 출력한 뒤, 간단한 안내를 추가하세요.
+
+**사용 가능한 인텐트:**
+{caps_lines}
+
+**예시:** 메일 데이터가 필요하면 → `<!--HANDOFF:mail-->` + "메일에서 데이터를 먼저 가져오겠습니다."
+
+**규칙:**
+1. 히스토리에 데이터가 있으면 HANDOFF하지 말고 직접 사용
+2. HANDOFF는 최대 1개 인텐트만 가능
+3. 당신의 도구로 처리 가능한 작업에는 HANDOFF 불필요
+"""
+            prompt += handoff_instruction
 
         # ============ 후속 질문 제안 생성 지시 ============
         capabilities = WORKER_FOLLOW_UP_CAPABILITIES.get(
@@ -772,15 +827,29 @@ class BaseWorker(ABC):
             return messages
 
     def _format_messages_for_summary(self, messages: List[BaseMessage]) -> str:
-        """메시지를 요약용 텍스트로 포맷팅"""
+        """메시지를 요약용 텍스트로 포맷팅 (구조화 데이터 보존)"""
         lines = []
         for msg in messages:
             role = "User" if isinstance(msg, HumanMessage) else "Assistant"
             content = msg.content if isinstance(msg.content, str) else str(msg.content)
-            if len(content) > 2000:
-                content = content[:2000] + "... [truncated]"
+
+            # Assistant 메시지에 테이블이 있으면 더 큰 limit
+            if role == "Assistant" and self._has_structured_data(content):
+                max_len = 6000
+            else:
+                max_len = 2000
+
+            if len(content) > max_len:
+                content = content[:max_len] + "... [truncated]"
             lines.append(f"{role}: {content}")
         return "\n\n".join(lines)
+
+    @staticmethod
+    def _has_structured_data(content: str) -> bool:
+        """테이블/구조화 데이터 포함 여부"""
+        table_rows = sum(1 for line in content.split('\n')
+                         if line.strip().startswith('|') and line.strip().endswith('|'))
+        return table_rows >= 3
 
     async def stream_response(
         self,
@@ -867,7 +936,7 @@ class BaseWorker(ABC):
         agent_start = time.time()
         if self.compact_previous_results:
             _sys_prompt = system_prompt
-            _keep_n = COMPACT_KEEP_RECENT_PAIRS
+            _keep_n = self.compact_keep_recent_pairs
             _max_chars = COMPACT_SUMMARY_MAX_CHARS
             _worker_name = self.name
 

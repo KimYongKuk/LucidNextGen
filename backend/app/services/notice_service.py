@@ -171,20 +171,18 @@ class NotificationService:
 
     # ── 전자결재 ───────────────────────────────────────────────
 
-    async def _get_login_id(self, employee_number: str) -> str:
-        """사번 → login_id 조회 (캐시)"""
-        if employee_number in self._login_id_cache:
-            return self._login_id_cache[employee_number]
+    async def _get_user_info(self, employee_number: str) -> dict:
+        """사번 → login_id, dept_id 조회 (캐시, v_user_info_mapping VIEW 사용)"""
+        if employee_number in self._login_id_cache and employee_number in self._dept_id_cache:
+            return {
+                "login_id": self._login_id_cache[employee_number],
+                "dept_id": self._dept_id_cache[employee_number],
+            }
 
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                """
-                SELECT u.login_id
-                FROM go_users u
-                WHERE u.employee_number = $1
-                  AND u.deleted_at IS NULL
-                """,
+                "SELECT login_id, dept_id FROM v_user_info_mapping WHERE employee_number = $1",
                 employee_number
             )
 
@@ -192,31 +190,24 @@ class NotificationService:
             raise ValueError(f"사용자를 찾을 수 없습니다 (사번: {employee_number})")
 
         self._login_id_cache[employee_number] = row["login_id"]
-        return row["login_id"]
+        self._dept_id_cache[employee_number] = row["dept_id"]
+        return {"login_id": row["login_id"], "dept_id": row["dept_id"]}
+
+    async def _get_login_id(self, employee_number: str) -> str:
+        """사번 → login_id 조회 (캐시)"""
+        if employee_number in self._login_id_cache:
+            return self._login_id_cache[employee_number]
+        info = await self._get_user_info(employee_number)
+        return info["login_id"]
 
     async def _get_dept_id(self, employee_number: str) -> int:
         """사번 → dept_id 조회 (캐시)"""
         if employee_number in self._dept_id_cache:
             return self._dept_id_cache[employee_number]
+        info = await self._get_user_info(employee_number)
+        return info["dept_id"]
 
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT dm.department_id AS dept_id
-                FROM go_users u
-                JOIN go_dept_members dm ON u.id = dm.user_id AND dm.deleted_at IS NULL
-                WHERE u.employee_number = $1
-                  AND u.deleted_at IS NULL
-                """,
-                employee_number
-            )
-
-        if not row:
-            raise ValueError(f"부서를 찾을 수 없습니다 (사번: {employee_number})")
-
-        self._dept_id_cache[employee_number] = row["dept_id"]
-        return row["dept_id"]
+    # _get_dept_id에서 더 이상 직접 쿼리하지 않음 (위의 _get_user_info 사용)
 
     async def get_pending_approvals(self, employee_number: str) -> Dict[str, Any]:
         """전자결재 미결 문서 조회"""

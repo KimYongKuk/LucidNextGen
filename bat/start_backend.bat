@@ -11,4 +11,5 @@ echo   Tail:     bat\tail_log.bat
 echo ============================================
 echo.
 
+set PORT=8099
 python -X utf8 app/main.py

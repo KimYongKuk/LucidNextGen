@@ -318,7 +318,19 @@ Answer in Korean unless asked otherwise."""
         # Per-request: upload 파일이 output으로 복사되면 이후 모든 도구가 output 경로 사용
         redirected_files: Dict[str, str] = {}
 
+        # 보안 래핑 대상: Excel 전용 도구만 (tavily_search 등 외부 도구는 제외)
+        # MCP 도구는 전역 캐시되므로, 외부 도구를 래핑하면 다른 Worker에도 영향
+        SKIP_WRAPPING = frozenset(["tavily_search"])
+
         for tool in tools:
+            if tool.name in SKIP_WRAPPING:
+                # 이전에 래핑된 경우 원복 (서버 재시작 없이도 즉시 적용)
+                unwrapped = getattr(tool, "_unwrapped_ainvoke", None)
+                if unwrapped:
+                    object.__setattr__(tool, "ainvoke", unwrapped)
+                    print(f"[XlsxWorker] [UNWRAP] {tool.name}: 이전 래핑 해제됨")
+                continue
+
             original_ainvoke = getattr(tool, "_unwrapped_ainvoke", None) or tool.ainvoke
             object.__setattr__(tool, "_unwrapped_ainvoke", original_ainvoke)
 
@@ -524,7 +536,12 @@ def _truncate_tool_result(
 
     모든 타입(str, list, dict, ToolMessage 등)을 문자열로 변환 후 잘라냄.
     LLM에게 잘렸음을 안내하여 정확성 유지.
+
+    주의: Excel 도구 전용. 외부 도구(tavily_search 등)에는 적용하지 않음.
     """
+    # 방어: Excel 도구가 아닌 경우 원본 반환 (전역 캐시 래핑 누수 방지)
+    if tool_name == "tavily_search":
+        return result
     # 문자열로 변환
     if isinstance(result, str):
         text = result

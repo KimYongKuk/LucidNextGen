@@ -769,12 +769,12 @@ class ReportService:
                 for r in cursor.fetchall()
             ]
 
-            # 4) 일별 추이 — 모델별 분리
+            # 4) 일별 추이 — 모델별 분리 (실질 소비: cache_read 제외)
             cursor.execute("""
                 SELECT
                     DATE_FORMAT(created_at, '%%m/%%d') as date,
                     model_type,
-                    SUM(input_tokens + output_tokens) as total_tokens
+                    SUM(input_tokens + output_tokens + cache_write_tokens) as total_tokens
                 FROM token_usage_log
                 WHERE created_at >= %s AND created_at < DATE_ADD(%s, INTERVAL 1 DAY)
                 GROUP BY DATE(created_at), model_type

@@ -518,7 +518,10 @@ class ChromaDBService:
 
         # 임시 파일 저장
         t0 = time.time()
-        temp_path = f"./temp_{uuid.uuid4()}_{filename}"
+        # 임시 파일명에 원본 파일명을 포함하면 한글/괄호/공백 등으로 경로 문제 발생
+        # 확장자만 유지하여 안전한 경로 생성
+        ext_for_temp = filename.rsplit('.', 1)[-1] if '.' in filename else 'tmp'
+        temp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"temp_{uuid.uuid4()}.{ext_for_temp}")
 
         # aiofiles가 설치되어 있다고 가정하거나, run_in_executor 사용
         # 여기서는 표준 라이브러리만 사용하기 위해 run_in_executor 사용

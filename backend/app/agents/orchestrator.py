@@ -1,6 +1,7 @@
 """Orchestrator Agent - A2A 아키텍처의 핵심 라우터"""
 
 import json
+import re
 import time
 from typing import Dict, Any, AsyncIterator, List, Optional
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
@@ -15,6 +16,9 @@ FALLBACK_ELIGIBLE_INTENTS = {
     Intent.APPROVAL, Intent.BOARD, Intent.CORP_RAG,
     Intent.IT_SUPPORT, Intent.ACCT_SUPPORT, Intent.WEB_SEARCH,
 }
+
+# HANDOFF 마커 패턴 (워커가 다른 워커의 데이터를 요청할 때)
+HANDOFF_PATTERN = re.compile(r'<!--HANDOFF:(\w+)-->')
 
 
 class Orchestrator:
@@ -169,7 +173,68 @@ class Orchestrator:
         print(f"[ORCHESTRATOR] Worker execution time: {worker_time}ms")
 
         # ============================================================
-        # Phase 5: Fallback Check — NO_RESULTS 감지 시 2순위 워커 자동 실행
+        # Phase 5: HANDOFF Check — 다른 워커의 데이터가 필요한 경우
+        # ============================================================
+        handoff_match = HANDOFF_PATTERN.search(collected_text)
+
+        if handoff_match and not context.get("is_handoff_target"):
+            handoff_intent_str = handoff_match.group(1)
+            handoff_intent = None
+            for i in Intent:
+                if i.value == handoff_intent_str:
+                    handoff_intent = i
+                    break
+
+            if handoff_intent and handoff_intent != intent:
+                handoff_worker_name = INTENT_TO_WORKER.get(handoff_intent)
+
+                if handoff_worker_name:
+                    print(f"[ORCHESTRATOR] HANDOFF: {worker_name} → {handoff_worker_name}")
+
+                    # 상태 이벤트
+                    yield {
+                        "type": "intent_classified",
+                        "intent": handoff_intent.value,
+                        "worker": handoff_worker_name,
+                        "timing_ms": 0,
+                        "is_handoff": True,
+                    }
+
+                    # 선행 워커 실행 (is_handoff_target=True → 재귀 방지)
+                    ho_context = dict(context)
+                    ho_context["is_handoff_target"] = True
+
+                    prerequisite_worker = get_worker(handoff_worker_name)
+                    prerequisite_text = ""
+                    async for event in prerequisite_worker.stream_response(
+                        messages, ho_context, all_tools, memory_context, user_memory_context
+                    ):
+                        yield event
+                        prerequisite_text += self._extract_text(event)
+
+                    # 구분선
+                    from langchain_core.messages import AIMessageChunk
+                    yield {
+                        "event": "on_chat_model_stream",
+                        "data": {"chunk": AIMessageChunk(content="\n\n---\n\n")},
+                    }
+
+                    # 원래 워커 재실행 (선행 결과를 히스토리에 주입)
+                    enriched_messages = list(messages)
+                    enriched_messages.insert(-1, AIMessage(
+                        content=f"[이전 단계에서 가져온 데이터]\n{prerequisite_text}"
+                    ))
+
+                    rerun_worker = get_worker(worker_name)
+                    collected_text = ""  # NO_RESULTS 체크용 리셋
+                    async for event in rerun_worker.stream_response(
+                        enriched_messages, context, all_tools, memory_context, user_memory_context
+                    ):
+                        collected_text += self._extract_text(event)
+                        yield event
+
+        # ============================================================
+        # Phase 6: Fallback Check — NO_RESULTS 감지 시 2순위 워커 자동 실행
         # ============================================================
         fallback_worker_time = 0
         if (intent in FALLBACK_ELIGIBLE_INTENTS

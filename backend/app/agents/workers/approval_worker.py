@@ -12,9 +12,12 @@ import time
 import traceback
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, AsyncIterator
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from .base_worker import BaseWorker
+
+# 개별 tool result 최대 길이 (doc_body HTML이 최대 76KB → 제한 필요)
+APPROVAL_TOOL_RESULT_MAX_CHARS = 10000
 
 # 메타데이터 파일 로드 (서버 시작 시 1회)
 _METADATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "metadata")
@@ -62,6 +65,24 @@ class ApprovalWorker(BaseWorker):
     def use_sonnet(self) -> bool:
         """복잡한 SQL 생성 및 비즈니스 로직 추론에 Sonnet 필요"""
         return True
+
+    @property
+    def compact_previous_results(self) -> bool:
+        """이전 단계 Tool 결과 압축 활성화 (토큰 누적 방지)
+
+        doc_body HTML이 최대 76KB → 단건 상세 조회 후 다음 LLM 호출에서
+        이전 결과 전부 재전송 → 토큰 폭증. 압축으로 이전 결과 200자 축약.
+        """
+        return True
+
+    @property
+    def compact_keep_recent_pairs(self) -> int:
+        """최근 4쌍 원본 유지 (다건 문서 본문 조회 워크플로우 보호)
+
+        "결재 대기 3건 각각 보여줘" → 목록(1) + doc_body x3 = 4 tool call 쌍
+        개별 truncation(8K)이 있으므로 4쌍 유지해도 최대 32K chars ≈ 16K tokens.
+        """
+        return 4
 
     @property
     def system_prompt(self) -> str:
@@ -287,7 +308,8 @@ database structure, schema, or internal system details, respond with:
                         else:
                             # Plain dict format (직접 호출, prefetch 등)
                             input_data["employee_number"] = _uid
-                    return await _original(input_data, config, **kwargs)
+                    result = await _original(input_data, config, **kwargs)
+                    return _truncate_approval_result(result, _tname)
 
                 object.__setattr__(tool, "ainvoke", secured_ainvoke)
 
@@ -340,3 +362,72 @@ get_user_approval_info 도구를 호출하지 마세요 (이미 조회 완료). 
             prompt = info_section + "\n\n" + prompt
 
         return prompt
+
+
+def _strip_html_tags(html: str) -> str:
+    """HTML 태그, style/script 블록을 제거하여 텍스트만 추출.
+
+    doc_body HTML에서 CSS/태그가 3~5K를 차지하여
+    truncation 후 실제 내용이 부족해지는 문제 방지.
+    """
+    import re
+    # style, script 블록 제거
+    text = re.sub(r'<style[^>]*>[\s\S]*?</style>', '', html, flags=re.IGNORECASE)
+    text = re.sub(r'<script[^>]*>[\s\S]*?</script>', '', text, flags=re.IGNORECASE)
+    # HTML 태그 제거
+    text = re.sub(r'<[^>]+>', ' ', text)
+    # HTML 엔티티 변환
+    text = text.replace('&nbsp;', ' ').replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
+    # 연속 공백/줄바꿈 정리
+    text = re.sub(r'\s+', ' ', text).strip()
+    # 연속 공백을 줄바꿈으로 (테이블 셀 구분 등)
+    text = re.sub(r' {3,}', '\n', text)
+    return text
+
+
+def _truncate_approval_result(result, tool_name: str):
+    """execute_approval_query 결과를 truncation.
+
+    doc_body가 포함된 경우 HTML 태그를 제거하여 유효 콘텐츠를 극대화.
+    """
+    max_chars = APPROVAL_TOOL_RESULT_MAX_CHARS
+
+    def _process_content(content: str) -> str:
+        if len(content) <= max_chars:
+            return content
+
+        # doc_body HTML 감지: <html, <body, <table, <div 등
+        if '<' in content and ('doc_body' in content.lower() or
+                               '<html' in content.lower() or
+                               '<table' in content.lower() or
+                               '<div' in content.lower()):
+            # HTML 태그 제거 후 truncation → 유효 콘텐츠 극대화
+            stripped = _strip_html_tags(content)
+            if len(stripped) <= max_chars:
+                print(f"[ApprovalWorker] [STRIP_HTML] {tool_name}: {len(content):,}자 HTML → {len(stripped):,}자 텍스트")
+                return stripped
+            # strip 후에도 초과면 truncation
+            truncated = stripped[:max_chars].rstrip()
+            print(f"[ApprovalWorker] [STRIP+TRUNCATE] {tool_name}: {len(content):,}자 HTML → {len(stripped):,}자 텍스트 → {max_chars:,}자")
+            return f"{truncated}\n\n[결과가 {len(stripped):,}자 중 {max_chars:,}자로 잘렸습니다 (HTML 태그 제거됨)]"
+
+        # 일반 텍스트 truncation
+        truncated = content[:max_chars].rstrip()
+        print(f"[ApprovalWorker] [TRUNCATE] {tool_name}: {len(content):,} → {max_chars:,}자")
+        return f"{truncated}\n\n[결과가 {len(content):,}자 중 {max_chars:,}자로 잘렸습니다]"
+
+    if isinstance(result, ToolMessage):
+        content = result.content if isinstance(result.content, str) else str(result.content)
+        processed = _process_content(content)
+        if processed != content:
+            return ToolMessage(
+                content=processed,
+                tool_call_id=result.tool_call_id,
+                name=getattr(result, "name", None) or tool_name,
+            )
+        return result
+
+    if isinstance(result, str):
+        return _process_content(result)
+
+    return result
