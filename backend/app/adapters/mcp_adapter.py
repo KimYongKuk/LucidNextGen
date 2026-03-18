@@ -263,11 +263,13 @@ class MCPAdapter:
         results = await asyncio.gather(*[_load_server_tools(n) for n in server_names])
 
         tools = []
+        failed_servers = []
         for name, server_tools in zip(server_names, results):
             if server_tools:
                 tools.extend(server_tools)
                 print(f"[MCP]   {name}: {len(server_tools)} tools loaded")
-            # 실패 서버는 _load_server_tools에서 이미 로그됨
+            else:
+                failed_servers.append(name)
 
         # 직접 호출 RAG 도구 추가 (MCP 프로세스 오버헤드 제거)
         from app.agents.tools.rag_direct_tools import get_direct_rag_tools
@@ -275,9 +277,12 @@ class MCPAdapter:
         tools.extend(direct_rag_tools)
         print(f"[MCP] Added {len(direct_rag_tools)} direct RAG tools")
 
-        # 글로벌 캐시 업데이트
+        # 글로벌 캐시 업데이트 (실패 서버 있으면 TTL 60초로 단축)
         MCPAdapter._global_tools_cache = tools
         MCPAdapter._cache_timestamp = now
+        if failed_servers:
+            MCPAdapter._cache_timestamp = now - MCPAdapter.CACHE_TTL + 60  # 60초 후 재시도
+            print(f"[MCP] WARNING: {len(failed_servers)} servers failed ({', '.join(failed_servers)}) → cache TTL reduced to 60s")
         print(f"[MCP] Tools cached: {len(tools)} tools (from {len(server_names)} servers)")
 
         return tools
