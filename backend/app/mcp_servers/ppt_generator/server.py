@@ -6,10 +6,13 @@ PPT Generator MCP Server
 실제 .pptx 파일을 생성한다.
 
 지원 요소:
-- TextBox (제목, 본문, 불릿 텍스트)
+- TextBox (제목, 본문, 불릿 텍스트, 배경색/테두리 옵션)
 - Table (사내 스타일 헤더, 교대행 색상, 셀 병합)
-- Native Chart (line, column, bar, pie, area, scatter 등)
+- Native Chart (line, column, bar, pie 등 + 시리즈 색상, 데이터라벨, 범례)
 - Image (외부 이미지 삽입)
+- CalloutBox (인사이트/경고/요약 강조 박스)
+- KPICard (대시보드 핵심 수치 카드)
+- Divider (시각 구분선)
 """
 
 import sys
@@ -34,8 +37,9 @@ from pptx import Presentation
 from pptx.util import Inches, Pt, Emu
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
-from pptx.enum.chart import XL_CHART_TYPE
-from pptx.chart.data import CategoryChartData
+from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
+from pptx.enum.shapes import MSO_SHAPE
+from pptx.chart.data import CategoryChartData, XyChartData
 
 # 템플릿 인덱서
 from app.mcp_servers.ppt_generator.template_indexer import (
@@ -136,14 +140,16 @@ def sanitize_filename(filename: str) -> str:
     return re.sub(r'[<>:"/\\|?*`\'"\s]', '_', filename).strip("_") or "presentation"
 
 
+_DEFAULT_TEXT_COLOR = RGBColor(0x33, 0x33, 0x33)  # 템플릿 테마 흰색 상속 방지
+
+
 def _set_font(run, font_name: str, size_pt: int, bold: bool = False,
               color: RGBColor | None = None):
-    """Run에 폰트 속성 설정"""
+    """Run에 폰트 속성 설정 — color 미지정 시 기본 검정(333333) 적용"""
     run.font.name = font_name
     run.font.size = Pt(size_pt)
     run.font.bold = bold
-    if color:
-        run.font.color.rgb = color
+    run.font.color.rgb = color if color is not None else _DEFAULT_TEXT_COLOR
 
 
 def _set_cell_font(cell, font_name: str, size_pt: int, bold: bool = False,
@@ -160,15 +166,42 @@ def _set_cell_font(cell, font_name: str, size_pt: int, bold: bool = False,
 # ============================================================
 
 def render_textbox(slide, shape_def: dict, style: dict):
-    """TextBox Shape 추가"""
+    """TextBox Shape 추가 (선택적 배경색/테두리 지원)"""
     left = Inches(shape_def.get("left", 0.37))
     top = Inches(shape_def.get("top", 1.15))
     width = Inches(shape_def.get("width", 12.0))
     height = Inches(shape_def.get("height", 0.5))
 
-    txBox = slide.shapes.add_textbox(left, top, width, height)
+    fill_color = shape_def.get("fill_color", "")
+    border_color = shape_def.get("border_color", "")
+
+    # fill/border가 있으면 ROUNDED_RECTANGLE, 없으면 기존 textbox
+    if fill_color or border_color:
+        txBox = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, width, height)
+        # 모서리 반경 설정 (적당히 둥글게)
+        txBox.adjustments[0] = 0.02
+        if fill_color:
+            txBox.fill.solid()
+            txBox.fill.fore_color.rgb = _resolve_color(fill_color, style)
+        else:
+            txBox.fill.background()  # 투명
+        if border_color:
+            txBox.line.color.rgb = _resolve_color(border_color, style)
+            txBox.line.width = Pt(shape_def.get("border_width", 1))
+        else:
+            txBox.line.fill.background()  # 테두리 없음
+    else:
+        txBox = slide.shapes.add_textbox(left, top, width, height)
+
     tf = txBox.text_frame
     tf.word_wrap = True
+
+    # fill/border가 있을 때 내부 여백 설정
+    if fill_color or border_color:
+        tf.margin_left = Inches(0.15)
+        tf.margin_right = Inches(0.15)
+        tf.margin_top = Inches(0.08)
+        tf.margin_bottom = Inches(0.08)
 
     text = shape_def.get("text", "")
     font_size = shape_def.get("font_size", 10)
@@ -349,6 +382,189 @@ def render_table(slide, shape_def: dict, style: dict):
 
 
 # ============================================================
+# CalloutBox 렌더링
+# ============================================================
+
+# 프리셋 스타일 (style 키 → fill, accent bar, icon)
+CALLOUT_PRESETS = {
+    "insight":  {"fill": "E8F0FE", "accent": "4472C4", "icon": "\U0001f4a1"},  # 💡
+    "warning":  {"fill": "FFF3E0", "accent": "ED7D31", "icon": "\u26a0\ufe0f"},  # ⚠️
+    "success":  {"fill": "E8F5E9", "accent": "70AD47", "icon": "\u2705"},       # ✅
+    "summary":  {"fill": "F5F5F5", "accent": "44546A", "icon": "\U0001f4cb"},  # 📋
+}
+
+
+def render_callout_box(slide, shape_def: dict, style: dict):
+    """강조 박스 (인사이트, 경고, 요약 등) — 좌측 accent bar + 아이콘 + 텍스트"""
+    left = Inches(shape_def.get("left", 0.37))
+    top = Inches(shape_def.get("top", 5.8))
+    width = Inches(shape_def.get("width", 12.6))
+    height = Inches(shape_def.get("height", 0.8))
+
+    font_name = style.get("font_family", "맑은 고딕")
+    preset_name = shape_def.get("style", "insight")
+    preset = CALLOUT_PRESETS.get(preset_name, CALLOUT_PRESETS["insight"])
+
+    fill_hex = shape_def.get("fill_color", preset["fill"])
+    accent_hex = shape_def.get("accent_color", preset["accent"])
+    # accent_color가 테마 키면 해석
+    if accent_hex in style.get("theme_colors", {}):
+        accent_hex = style["theme_colors"][accent_hex]
+    icon = shape_def.get("icon", preset["icon"])
+    text = shape_def.get("text", "")
+    font_size = shape_def.get("font_size", 10)
+
+    # 1) 배경 라운드 사각형
+    bg = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, width, height)
+    bg.adjustments[0] = 0.03
+    bg.fill.solid()
+    bg.fill.fore_color.rgb = _rgb(fill_hex)
+    bg.line.fill.background()
+
+    # 2) 좌측 accent bar (얇은 사각형)
+    bar_width = Inches(0.06)
+    bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, left, top, bar_width, height)
+    bar.fill.solid()
+    bar.fill.fore_color.rgb = _rgb(accent_hex)
+    bar.line.fill.background()
+
+    # 3) 텍스트 (아이콘 + 내용)
+    text_left = Inches(shape_def.get("left", 0.37)) + Inches(0.2)
+    text_width = width - Inches(0.35)
+    txBox = slide.shapes.add_textbox(text_left, top, text_width, height)
+    tf = txBox.text_frame
+    tf.word_wrap = True
+    tf.margin_left = Inches(0.1)
+    tf.margin_top = Inches(0.06)
+    tf.margin_bottom = Inches(0.06)
+
+    # 세로 중앙 정렬
+    from lxml import etree
+    nsmap = {'a': 'http://schemas.openxmlformats.org/drawingml/2006/main'}
+    bodyPr = tf._txBody.find('.//a:bodyPr', nsmap)
+    if bodyPr is not None:
+        bodyPr.set('anchor', 'ctr')
+
+    para = tf.paragraphs[0]
+    para.alignment = PP_ALIGN.LEFT
+    # 아이콘
+    if icon:
+        icon_run = para.add_run()
+        icon_run.text = f"{icon} "
+        _set_font(icon_run, font_name, font_size)
+    # 텍스트
+    run = para.add_run()
+    run.text = text
+    _set_font(run, font_name, font_size, color=_rgb("333333"))
+
+    return bg
+
+
+# ============================================================
+# KPI Card 렌더링
+# ============================================================
+
+def render_kpi_card(slide, shape_def: dict, style: dict):
+    """KPI 카드 — 큰 숫자 + 라벨 + 트렌드 표시"""
+    left = Inches(shape_def.get("left", 0.37))
+    top = Inches(shape_def.get("top", 1.15))
+    width = Inches(shape_def.get("width", 2.9))
+    height = Inches(shape_def.get("height", 1.8))
+
+    font_name = style.get("font_family", "맑은 고딕")
+    accent_ref = shape_def.get("accent_color", "accent1_blue")
+    accent_rgb = _resolve_color(accent_ref, style)
+
+    value = shape_def.get("value", "0")
+    label = shape_def.get("label", "")
+    trend = shape_def.get("trend", "")
+    trend_direction = shape_def.get("trend_direction", "")  # up / down / neutral
+    value_size = shape_def.get("value_size", 36)
+
+    # 1) 배경 카드
+    bg = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, width, height)
+    bg.adjustments[0] = 0.05
+    bg.fill.solid()
+    bg.fill.fore_color.rgb = _rgb("F8F9FA")
+    bg.line.color.rgb = _rgb("E0E0E0")
+    bg.line.width = Pt(0.75)
+
+    # 2) 상단 accent line
+    accent_line = slide.shapes.add_shape(
+        MSO_SHAPE.RECTANGLE, left, top, width, Pt(4)
+    )
+    accent_line.fill.solid()
+    accent_line.fill.fore_color.rgb = accent_rgb
+    accent_line.line.fill.background()
+
+    # 3) 값 (큰 숫자)
+    val_top = top + Inches(0.25)
+    val_box = slide.shapes.add_textbox(left, val_top, width, Inches(0.7))
+    val_tf = val_box.text_frame
+    val_tf.word_wrap = True
+    val_para = val_tf.paragraphs[0]
+    val_para.alignment = PP_ALIGN.CENTER
+    val_run = val_para.add_run()
+    val_run.text = str(value)
+    _set_font(val_run, font_name, value_size, bold=True, color=accent_rgb)
+
+    # 4) 라벨
+    if label:
+        lbl_top = val_top + Inches(0.7)
+        lbl_box = slide.shapes.add_textbox(left, lbl_top, width, Inches(0.35))
+        lbl_tf = lbl_box.text_frame
+        lbl_tf.word_wrap = True
+        lbl_para = lbl_tf.paragraphs[0]
+        lbl_para.alignment = PP_ALIGN.CENTER
+        lbl_run = lbl_para.add_run()
+        lbl_run.text = label
+        _set_font(lbl_run, font_name, 10, color=_rgb("666666"))
+
+    # 5) 트렌드
+    if trend:
+        trn_top = val_top + Inches(1.05)
+        trn_box = slide.shapes.add_textbox(left, trn_top, width, Inches(0.3))
+        trn_tf = trn_box.text_frame
+        trn_para = trn_tf.paragraphs[0]
+        trn_para.alignment = PP_ALIGN.CENTER
+
+        arrow = ""
+        trn_color = _rgb("666666")
+        if trend_direction == "up":
+            arrow = "▲ "
+            trn_color = _rgb("00B050")  # 녹색
+        elif trend_direction == "down":
+            arrow = "▼ "
+            trn_color = _rgb("FF0000")  # 빨강
+
+        trn_run = trn_para.add_run()
+        trn_run.text = f"{arrow}{trend}"
+        _set_font(trn_run, font_name, 11, bold=True, color=trn_color)
+
+    return bg
+
+
+# ============================================================
+# Divider (구분선) 렌더링
+# ============================================================
+
+def render_divider(slide, shape_def: dict, style: dict):
+    """시각 구분선 — 얇은 사각형"""
+    left = Inches(shape_def.get("left", 0.37))
+    top = Inches(shape_def.get("top", 3.5))
+    width = Inches(shape_def.get("width", 12.6))
+    thickness = shape_def.get("thickness", 1.5)
+    color_ref = shape_def.get("color", "E0E0E0")
+
+    line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, left, top, width, Pt(thickness))
+    line.fill.solid()
+    line.fill.fore_color.rgb = _resolve_color(color_ref, style)
+    line.line.fill.background()
+
+    return line
+
+
+# ============================================================
 # 네이티브 차트 렌더링
 # ============================================================
 
@@ -368,7 +584,7 @@ CHART_TYPE_MAP = {
 
 
 def render_native_chart(slide, shape_def: dict, style: dict):
-    """네이티브 PPT 차트 추가 (편집 가능)"""
+    """네이티브 PPT 차트 추가 (편집 가능, 스타일 옵션 지원)"""
     chart_info = shape_def.get("chart", {})
     chart_type_str = chart_info.get("chart_type", "column")
     categories = chart_info.get("categories", [])
@@ -386,27 +602,92 @@ def render_native_chart(slide, shape_def: dict, style: dict):
     width = Inches(shape_def.get("width", 12.0))
     height = Inches(shape_def.get("height", 5.0))
 
-    chart_data = CategoryChartData()
-    chart_data.categories = categories
-
-    for series in series_list:
-        chart_data.add_series(
-            series.get("name", ""),
-            series.get("values", [])
-        )
+    # scatter는 XyChartData 사용
+    if chart_type_str == "scatter":
+        chart_data = XyChartData()
+        for series in series_list:
+            xy_series = chart_data.add_series(series.get("name", ""))
+            x_values = categories
+            y_values = series.get("values", [])
+            for x, y in zip(x_values, y_values):
+                xy_series.add_data_point(x, y)
+    else:
+        chart_data = CategoryChartData()
+        chart_data.categories = categories
+        for series in series_list:
+            chart_data.add_series(
+                series.get("name", ""),
+                series.get("values", [])
+            )
 
     chart_shape = slide.shapes.add_chart(
         xl_type, left, top, width, height, chart_data
     )
+    chart = chart_shape.chart
+    font_name = style.get("font_family", "맑은 고딕")
 
     # 차트 제목 설정
     chart_title = chart_info.get("title", "")
     if chart_title:
-        chart_shape.chart.has_title = True
-        chart_shape.chart.chart_title.text_frame.text = chart_title
-        for para in chart_shape.chart.chart_title.text_frame.paragraphs:
+        chart.has_title = True
+        chart.chart_title.text_frame.text = chart_title
+        for para in chart.chart_title.text_frame.paragraphs:
             for run in para.runs:
-                _set_font(run, style.get("font_family", "맑은 고딕"), 12, True)
+                _set_font(run, font_name, 12, True)
+
+    # --- 시리즈 색상 ---
+    series_colors = chart_info.get("series_colors", [])
+    if series_colors:
+        is_pie = chart_type_str in ("pie", "doughnut")
+        if is_pie and len(chart.series) > 0:
+            # pie/doughnut: 포인트별 색상
+            series_obj = chart.series[0]
+            for i, pt in enumerate(series_obj.points):
+                if i < len(series_colors):
+                    pt.format.fill.solid()
+                    pt.format.fill.fore_color.rgb = _rgb(series_colors[i])
+        else:
+            # 일반 차트: 시리즈별 색상
+            for i, series_obj in enumerate(chart.series):
+                if i < len(series_colors):
+                    series_obj.format.fill.solid()
+                    series_obj.format.fill.fore_color.rgb = _rgb(series_colors[i])
+                    # line 계열은 선 색상도 설정
+                    if chart_type_str in ("line", "line_markers"):
+                        series_obj.format.line.color.rgb = _rgb(series_colors[i])
+
+    # --- 데이터 라벨 ---
+    if chart_info.get("data_labels", False):
+        try:
+            plot = chart.plots[0]
+            plot.has_data_labels = True
+            data_labels = plot.data_labels
+            data_labels.font.size = Pt(9)
+            data_labels.font.name = font_name
+            num_fmt = chart_info.get("number_format", "")
+            if num_fmt:
+                data_labels.number_format = num_fmt
+                data_labels.number_format_is_linked = False
+        except Exception:
+            pass  # 일부 차트 타입에서는 데이터 라벨 미지원
+
+    # --- 범례 위치 ---
+    legend_pos = chart_info.get("legend_position", "")
+    if legend_pos == "none":
+        chart.has_legend = False
+    elif legend_pos:
+        chart.has_legend = True
+        pos_map = {
+            "bottom": XL_LEGEND_POSITION.BOTTOM,
+            "right": XL_LEGEND_POSITION.RIGHT,
+            "top": XL_LEGEND_POSITION.TOP,
+            "left": XL_LEGEND_POSITION.LEFT,
+        }
+        if legend_pos in pos_map:
+            chart.legend.position = pos_map[legend_pos]
+            chart.legend.include_in_layout = False
+            chart.legend.font.size = Pt(9)
+            chart.legend.font.name = font_name
 
     return chart_shape
 
@@ -546,6 +827,12 @@ def render_slide(prs, slide_def: dict, style: dict, doc_title: str = ""):
                 render_native_chart(slide, shape_def, style)
             elif shape_type == "image":
                 render_image(slide, shape_def, style)
+            elif shape_type == "callout_box":
+                render_callout_box(slide, shape_def, style)
+            elif shape_type == "kpi_card":
+                render_kpi_card(slide, shape_def, style)
+            elif shape_type == "divider":
+                render_divider(slide, shape_def, style)
 
     elif layout_actual_name == "표지":
         # 표지 슬라이드 콘텐츠
@@ -793,7 +1080,7 @@ async def list_tools():
 - [0] 표지: 제목, 날짜, 작성자
 - [1] 목차: 대목차/소목차 나열
 - [2] 간지: 섹션 구분 (대목차 강조)
-- [3] 내용: 메인 콘텐츠 (텍스트, 테이블, 차트, 이미지 자유 배치)
+- [3] 내용: 메인 콘텐츠 (텍스트, 테이블, 차트, 이미지 등 자유 배치)
 - [4] E.O.D: 끝 페이지
 
 내용 슬라이드 헤더 요소:
@@ -802,13 +1089,18 @@ async def list_tools():
 - title: 메인 제목 (25pt, Bold)
 - subtitle: 부제 (15pt)
 
-내용 슬라이드 shapes 타입:
-- textbox: 텍스트 박스 (left, top, width, height, text, font_size, bold, color, alignment)
+내용 슬라이드 shapes 타입 (7종):
+- textbox: 텍스트 (left, top, width, height, text, font_size, bold, color, alignment, fill_color?, border_color?, border_width?)
 - table: 테이블 (left, top, width=12.6, height, table: {headers, rows, header_rows, col_widths(비율!), body_merges})
-- chart: 네이티브 차트 (left, top, width, height, chart: {chart_type, categories, series, title})
+- chart: 네이티브 차트 (left, top, width, height, chart: {chart_type, categories, series, title, series_colors?, data_labels?, legend_position?, number_format?})
 - image: 이미지 (left, top, width, height, path)
+- callout_box: 강조 박스 (left, top, width, height, text, style=insight|warning|success|summary, icon?, fill_color?, accent_color?, font_size?)
+- kpi_card: 수치 카드 (left, top, width, height, value, label, trend?, trend_direction=up|down?, accent_color?, value_size?)
+- divider: 구분선 (left, top, width, color?, thickness?)
 
 차트 타입: line, line_markers, column, column_stacked, bar, bar_stacked, pie, area, area_stacked, scatter, doughnut
+차트 series_colors: HEX 배열 (예: ["4472C4","ED7D31"]). pie/doughnut은 포인트별 색상.
+차트 legend_position: bottom, right, top, left, none
 
 테이블 병합 헤더 (header_rows):
   [{"col": 0, "colspan": 2, "text": "그룹 헤더"}, ...]
@@ -863,7 +1155,7 @@ async def list_tools():
                                         "properties": {
                                             "type": {
                                                 "type": "string",
-                                                "enum": ["textbox", "table", "chart", "image"]
+                                                "enum": ["textbox", "table", "chart", "image", "callout_box", "kpi_card", "divider"]
                                             },
                                             "left": {"type": "number"},
                                             "top": {"type": "number"},

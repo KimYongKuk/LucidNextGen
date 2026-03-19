@@ -698,7 +698,8 @@ class BaseWorker(ABC):
             prompt += fallback_instruction
 
         # ============ HANDOFF — 다른 워커의 데이터가 필요할 때 ============
-        if self.tool_names and not context.get("is_handoff_target"):
+        # outline_embed 모드에서는 HANDOFF 비활성화 (OUTLINE + DIRECT만 사용)
+        if self.tool_names and not context.get("is_handoff_target") and context.get("chat_mode") != "outline_embed":
             from app.agents.state import WORKER_CAPABILITIES, INTENT_TO_WORKER as _ITW
             # 자기 자신 제외한 다른 워커 능력 목록
             other_caps = {k: v for k, v in WORKER_CAPABILITIES.items()
