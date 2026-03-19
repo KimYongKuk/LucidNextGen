@@ -253,7 +253,7 @@ class NotificationService:
             count_row = await conn.fetchrow(
                 """
                 SELECT COUNT(*) as cnt FROM v_appr_dept_received
-                WHERE dept_id = $1 AND is_assigned = false AND is_reception_returned = false
+                WHERE dept_id = $1 AND is_reception_returned = false
                   AND appr_status NOT IN ('CANCEL', 'RETURN', 'TEMPSAVE')
                 """,
                 dept_id
@@ -264,7 +264,7 @@ class NotificationService:
                 """
                 SELECT doc_id, title, form_name, drafter_name, drafter_dept_name, received_at
                 FROM v_appr_dept_received
-                WHERE dept_id = $1 AND is_assigned = false AND is_reception_returned = false
+                WHERE dept_id = $1 AND is_reception_returned = false
                   AND appr_status NOT IN ('CANCEL', 'RETURN', 'TEMPSAVE')
                 ORDER BY received_at DESC NULLS LAST
                 LIMIT 3
