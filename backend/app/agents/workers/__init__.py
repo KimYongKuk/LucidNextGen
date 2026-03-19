@@ -14,6 +14,7 @@ from .mail_worker import MailWorker
 from .approval_worker import ApprovalWorker
 from .xlsx_worker import XlsxWorker
 from .board_worker import BoardWorker
+from .outline_worker import OutlineWorker
 from .direct_worker import DirectResponseWorker
 
 # Worker Registry
@@ -31,6 +32,7 @@ WORKER_REGISTRY = {
     "ApprovalWorker": ApprovalWorker,
     "XlsxWorker": XlsxWorker,
     "BoardWorker": BoardWorker,
+    "OutlineWorker": OutlineWorker,
     "DirectResponseWorker": DirectResponseWorker,
 }
 
@@ -57,6 +59,7 @@ __all__ = [
     "ApprovalWorker",
     "XlsxWorker",
     "BoardWorker",
+    "OutlineWorker",
     "DirectResponseWorker",
     "WORKER_REGISTRY",
     "get_worker",

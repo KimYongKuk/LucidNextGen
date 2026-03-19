@@ -21,6 +21,7 @@ class Intent(str, Enum):
     APPROVAL = "approval"           # 전자결재 조회, 기안/결재/참조/부서문서
     XLSX = "xlsx"                   # Excel 파일 생성, 수정, 조작
     BOARD = "board"                 # 사내 게시판 검색, 공지사항 조회
+    OUTLINE = "outline"             # Outline Wiki 문서 검색/조회
     CLARIFY = "clarify"             # 어디서 조회해야 할지 모호한 요청 → 사용자에게 확인
     DIRECT = "direct"               # 일반 대화, 코딩, 번역 등
 
@@ -40,6 +41,7 @@ INTENT_TO_WORKER = {
     Intent.APPROVAL: "ApprovalWorker",
     Intent.XLSX: "XlsxWorker",
     Intent.BOARD: "BoardWorker",
+    Intent.OUTLINE: "OutlineWorker",
     Intent.CLARIFY: "DirectResponseWorker",
     Intent.DIRECT: "DirectResponseWorker",
 }
@@ -55,6 +57,7 @@ WORKER_CAPABILITIES = {
     Intent.IT_SUPPORT: "IT 지원 VOC 검색 (IT/보안 문의 사례)",
     Intent.ACCT_SUPPORT: "회계/재경 VOC 검색 (회계 문의 사례)",
     Intent.BOARD: "사내 게시판 검색 (공지사항, 게시글)",
+    Intent.OUTLINE: "Outline Wiki 문서 검색/조회 (위키 문서, 컬렉션 탐색)",
     Intent.XLSX: "엑셀 파일 생성/수정 (서식, 차트, 피벗테이블)",
     Intent.VISUALIZATION: "PDF/Word 문서 생성, 차트/그래프 시각화",
     Intent.PPT_GENERATION: "PPT 프레젠테이션 생성",

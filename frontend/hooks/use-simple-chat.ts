@@ -21,6 +21,7 @@ const generateId = (): string => {
 interface UseSimpleChatOptions {
   id: string;
   messages: ChatMessage[];
+  chatMode?: string;  // 'normal' | 'outline_embed' 등
   onData?: (data: any) => void;
   onFinish?: () => void;
   onError?: (error: Error) => void;
@@ -31,6 +32,7 @@ interface UseSimpleChatOptions {
 export function useSimpleChat({
   id: sessionId,
   messages: initialMessages,
+  chatMode = 'normal',
   onData,
   onFinish,
   onError,
@@ -125,7 +127,7 @@ export function useSimpleChat({
         },
         body: JSON.stringify({
           message: content,
-          chat_mode: 'normal',
+          chat_mode: chatMode,
           session_id: sessionId,
           user_id: userId,
           images: imageFiles.length > 0 ? imageFiles : null,

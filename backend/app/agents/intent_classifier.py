@@ -51,6 +51,9 @@ INTENTS:
   Approval form names (양식명): WA전표품의, 품의서, 보고, 사전지출승인서, 예외처리 신청서, 인장 및 법인서류 요청서
 - board: Search company bulletin boards, notices, announcements, posts
   NOTE: Board posts/notices → "board". Company policies/regulations (not posts) → "corp_rag"
+- outline: Search or browse Outline Wiki documents, collections, recent wiki updates
+  Keywords: "위키", "wiki", "outline", "아웃라인", "위키 문서", "위키에서"
+  NOTE: "위키" explicitly mentioned → "outline". General company docs without "위키" → "corp_rag"
 - clarify: The query asks to FIND a specific item/document/record, but NONE of the above intents match
   ONLY use as last resort when: no domain keywords, not a knowledge question, not how-to — purely "find this thing" with no clue where
 - direct: General conversation, coding, translation, math, creative writing — no external info needed
@@ -117,6 +120,8 @@ EXAMPLES:
 - "파일 내용 요약해줘" (has_files=True) → user_files
 - "코드 리뷰해줘" → direct
 - "이 문장 영어로 번역해줘" → direct
+- "위키에서 VPN 문서 찾아줘" → outline
+- "아웃라인 최근 문서 보여줘" → outline
 - "OO 건 조회해줘" (no domain keyword at all) → clarify
 
 USER MESSAGE: {message}
@@ -228,6 +233,13 @@ class IntentClassifier:
             board_keywords = r'(게시판|공지사항|게시글|게시물|사내\s?공지|전사\s?공지|전사\s?게시)'
             if re.search(board_keywords, message, re.IGNORECASE):
                 matched_intents.append(Intent.BOARD)
+
+        # Outline Wiki keywords
+        outline_enabled = os.environ.get("OUTLINE_WORKER_ENABLED", "true").lower() == "true"
+        if outline_enabled:
+            outline_keywords = r'(위키|wiki|outline|아웃라인|위키\s?문서|위키에서)'
+            if re.search(outline_keywords, message, re.IGNORECASE):
+                matched_intents.append(Intent.OUTLINE)
 
         # XLSX keywords (두 가지 패턴)
         xlsx_enabled = os.environ.get("XLSX_WORKER_ENABLED", "true").lower() == "true"

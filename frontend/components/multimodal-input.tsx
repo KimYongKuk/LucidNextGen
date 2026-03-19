@@ -61,6 +61,7 @@ function PureMultimodalInput({
   onModelChange,
   onFileUploaded,
   workspaceId,
+  embedMode,
 }: {
   chatId: string;
   input: string;
@@ -77,6 +78,7 @@ function PureMultimodalInput({
   onModelChange?: (modelId: string) => void;
   onFileUploaded?: () => void;
   workspaceId?: string | null;
+  embedMode?: boolean;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { width } = useWindowSize();
@@ -484,7 +486,8 @@ function PureMultimodalInput({
 
   return (
     <div className={cn("relative flex w-full flex-col gap-4", className)}>
-      {messages.length === 0 &&
+      {!embedMode &&
+        messages.length === 0 &&
         attachments.length === 0 &&
         !workspaceId && (
           <SuggestedActions
@@ -571,15 +574,19 @@ function PureMultimodalInput({
         </div>
         <PromptInputToolbar className="!border-top-0 border-t-0! p-0 shadow-none dark:border-0 dark:border-transparent!">
           <PromptInputTools className="gap-0 sm:gap-0.5">
-            <AttachmentsButton
-              fileInputRef={fileInputRef}
-              selectedModelId={selectedModelId}
-              status={status}
-            />
-            <VoiceRecordButton
-              status={status}
-              onTranscript={(text) => setInput((prev) => prev + text)}
-            />
+            {!embedMode && (
+              <>
+                <AttachmentsButton
+                  fileInputRef={fileInputRef}
+                  selectedModelId={selectedModelId}
+                  status={status}
+                />
+                <VoiceRecordButton
+                  status={status}
+                  onTranscript={(text) => setInput((prev) => prev + text)}
+                />
+              </>
+            )}
             {/* 모델 선택 UI 숨김 - 백엔드에서 모델 고정 사용 */}
             {/* <ModelSelectorCompact
               onModelChange={onModelChange}

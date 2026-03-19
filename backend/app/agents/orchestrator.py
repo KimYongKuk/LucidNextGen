@@ -108,6 +108,28 @@ class Orchestrator:
         previous_intent = context.get("previous_intent")
         primary_intent, fallback_intent = await self.classifier.classify(message, context, message_history, previous_intent)
         intent = primary_intent
+
+        # outline_embed 모드: 기본적으로 OUTLINE, 단순 인사/잡담만 DIRECT
+        chat_mode = context.get("chat_mode", "normal")
+        if chat_mode == "outline_embed":
+            if intent != Intent.DIRECT:
+                # 모든 비-DIRECT 인텐트 → OUTLINE
+                if intent != Intent.OUTLINE:
+                    print(f"[ORCHESTRATOR] outline_embed mode: {intent.value} -> OUTLINE")
+                intent = Intent.OUTLINE
+                fallback_intent = None
+            else:
+                # DIRECT인 경우: 질문/검색성이면 OUTLINE으로 전환
+                import re
+                search_like = re.search(
+                    r'(찾아|검색|알려|보여|조회|어디|뭐가|있어|문서|자료|가이드|매뉴얼|방법|하는\s?법)',
+                    message
+                )
+                if search_like:
+                    print(f"[ORCHESTRATOR] outline_embed mode: direct -> OUTLINE (search-like query)")
+                    intent = Intent.OUTLINE
+                    fallback_intent = None
+
         worker_name = INTENT_TO_WORKER.get(intent, "DirectResponseWorker")
 
         classify_time = int((time.time() - classify_start) * 1000)
