@@ -283,13 +283,19 @@ class NightlySummaryScheduler:
                     return {"success": True, "message": "nothing to commit"}
                 return {"success": False, "step": "commit", "error": r.stderr.strip()}
 
-            # git push
+            # git push (origin=GitLab)
             r = subprocess.run(
-                ["git", "push"],
+                ["git", "push", "origin", "main"],
                 cwd=cwd, capture_output=True, text=True, timeout=60,
             )
             if r.returncode != 0:
                 return {"success": False, "step": "push", "error": r.stderr.strip()}
+
+            # git push (github=GitHub mirror, 실패해도 무시)
+            subprocess.run(
+                ["git", "push", "github", "main"],
+                cwd=cwd, capture_output=True, text=True, timeout=120,
+            )
 
             return {"success": True, "message": "committed and pushed"}
 

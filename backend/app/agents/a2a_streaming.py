@@ -226,6 +226,7 @@ async def stream_a2a_response(
     # tool_call/tool_response 태그 필터링 상태
     _inside_tool_tag = False  # <tool_call> 또는 <tool_response> 내부 여부
     _tag_buffer = ""  # 부분 태그 감지용 버퍼
+    _tag_filter_notified = False  # 필터링 시작 시 상태 메시지 전송 여부
 
     # 리포트용 수집 변수
     classified_intent = None
@@ -586,6 +587,7 @@ async def stream_a2a_response(
                                     filtered_content += pre_tag
                                     _inside_tool_tag = True
                                     _tag_buffer = ""
+                                    _tag_filter_notified = True
                                 elif len(_tag_buffer) > _MAX_TAG_LEN:
                                     filtered_content += _tag_buffer
                                     _tag_buffer = ""
@@ -599,6 +601,12 @@ async def stream_a2a_response(
                             _tag_buffer = ""
 
                         content = filtered_content
+
+                        # 필터링으로 콘텐츠가 비었고, 태그 내부 진입 시 상태 메시지 전송
+                        if not content and _tag_filter_notified:
+                            _tag_filter_notified = False
+                            yield f"data: {json.dumps({'type': 'tool_status', 'tool': 'processing', 'message': '🔍 검색 중입니다...'})}\n\n"
+                            continue
                         if not content:
                             continue
 

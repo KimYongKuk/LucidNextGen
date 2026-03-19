@@ -5,7 +5,14 @@
 
 ---
 
+## [2026-03-19]
+- **수정** [OrgChart MCP] PostgreSQL 부서ID 컬럼 대소문자 fold 에러 수정 — 계층 조회 Step1 실패로 LLM 10회 삽질 방지 → [상세](docs/history/2026-03-19_OrgChartColumnQuoting.md)
+- **수정** [MailWorker] .eml 파서 스트리밍 방식 전환 — 5MB 파일 크기 제한 제거, 첨부파일 크기와 무관하게 메일 본문 추출 가능 → [상세](docs/history/2026-03-19_MailStreamingEmlParser.md)
+
+---
+
 ## [2026-03-18]
+- **수정** [Orchestrator] MCP 도구 로드 실패 시 DirectWorker 자동 폴백 — tavily-mcp 등 MCP 서버 장애 시 도구 0개로 실행되어 가짜 tool_call 태그가 노출되던 문제 방지 → [상세](docs/history/2026-03-18_ToolFallback.md)
 - **수정** [Streaming] tool_call/tool_response 태그 스트리밍 노출 방지 — 상태 기반 문자 단위 필터링, 프론트엔드 sanitizeText 안전장치 → [상세](docs/history/2026-03-18_ToolCallTagFiltering.md)
 - **추가** [인프라] nginx + PM2 + NSSM 기반 Blue-Green 무중단 배포 시스템 구축 — 운영/개발 환경 분리, 자동 배포(12:10/22:30), 15초 롤백 → [상세](docs/history/2026-03-18_BlueGreenDeploy.md)
 

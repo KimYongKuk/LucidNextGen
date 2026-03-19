@@ -219,65 +219,180 @@
     // ============================================================
 
     /**
-     * .eml 파일에서 본문 텍스트 추출
+     * .eml 파일에서 본문 텍스트 추출 (스트리밍 방식)
+     * 파일 전체를 메모리에 올리지 않고 헤더+텍스트 파트만 읽어 첨부파일 크기와 무관하게 동작
      */
     private String extractBodyFromEml(String filePath) {
         try {
             File file = new File(filePath);
             if (!file.exists()) return null;
-            if (file.length() > 5 * 1024 * 1024) return "[파일 크기 초과 (5MB 제한)]";
 
-            // 파일을 ISO-8859-1로 읽기 (바이트 보존, 헤더 파싱 안전)
-            byte[] fileBytes = new byte[(int) file.length()];
-            FileInputStream fis = new FileInputStream(file);
-            int bytesRead = fis.read(fileBytes);
-            fis.close();
-            if (bytesRead <= 0) return null;
-
-            String rawContent = new String(fileBytes, StandardCharsets.ISO_8859_1);
-
-            // 헤더와 본문 분리
-            int headerEnd = rawContent.indexOf("\r\n\r\n");
-            int bodyStart = 4;
-            if (headerEnd == -1) {
-                headerEnd = rawContent.indexOf("\n\n");
-                bodyStart = 2;
-            }
-            if (headerEnd == -1) return null;
-
-            String headers = rawContent.substring(0, headerEnd);
-            byte[] bodyBytes = Arrays.copyOfRange(fileBytes, headerEnd + bodyStart, bytesRead);
-
-            // Content-Type, Content-Transfer-Encoding 파싱
-            String contentType = getEmlHeaderValue(headers, "Content-Type");
-            String cte = getEmlHeaderValue(headers, "Content-Transfer-Encoding");
-            if (contentType == null) contentType = "text/plain; charset=utf-8";
-
-            // multipart 처리
-            if (contentType.toLowerCase().contains("multipart/")) {
-                String boundary = extractBoundary(contentType);
-                if (boundary != null) {
-                    String bodyStr = new String(bodyBytes, StandardCharsets.ISO_8859_1);
-                    String extracted = parseMultipartBody(bodyStr, boundary);
-                    if (extracted != null && !extracted.trim().isEmpty()) return extracted;
+            try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(file), 16384)) {
+                // 1. 헤더 읽기 (빈 줄까지)
+                StringBuilder headerSb = new StringBuilder(4096);
+                String line;
+                boolean headerDone = false;
+                while ((line = readStreamLine(bis)) != null) {
+                    if (line.isEmpty()) { headerDone = true; break; }
+                    headerSb.append(line).append("\n");
                 }
-                return null;
+                if (!headerDone) return null;
+
+                String headers = headerSb.toString();
+                String contentType = getEmlHeaderValue(headers, "Content-Type");
+                String cte = getEmlHeaderValue(headers, "Content-Transfer-Encoding");
+                if (contentType == null) contentType = "text/plain; charset=utf-8";
+
+                // single-part: 본문 직접 읽기 (최대 200KB)
+                if (!contentType.toLowerCase().contains("multipart/")) {
+                    byte[] bodyBytes = readStreamLimited(bis, 200 * 1024);
+                    String charset = extractCharset(contentType);
+                    String bodyText = decodeBodyContent(bodyBytes, cte, charset);
+                    if (contentType.toLowerCase().contains("text/html")) {
+                        bodyText = stripHtmlFull(bodyText);
+                    }
+                    return bodyText;
+                }
+
+                // multipart: boundary 기반 스트리밍 파싱
+                String boundary = extractBoundary(contentType);
+                if (boundary == null) return null;
+                return scanMultipartStream(bis, boundary);
             }
-
-            // single-part 본문 디코딩
-            String charset = extractCharset(contentType);
-            String bodyText = decodeBodyContent(bodyBytes, cte, charset);
-
-            // HTML → 텍스트
-            if (contentType.toLowerCase().contains("text/html")) {
-                bodyText = stripHtmlFull(bodyText);
-            }
-
-            return bodyText;
 
         } catch (Exception e) {
             return "[본문 파싱 오류: " + e.getMessage() + "]";
         }
+    }
+
+    /**
+     * 스트림에서 한 줄 읽기 (CRLF/LF 처리, ISO-8859-1)
+     * 바이너리 파트 스킵 시에도 메모리 안전하도록 1줄 최대 1MB 제한
+     */
+    private String readStreamLine(BufferedInputStream bis) throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream(256);
+        int b;
+        while ((b = bis.read()) != -1) {
+            if (b == '\n') break;
+            if (b == '\r') {
+                bis.mark(1);
+                int next = bis.read();
+                if (next != '\n' && next != -1) bis.reset();
+                break;
+            }
+            if (baos.size() < 1024 * 1024) {
+                baos.write(b);
+            }
+        }
+        if (b == -1 && baos.size() == 0) return null;
+        return baos.toString("ISO-8859-1");
+    }
+
+    /**
+     * 스트림에서 최대 maxBytes만큼 읽기
+     */
+    private byte[] readStreamLimited(BufferedInputStream bis, int maxBytes) throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream(Math.min(maxBytes, 8192));
+        byte[] buf = new byte[8192];
+        int total = 0;
+        int n;
+        while (total < maxBytes && (n = bis.read(buf, 0, Math.min(buf.length, maxBytes - total))) != -1) {
+            baos.write(buf, 0, n);
+            total += n;
+        }
+        return baos.toByteArray();
+    }
+
+    /**
+     * multipart 본문을 스트리밍으로 파싱 — text 파트만 버퍼링, 첨부는 스킵
+     */
+    private String scanMultipartStream(BufferedInputStream bis, String boundary) throws IOException {
+        String textPlain = null;
+        String textHtml = null;
+        String delimiter = "--" + boundary;
+        String endDelimiter = "--" + boundary + "--";
+
+        // preamble 스킵, 첫 boundary 탐색
+        String line;
+        while ((line = readStreamLine(bis)) != null) {
+            if (line.trim().equals(delimiter)) break;
+            if (line.trim().equals(endDelimiter)) return null;
+        }
+        if (line == null) return null;
+
+        // 파트 순회
+        while (true) {
+            // 파트 헤더 읽기
+            StringBuilder partHeaderSb = new StringBuilder();
+            while ((line = readStreamLine(bis)) != null) {
+                if (line.trim().isEmpty()) break;
+                partHeaderSb.append(line).append("\n");
+            }
+            if (line == null) break;
+
+            String partHeaders = partHeaderSb.toString();
+            String partCT = getEmlHeaderValue(partHeaders, "Content-Type");
+            String partCTE = getEmlHeaderValue(partHeaders, "Content-Transfer-Encoding");
+            if (partCT == null) partCT = "text/plain";
+            String partCTLower = partCT.toLowerCase();
+
+            String disposition = getEmlHeaderValue(partHeaders, "Content-Disposition");
+            boolean isAttachment = disposition != null && disposition.toLowerCase().contains("attachment");
+
+            // 중첩 multipart (재귀)
+            if (partCTLower.contains("multipart/")) {
+                String nestedBoundary = extractBoundary(partCT);
+                if (nestedBoundary != null) {
+                    String nested = scanMultipartStream(bis, nestedBoundary);
+                    if (nested != null && !nested.trim().isEmpty()) return nested;
+                }
+                // 남은 내용을 부모 boundary까지 스킵
+                while ((line = readStreamLine(bis)) != null) {
+                    String t = line.trim();
+                    if (t.equals(delimiter) || t.equals(endDelimiter)) break;
+                }
+                if (line == null || line.trim().equals(endDelimiter)) break;
+                continue;
+            }
+
+            // 텍스트 파트인지 판별
+            boolean isTextPart = !isAttachment &&
+                (partCTLower.contains("text/plain") || partCTLower.contains("text/html"));
+
+            // 파트 본문 읽기 (다음 boundary까지)
+            ByteArrayOutputStream partBody = isTextPart ? new ByteArrayOutputStream(8192) : null;
+            boolean hitEnd = false;
+
+            while ((line = readStreamLine(bis)) != null) {
+                String t = line.trim();
+                if (t.equals(delimiter) || t.equals(endDelimiter)) {
+                    hitEnd = t.equals(endDelimiter);
+                    break;
+                }
+                // 텍스트 파트만 버퍼링 (최대 500KB), 나머지는 읽고 버림
+                if (isTextPart && partBody.size() < 500 * 1024) {
+                    partBody.write(line.getBytes(StandardCharsets.ISO_8859_1));
+                    partBody.write('\n');
+                }
+            }
+
+            if (isTextPart && partBody != null && partBody.size() > 0) {
+                byte[] partBytes = partBody.toByteArray();
+                String cs = extractCharset(partCT);
+                String decoded = decodeBodyContent(partBytes, partCTE, cs);
+                if (partCTLower.contains("text/plain")) {
+                    textPlain = decoded;
+                } else if (partCTLower.contains("text/html")) {
+                    textHtml = stripHtmlFull(decoded);
+                }
+            }
+
+            if (line == null || hitEnd) break;
+        }
+
+        if (textPlain != null && !textPlain.trim().isEmpty()) return textPlain;
+        if (textHtml != null && !textHtml.trim().isEmpty()) return textHtml;
+        return null;
     }
 
     /**

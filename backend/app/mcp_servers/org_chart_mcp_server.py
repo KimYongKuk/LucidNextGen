@@ -111,6 +111,11 @@ async def execute_org_chart_query(sql_query: str) -> str:
     print("[검증 4/4] 통과 (읽기 전용 쿼리 확인)\n", file=sys.stderr)
     validation_steps.append("   통과 (읽기 전용 쿼리 확인)")
 
+    # 5단계: 대소문자 혼합 컬럼 자동 따옴표 처리
+    # PostgreSQL은 따옴표 없는 식별자를 소문자로 fold → 부서ID → 부서id (에러)
+    # LLM이 생성하는 부서ID를 "부서ID"로 자동 치환
+    sql_query = re.sub(r'(?<!")부서ID(?!")', '"부서ID"', sql_query)
+
     # 실제 PostgreSQL 쿼리 실행
     validation_steps.append("5단계: PostgreSQL 쿼리 실행")
 

@@ -54,15 +54,27 @@ class _TeeWriter:
     def __init__(self, original, log_func):
         self._original = original
         self._log_func = log_func
+        self._in_write = False  # 재진입 방지 가드
     def write(self, text):
-        if text and text.strip():
-            self._log_func(text.rstrip())
+        if self._in_write:
+            # 재진입 감지: logging 호출 건너뛰고 원본 스트림에만 직접 쓰기
+            try:
+                self._original.write(text)
+            except Exception:
+                pass
+            return
+        self._in_write = True
         try:
-            self._original.write(text)
-        except UnicodeEncodeError:
-            # cp949 등 콘솔 인코딩이 이모지를 지원하지 않을 때 안전하게 출력
-            encoding = getattr(self._original, "encoding", "utf-8") or "utf-8"
-            self._original.write(text.encode(encoding, errors="replace").decode(encoding))
+            if text and text.strip():
+                self._log_func(text.rstrip())
+            try:
+                self._original.write(text)
+            except UnicodeEncodeError:
+                # cp949 등 콘솔 인코딩이 이모지를 지원하지 않을 때 안전하게 출력
+                encoding = getattr(self._original, "encoding", "utf-8") or "utf-8"
+                self._original.write(text.encode(encoding, errors="replace").decode(encoding))
+        finally:
+            self._in_write = False
     def flush(self):
         self._original.flush()
     # subprocess/uvicorn이 fileno()를 호출할 수 있으므로 위임
