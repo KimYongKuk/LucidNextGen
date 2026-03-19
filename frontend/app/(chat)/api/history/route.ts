@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8000";
 
 // SSO 쿠키에서 user_id 추출 (인증 필수)
 const getUserIdFromCookie = (request: Request): string | null => {

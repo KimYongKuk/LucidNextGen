@@ -8,7 +8,7 @@ export const maxDuration = 60;
 export const dynamic = "force-dynamic";
 
 // 백엔드 URL 설정
-const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8000";
 
 /**
  * Get user ID for server-side API routes

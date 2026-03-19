@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
+const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8000'
 
 export default async function proxy(request: NextRequest) {
   const { searchParams, pathname } = request.url.includes('?')
@@ -49,6 +49,10 @@ export default async function proxy(request: NextRequest) {
     const empno = request.cookies.get('empno')?.value
 
     if (!empno) {
+      // embed 경로에서는 리다이렉트 대신 401 (iframe 깨짐 방지)
+      if (pathname.startsWith('/embed')) {
+        return new NextResponse('Unauthorized', { status: 401 })
+      }
       return NextResponse.redirect(new URL('/unauthorized', request.url))
     }
 
@@ -71,6 +75,6 @@ export const config = {
      * - _next/image (image optimization files)
      * - favicon.ico (favicon file)
      */
-    '/((?!api|_next/static|_next/image|favicon.ico).*)',
+    '/((?!api|_next/static|_next/image|favicon.ico|embed).*)',
   ],
 }
