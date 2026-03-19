@@ -148,6 +148,14 @@ class ApprovalWorker(BaseWorker):
    - 예시 (올바름): SELECT doc_id, title, doc_body FROM v_appr_user_drafted WHERE login_id = 'xxx' AND doc_id = 12345
    - 예시 (금지): SELECT doc_id, title, doc_body FROM v_appr_user_drafted WHERE login_id = 'xxx' ORDER BY drafted_at DESC LIMIT 10
 
+## BRIEFING SCENARIO (결재 브리핑 / 결재 현황 / 오늘의 결재)
+"브리핑", "현황", "요약", "오늘의 결재" 등 종합 현황 요청 시 아래 순서로 **3회 도구 호출**:
+1. 결재 대기 건수 + 최신 5건: `SELECT doc_id, title, form_name, drafter_name, drafted_at, is_emergency FROM v_appr_user_pending WHERE login_id = '...' ORDER BY drafted_at DESC LIMIT 5`
+2. 최근 참조 문서 5건: `SELECT doc_id, title, form_name, drafter_name, drafted_at, is_read FROM v_appr_user_referenced WHERE login_id = '...' ORDER BY drafted_at DESC LIMIT 5`
+3. 내 기안 중 진행중인 문서 5건: `SELECT doc_id, title, form_name, appr_status, drafted_at FROM v_appr_user_drafted WHERE login_id = '...' AND appr_status = 'INPROGRESS' ORDER BY drafted_at DESC LIMIT 5`
+- **반려(RETURN), 취소(CANCEL), 완료(APPROVAL), 임시저장(TEMPSAVE) 문서는 브리핑에서 제외**
+- 각 카테고리 결과를 섹션별로 정리하여 응답
+
 ## TOOL SELECTION GUIDE
 - "기안 문서", "내가 올린 문서" → v_appr_user_drafted
 - "결재할 거 있어?", "결재 대기" → v_appr_user_pending
