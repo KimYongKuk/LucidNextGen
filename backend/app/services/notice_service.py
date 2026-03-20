@@ -245,31 +245,40 @@ class NotificationService:
         return {"items": items, "count": total_count}
 
     async def get_received_documents(self, employee_number: str) -> Dict[str, Any]:
-        """부서 수신 문서 조회 (접수 대기)"""
-        dept_id = await self._get_dept_id(employee_number)
-
+        """부서 수신 문서 조회 (접수 대기) — 사용자 접근 가능 부서 기준"""
         pool = await self._get_pool()
         async with pool.acquire() as conn:
+            # 사용자 접근 가능 부서 ID 목록 (중복 제거)
+            dept_rows = await conn.fetch(
+                """
+                SELECT DISTINCT dept_id FROM v_appr_user_accessible_depts
+                WHERE employee_number = $1 AND use_reception = true
+                """,
+                employee_number
+            )
+            dept_ids = [r["dept_id"] for r in dept_rows]
+            if not dept_ids:
+                return {"items": [], "count": 0}
+
             count_row = await conn.fetchrow(
                 """
                 SELECT COUNT(*) as cnt FROM v_appr_dept_received
-                WHERE dept_id = $1 AND is_reception_returned = false
-                  AND appr_status NOT IN ('CANCEL', 'RETURN', 'TEMPSAVE')
+                WHERE dept_id = ANY($1) AND reception_status = 'WAITING'
                 """,
-                dept_id
+                dept_ids
             )
             total_count = count_row["cnt"] if count_row else 0
 
             rows = await conn.fetch(
                 """
-                SELECT doc_id, title, form_name, drafter_name, drafter_dept_name, received_at
+                SELECT doc_id, title, form_name, drafter_name,
+                       drafter_dept_name, received_at
                 FROM v_appr_dept_received
-                WHERE dept_id = $1 AND is_reception_returned = false
-                  AND appr_status NOT IN ('CANCEL', 'RETURN', 'TEMPSAVE')
+                WHERE dept_id = ANY($1) AND reception_status = 'WAITING'
                 ORDER BY received_at DESC NULLS LAST
                 LIMIT 3
                 """,
-                dept_id
+                dept_ids
             )
 
         items = [
