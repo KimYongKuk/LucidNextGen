@@ -43,7 +43,7 @@ export function useSimpleChat({
   const [status, setStatus] = useState<'ready' | 'streaming' | 'submitted'>('ready');
   const [followUpSuggestions, setFollowUpSuggestions] = useState<string[] | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const userId = getUserId();
+  const userId = getUserId() ?? "anonymous";
 
   const sendMessage = useCallback(async (message: Omit<ChatMessage, 'id' | 'createdAt'>) => {
     // 이전 팔로우업 제안 초기화
@@ -160,6 +160,7 @@ export function useSimpleChat({
       let youtubeSummary: any = null; // YouTube 요약 (매 요청마다 초기화)
       let corpSources: any[] = []; // Corp 문서 출처 (매 요청마다 초기화)
       let chartData: any = null; // 차트 데이터 (매 요청마다 초기화)
+      let svgData: any = null; // SVG 시각화 데이터 (매 요청마다 초기화)
       let workerName: string = ''; // 인텐트 분류 결과 워커 이름
 
       if (reader) {
@@ -276,6 +277,11 @@ export function useSimpleChat({
                     // 차트는 저장만 하고 스트리밍 완료 시 표시
                   }
 
+                  // SVG 시각화 데이터 처리 (저장만, 스트리밍 완료 후 표시)
+                  if (data.type === 'svg_visual' && data.svg_data) {
+                    svgData = data.svg_data;
+                  }
+
                   // Intent 분류 결과 처리 (워커 이름 캡처)
                   if (data.type === 'intent_classified' && data.worker) {
                     workerName = data.worker;
@@ -341,6 +347,9 @@ export function useSimpleChat({
                     const finalParts: any[] = [{ type: 'text', text: cleanedContent }];
                     if (chartData) {
                       finalParts.push({ type: 'chart-data', chartData });
+                    }
+                    if (svgData) {
+                      finalParts.push({ type: 'svg-visual', svgData });
                     }
                     if (sources.length > 0) {
                       finalParts.push({ type: 'sources', sources });

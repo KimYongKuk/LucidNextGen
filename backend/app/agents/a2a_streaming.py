@@ -213,6 +213,7 @@ async def stream_a2a_response(
     collected_sources = []
     collected_youtube_summary = None
     collected_chart_data = None  # 차트 데이터 (display 모드)
+    collected_svg_data = None  # SVG 시각화 데이터
     all_searched_corp_sources = []  # 검색된 모든 문서 (Tool 결과)
     chunk_count = 0
     first_chunk_time = None
@@ -507,6 +508,22 @@ async def stream_a2a_response(
                         import traceback
                         traceback.print_exc()
 
+                # SVG 시각화 데이터 수집
+                if tool_name == "create_svg_visual":
+                    try:
+                        content_str = tool_output.content if hasattr(tool_output, 'content') else str(tool_output)
+                        if isinstance(content_str, str) and content_str.strip():
+                            svg_data = json.loads(content_str)
+                        else:
+                            svg_data = content_str
+
+                        if isinstance(svg_data, dict) and svg_data.get("type") == "svg_visual" and svg_data.get("success"):
+                            print(f"[SVG] Sending svg_visual SSE event: {svg_data.get('title')}")
+                            collected_svg_data = svg_data
+                            yield f"data: {json.dumps({'type': 'svg_visual', 'svg_data': svg_data}, ensure_ascii=False)}\n\n"
+                    except Exception as e:
+                        print(f"[SVG ERROR] Failed to process SVG data: {e}")
+
             elif event_type == "on_chat_model_stream":
                 chunk_data = event.get("data", {})
                 if "chunk" in chunk_data:
@@ -730,4 +747,4 @@ async def stream_a2a_response(
             cache_log = f" cache_read={total_cache_read_tokens:,} cache_write={total_cache_write_tokens:,}"
         print(f"[CHAT_STREAM] Token usage: input={total_input_tokens:,} output={total_output_tokens:,}{cache_log} llm_calls={total_llm_calls}")
 
-    yield f"data: {json.dumps({'type': '_internal_collected', 'response': collected_response, 'sources': collected_sources, 'youtube_summary': collected_youtube_summary, 'corp_sources': all_searched_corp_sources, 'chart_data': collected_chart_data, 'intent': classified_intent, 'worker_name': classified_worker, 'response_time_ms': int((time.time() - start_time) * 1000), 'is_error': is_error, 'tools_used': tool_calls_made, 'input_tokens': total_input_tokens, 'output_tokens': total_output_tokens, 'cache_read_tokens': total_cache_read_tokens, 'cache_write_tokens': total_cache_write_tokens, 'llm_call_count': total_llm_calls})}\n\n"
+    yield f"data: {json.dumps({'type': '_internal_collected', 'response': collected_response, 'sources': collected_sources, 'youtube_summary': collected_youtube_summary, 'corp_sources': all_searched_corp_sources, 'chart_data': collected_chart_data, 'svg_data': collected_svg_data, 'intent': classified_intent, 'worker_name': classified_worker, 'response_time_ms': int((time.time() - start_time) * 1000), 'is_error': is_error, 'tools_used': tool_calls_made, 'input_tokens': total_input_tokens, 'output_tokens': total_output_tokens, 'cache_read_tokens': total_cache_read_tokens, 'cache_write_tokens': total_cache_write_tokens, 'llm_call_count': total_llm_calls})}\n\n"

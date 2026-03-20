@@ -33,6 +33,7 @@ import { CorpSourcesCarousel } from "./corp-sources-carousel";
 import { YouTubeCard } from "./youtube-card";
 import { YouTubeModal } from "./youtube-modal";
 import { ChartDisplay } from "./chart-display";
+import { SVGDisplay } from "./svg-display";
 
 // Separate component to handle YouTube summary with card and modal
 const YoutubeSummaryCard = ({ summary }: { summary: any }) => {
@@ -347,6 +348,12 @@ const PurePreviewMessage = ({
             if (type === "chart-data") {
               const chartPart = part as any;
               return <ChartDisplay key={key} chartData={chartPart.chartData} />;
+            }
+
+            // @ts-ignore - Custom type for SVG visual
+            if (type === "svg-visual") {
+              const svgPart = part as any;
+              return <SVGDisplay key={key} svgData={svgPart.svgData} />;
             }
 
             return null;

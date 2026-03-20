@@ -115,6 +115,11 @@ export async function GET(request: Request) {
           parts.push({ type: "chart-data", chartData: msg.chart_data });
         }
 
+        // 6. SVG 시각화 데이터 (있는 경우)
+        if (msg.svg_data) {
+          parts.push({ type: "svg-visual", svgData: msg.svg_data });
+        }
+
         return {
           id: `${sessionId}-${index}`,
           role: msg.role,

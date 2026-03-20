@@ -7,6 +7,7 @@ import remarkBreaks from "remark-breaks";
 import { Streamdown } from "streamdown";
 import { cn } from "@/lib/utils";
 import { CodeBlock, CodeBlockCopyButton } from "@/components/elements/code-block";
+import { MermaidDiagram } from "@/components/mermaid-diagram";
 import { FileDown, TableIcon, CheckIcon, Eye } from "lucide-react";
 import { copyToClipboard } from "@/lib/clipboard";
 import { useXlsxViewer } from "@/hooks/use-xlsx-viewer";
@@ -593,6 +594,12 @@ export const Response = memo(
 
               // 블록 코드 (언어 지정 또는 미지정)
               if (!isInline) {
+                // Mermaid 다이어그램 감지
+                const language = match ? match[1] : "";
+                if (language === "mermaid" && !isStreaming) {
+                  return <MermaidDiagram code={codeString} />;
+                }
+
                 if (isStreaming) {
                   return (
                     <pre className="my-4 overflow-auto rounded-md border bg-background p-4">
@@ -603,7 +610,7 @@ export const Response = memo(
                 return (
                   <CodeBlock
                     code={codeString}
-                    language={match ? match[1] : "text"}
+                    language={language || "text"}
                     className="my-4"
                   >
                     <CodeBlockCopyButton />

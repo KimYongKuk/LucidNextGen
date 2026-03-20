@@ -1,11 +1,16 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
+import { useSearchParams } from "next/navigation";
 import { EmbedChat } from "@/components/embed-chat";
 import { getUserId } from "@/lib/utils";
 
 export default function EmbedPage() {
-  const userId = getUserId() ?? "anonymous";
+  const searchParams = useSearchParams();
+  // 우선순위: URL 파라미터 empno > SSO 쿠키 > anonymous
+  const userId = useMemo(() => {
+    return searchParams.get("empno") || getUserId() || "anonymous";
+  }, [searchParams]);
 
   // embed 내 링크 클릭 시 부모 프레임(Outline Wiki)으로 postMessage 전송
   useEffect(() => {

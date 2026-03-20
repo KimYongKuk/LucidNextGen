@@ -7,7 +7,7 @@
 
 ## [2026-03-20]
 - **수정** [Briefing] 수신문서 접수대기 정확도 개선 — accessible_depts JOIN, reception_status=WAITING 필터, is_assigned 레거시 제거 → [상세](docs/history/2026-03-20_BriefingReceivedDocsFix.md)
-- **추가** [VisualizationWorker] SVG 인포그래픽/다이어그램 생성 — MCP 서버, 보안 정제, 인라인 렌더링(확대/다운로드), 인텐트 키워드 확장 → [상세](docs/history/2026-03-20_SVGVisualGenerator.md)
+- **추가** [VisualizationWorker] SVG 인포그래픽 + Mermaid 다이어그램 — SVG MCP 서버(regex 정제, DOMPurify), Mermaid 코드 블록 자동 렌더링, 시각화 3종 체계(Charts/Mermaid/SVG) → [상세](docs/history/2026-03-20_SVGVisualGenerator.md)
 
 ---
 

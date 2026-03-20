@@ -448,6 +448,10 @@ class ChatLogService:
             if metadata.get("chart_data"):
                 assistant_msg["chart_data"] = metadata.get("chart_data")
 
+            # SVG 시각화 데이터가 있으면 추가
+            if metadata.get("svg_data"):
+                assistant_msg["svg_data"] = metadata.get("svg_data")
+
             messages.append(assistant_msg)
 
         return messages

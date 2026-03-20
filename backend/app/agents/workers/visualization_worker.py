@@ -27,10 +27,14 @@ class VisualizationWorker(BaseWorker):
     - create_pie_chart: 파이 차트 생성
     - create_multi_chart: 복합 차트 생성 (막대+라인, 누적, 영역)
 
+    SVG 시각화 도구:
+    - create_svg_visual: SVG 인포그래픽/다이어그램 생성 (플로우차트, 타임라인, 비교, 대시보드)
+
     용도:
     - 이전 대화 내용을 PDF/Word 문서로 변환
     - 보고서, 문서 생성
     - 데이터 시각화 (차트, 그래프)
+    - 인포그래픽, 플로우차트, 다이어그램
 
     Sonnet 사용 이유: 문서 구조화, 포맷팅 품질 향상
     """
@@ -56,6 +60,8 @@ class VisualizationWorker(BaseWorker):
             "create_bar_chart",
             "create_pie_chart",
             "create_multi_chart",
+            # SVG 시각화 도구
+            "create_svg_visual",
             # 웹 검색 도구 (시장 현황, 트렌드 등 최신 정보 필요 시)
             "tavily_search",
         ]
@@ -105,6 +111,7 @@ TOOLS:
 - PDF: create_document_pdf, create_table_spec_pdf, list_generated_pdfs
 - DOCX: create_document_docx (편집 가능한 Word 문서)
 - Charts: create_line_chart (trends), create_bar_chart (comparison), create_pie_chart (ratios), create_multi_chart (combo/stacked/area)
+- SVG Visual: create_svg_visual (infographic, flowchart, timeline, comparison, diagram, dashboard, process)
 - File Search: search_user_files(session_id="{session_id}"), search_workspace_docs(workspace_uuid="{workspace_uuid}")
 - Web Search: tavily_search (최신 정보 조사용)
 
@@ -114,8 +121,28 @@ FORMAT SELECTION:
 - 사용자가 "문서로 만들어줘", "보고서 정리해줘" 등 포맷 미지정 → create_document_pdf (기본값)
 - 사용자가 "수정 가능하게" 또는 "편집할 수 있게" 요청 → create_document_docx
 
-CHART SELECTION:
-- 시간 추이 → line | 카테고리 비교 → bar | 비율/점유율 → pie | 복합 지표 → multi(combo)
+VISUALIZATION SELECTION (3가지 도구):
+1. Charts (create_line/bar/pie/multi_chart) → 정량 데이터 (숫자, 추이, 비교)
+   - 시간 추이 → line | 카테고리 비교 → bar | 비율/점유율 → pie | 복합 지표 → multi(combo)
+2. Mermaid (마크다운 ```mermaid 코드 블록) → 구조화된 다이어그램
+   - 플로우차트, 시퀀스 다이어그램, 간트 차트, ER 다이어그램, 상태 다이어그램
+   - 텍스트 기반이라 안정적이고, 자동으로 레이아웃/스타일링됨
+   - 예: ```mermaid\nflowchart TD\n  A[시작] --> B{조건}\n  B -->|예| C[처리]\n  B -->|아니오| D[종료]\n```
+3. SVG Visual (create_svg_visual) → 자유도 높은 커스텀 시각화
+   - 인포그래픽, KPI 대시보드, 비교 시각화, 타임라인
+   - Mermaid로 표현하기 어려운 커스텀 레이아웃이 필요할 때만 사용
+
+SELECTION PRIORITY: Charts > Mermaid > SVG (단순한 도구를 우선 사용)
+
+SVG VISUAL GUIDELINES:
+- ViewBox: 800x600 (landscape) or 600x800 (portrait)
+- Font: 'Malgun Gothic', 'Noto Sans KR', sans-serif (Korean support)
+- Colors: professional palette — primary #4A90D9, accent #50C878, warm #FF6B6B, bg #F8FAFC
+- Design: rounded corners (rx="8"), clean spacing, clear typography hierarchy
+- Title: 22-24px bold, Body: 14-16px, Caption: 11-12px
+- Use: rect, circle, path, text, line, polygon — NO external images/fonts
+- Include inline CSS <style> within <defs> for reusable classes
+- All text must be directly in <text> elements (no foreignObject)
 
 ═══════════════════════════════════════════════════════════════
 🚨 MUST-DO RULES (절대 규칙) - 위반 시 파일 생성 안 됨!

@@ -28,8 +28,8 @@ CLASSIFIER_PROMPT = """You are an intent classifier. Classify the user's message
 INTENTS:
 - ppt_generation: Create PowerPoint presentations, slides, PPT files
   Keywords: "PPT", "파워포인트", "프레젠테이션", "발표자료", "슬라이드로", "PT자료"
-- visualization: Create charts, graphs, PDF documents, Word/DOCX documents, reports, data visualization
-  Keywords: "차트", "그래프", "PDF로", "워드로", "Word로", "DOCX", "시각화", "막대", "라인", "파이", "보고서로 정리"
+- visualization: Create charts, graphs, PDF documents, Word/DOCX documents, reports, data visualization, infographics, flowcharts, timelines, diagrams
+  Keywords: "차트", "그래프", "PDF로", "워드로", "Word로", "DOCX", "시각화", "막대", "라인", "파이", "보고서로 정리", "인포그래픽", "플로우차트", "타임라인", "다이어그램", "구조도"
 - xlsx: Create, modify, or manipulate Excel (XLSX) files
   NOTE: Analyzing uploaded xlsx content → "user_files". Creating/modifying xlsx → "xlsx"
 - user_files: Questions about user's uploaded files or workspace documents
@@ -104,6 +104,9 @@ EXAMPLES:
 - "이 데이터로 차트 그려줘" → visualization
 - "이거 워드로 만들어줘" → visualization
 - "Word 문서로 정리해줘" → visualization
+- "프로세스 플로우차트로 보여줘" → visualization
+- "인포그래픽으로 정리해줘" → visualization
+- "타임라인으로 만들어줘" → visualization
 - "이번달 2차전지 산업 동향 정리" → web_search
 - "반도체 산업 전망 정리해줘" → web_search
 - "마케팅 담당자 누구야?" → corp_rag
@@ -198,8 +201,8 @@ class IntentClassifier:
         # ========= Step 2: 생성/산출물 인텐트 (차트, PPT 등) =========
         # 이 워커들은 tavily_search 도구를 자체 보유하므로,
         # "OO 데이터를 차트로 만들어줘" 같은 복합 요청도 단일 워커 내에서 처리 가능
-        viz_pattern = r'(차트|그래프|시각화|막대.*그|라인.*그|파이.*그|꺾은선).{0,15}(만들|생성|그려|보여|작성|그리|표시)'
-        viz_pattern2 = r'(만들|생성|그려|보여|작성|그리|표시).{0,15}(차트|그래프|시각화)'
+        viz_pattern = r'(차트|그래프|시각화|막대.*그|라인.*그|파이.*그|꺾은선|인포그래픽|플로우차트|타임라인|다이어그램).{0,15}(만들|생성|그려|보여|작성|그리|표시)'
+        viz_pattern2 = r'(만들|생성|그려|보여|작성|그리|표시).{0,15}(차트|그래프|시각화|인포그래픽|플로우차트|타임라인|다이어그램)'
         viz_pattern3 = r'(PDF로|pdf로|PDF\s?문서|보고서로\s?정리|워드로|Word로|word로|DOCX로|docx로|워드\s?문서|Word\s?문서)'
         if re.search(viz_pattern, message, re.IGNORECASE) or re.search(viz_pattern2, message, re.IGNORECASE) or re.search(viz_pattern3, message, re.IGNORECASE):
             print(f"[INTENT] Quick: visualization keyword → VISUALIZATION")

@@ -634,6 +634,8 @@ async def chat_stream(
                             metadata["corp_sources"] = a2a_collected_data["corp_sources"]
                         if a2a_collected_data.get("chart_data"):
                             metadata["chart_data"] = a2a_collected_data["chart_data"]
+                        if a2a_collected_data.get("svg_data"):
+                            metadata["svg_data"] = a2a_collected_data["svg_data"]
                         if a2a_collected_data.get("is_error"):
                             metadata["is_error"] = True
                         if a2a_collected_data.get("tools_used"):
