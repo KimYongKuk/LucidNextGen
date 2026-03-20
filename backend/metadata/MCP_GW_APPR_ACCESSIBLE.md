@@ -5,7 +5,7 @@
 이 문서는 전자결재 부서 문서함과 관련된 두 가지 핵심 뷰를 다룹니다.
 
 1. **`v_appr_user_accessible_depts`** — 사용자별 접근 가능한 부서 문서함 목록
-2. **`v_appr_dept_received`** — 부서 수신함 문서 (접수 상태 구분 포함)
+2. **`v_appr_dept_received`** — 부서 수신함 문서 (부서별 독립 접수 상태 구분 포함)
 
 ---
 
@@ -93,7 +93,7 @@ WHERE u.deleted_at IS NULL
 
 ---
 
-## 2. v_appr_dept_received (부서 수신함 — 접수 상태 구분 포함)
+## 2. v_appr_dept_received (부서 수신함 — 부서별 독립 접수 상태 포함)
 
 ### 접수 상태(reception_status) 구분 로직
 
@@ -101,12 +101,30 @@ WHERE u.deleted_at IS NULL
 
 | reception_status | 의미 | 판단 기준 |
 |-----------------|------|----------|
-| `WAITING` | 접수대기 | 결재 완료(`appr_status='APPROVAL'`)되었으나 아직 접수 처리 안 됨 |
-| `RECEIVED` | 접수완료 | `go_appr_actionlogs`에 `RECEIVED` 기록 존재 |
+| `WAITING` | 접수대기 | 결재 완료(`appr_status='APPROVAL'`)되었으나 **해당 부서에서** 아직 접수 처리 안 됨 |
+| `RECEIVED` | 접수완료 | `go_appr_actionlogs`에 `RECEIVED` 기록이 존재하며, **접수자가 해당 수신부서의 담당자 또는 소속 멤버** |
 | `RECV_RETURNED` | 접수반려 | `reception_return_comment`가 존재 |
 | 기타 | 진행중 등 | `appr_status` 값 그대로 사용 |
 
-> **중요**: 기존 `is_assigned` 컬럼은 접수 완료 여부 판단에 신뢰할 수 없습니다. `is_assigned=false`인데 실제로는 접수 완료된 문서가 존재합니다. 반드시 `reception_status` 또는 `is_received` 컬럼을 사용하세요.
+### ⚠️ 부서별 독립 접수 핵심 로직
+
+동일 문서가 여러 부서(예: IT인프라팀, IT운영팀, 보안기술팀)에 동시 수신될 수 있습니다. 각 부서는 **독립적으로** 접수 처리하므로, 접수 완료 판단 시 반드시 **접수자(actor)가 해당 수신부서와 관련된 사람인지** 확인해야 합니다.
+
+`go_appr_actionlogs` 테이블에는 부서 컬럼이 없기 때문에, 접수자가 수신부서의 담당자(`go_appr_doc_subscriber_masters`)이거나 소속 멤버(`go_dept_members`)인 경우에만 해당 부서의 접수로 인정합니다.
+
+**실제 예시** (문서 1171249):
+
+| 수신부서 | reception_status | 접수자 | 접수시점 |
+|---------|-----------------|--------|---------|
+| IT운영팀 | **WAITING** | — | — |
+| IT인프라팀 | **RECEIVED** | 김소연 | 2026-03-19 18:14 |
+| 보안기술팀 | **RECEIVED** | 강병준 | 2026-03-19 15:56 |
+
+→ IT인프라팀의 김소연이 접수해도 IT운영팀은 여전히 WAITING 상태.
+
+### ❌ 사용 금지 컬럼
+
+- **`is_assigned`**: 접수 완료 여부 판단에 신뢰할 수 없습니다. `is_assigned=false`인데 실제로는 접수 완료된 문서가 존재합니다. 반드시 `reception_status` 또는 `is_received` 컬럼을 사용하세요.
 
 ### 스키마
 
@@ -126,7 +144,7 @@ WHERE u.deleted_at IS NULL
 | reception_return_comment | varchar | 접수반려 코멘트 |
 | is_reception_returned | boolean | 접수반려 여부 |
 | is_emergency | boolean | 긴급 여부 |
-| **is_received** | **boolean** | **접수 완료 여부 (신뢰 가능)** |
+| **is_received** | **boolean** | **해당 부서에서 접수 완료 여부 (신뢰 가능)** |
 | **received_by_name** | **varchar** | **접수 처리자 이름** |
 | **received_confirmed_at** | **varchar** | **실제 접수 처리 시점** |
 | **reception_status** | **text** | **수신 상태: WAITING / RECEIVED / RECV_RETURNED / 기타** |
@@ -175,7 +193,19 @@ LEFT JOIN go_appr_doc_bodies b ON d.doc_body_id = b.id
 LEFT JOIN LATERAL (
     SELECT al.id, al.created_at, al.actor_id
     FROM go_appr_actionlogs al
-    WHERE al.document_id = d.id AND al.actionlog_type = 'RECEIVED'
+    WHERE al.document_id = d.id 
+      AND al.actionlog_type = 'RECEIVED'
+      AND (
+          -- 접수자가 해당 수신부서의 문서함 담당자이거나
+          EXISTS (SELECT 1 FROM go_appr_doc_subscriber_masters sm 
+                  WHERE sm.dept_id = s.subscriber_id AND sm.user_id = al.actor_id)
+          OR
+          -- 접수자가 해당 수신부서의 소속 멤버이거나
+          EXISTS (SELECT 1 FROM go_dept_members dm 
+                  WHERE dm.department_id = s.subscriber_id 
+                    AND dm.user_id = al.actor_id 
+                    AND dm.deleted_at IS NULL)
+      )
     ORDER BY al.created_at DESC
     LIMIT 1
 ) recv ON true
@@ -248,18 +278,25 @@ ORDER BY access_type, user_name;
 
 ## 접수 상태 판단 시 주의사항
 
-### ❌ 잘못된 방법: is_assigned로 접수 완료 판단
+### ❌ 잘못된 방법 1: is_assigned로 접수 완료 판단
 ```sql
 -- is_assigned=false인데 실제로는 접수 완료된 문서가 존재!
 SELECT * FROM v_appr_dept_received WHERE is_assigned = false;
 ```
 
+### ❌ 잘못된 방법 2: document_id만으로 RECEIVED actionlog JOIN
+```sql
+-- 다부서 수신 시, A부서 접수가 B부서에도 적용되는 오류 발생!
+SELECT * FROM go_appr_actionlogs 
+WHERE document_id = :doc_id AND actionlog_type = 'RECEIVED';
+```
+
 ### ✅ 올바른 방법: reception_status 사용
 ```sql
--- 접수대기
+-- 접수대기 (해당 부서에서 아직 접수 안 한 문서)
 SELECT * FROM v_appr_dept_received WHERE reception_status = 'WAITING';
 
--- 접수완료
+-- 접수완료 (해당 부서에서 접수 처리 완료된 문서)
 SELECT * FROM v_appr_dept_received WHERE reception_status = 'RECEIVED';
 
 -- 접수반려
@@ -276,7 +313,7 @@ SELECT * FROM v_appr_dept_received WHERE reception_status = 'RECV_RETURNED';
 | `go_appr_doc_subscriber_masters` | 부서 문서함 담당자 지정 |
 | `go_appr_department_settings` | 부서별 전자결재 기능 활성화 설정 |
 | `go_appr_doc_subscribers` | 문서 수신/참조 부서 매핑 |
-| `go_appr_actionlogs` | 결재 액션 로그 (접수 완료 판단 핵심) |
+| `go_appr_actionlogs` | 결재 액션 로그 (접수 완료 판단 핵심, 부서 컬럼 없음) |
 | `go_users` | 사용자 기본 정보 |
 | `go_departments` | 부서 정보 |
 
@@ -285,7 +322,7 @@ SELECT * FROM v_appr_dept_received WHERE reception_status = 'RECV_RETURNED';
 | 뷰 | 용도 | 조합 키 |
 |----|------|---------|
 | `v_appr_user_accessible_depts` | 사용자별 접근 가능한 부서 목록 | `dept_id`, `employee_number` |
-| `v_appr_dept_received` | 부서 수신함 문서 (접수 상태 포함) | `dept_id` |
+| `v_appr_dept_received` | 부서 수신함 문서 (부서별 독립 접수 상태 포함) | `dept_id` |
 | `v_appr_dept_referenced` | 부서 참조함 문서 | `dept_id` |
 | `v_appr_dept_completed` | 부서 완료함 문서 | `dept_id` |
 

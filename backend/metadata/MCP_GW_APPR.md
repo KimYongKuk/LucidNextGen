@@ -83,6 +83,7 @@ ORDER BY completed_at DESC LIMIT 10;
 다른 부서에서 우리 부서로 수신된 문서. 필터: `dept_id`
 추가 컬럼: `appr_status`, `doc_status`, `drafter_name`, `drafter_dept_name`, `dept_id`, `dept_name`, `is_assigned`(⚠️ 레거시, 접수 판단에 사용 금지), `is_reception_returned`(접수 반려), `reception_return_comment`, `received_at`, **`reception_status`**(WAITING/RECEIVED/RECV_RETURNED/기타), **`is_received`**(접수 완료 여부), **`received_by_name`**(접수 처리자), **`received_confirmed_at`**(접수 처리 시점)
 > ⚠️ **`is_assigned` 사용 금지**: `is_assigned=false`인데 실제 접수 완료된 문서가 존재. 반드시 `reception_status` 사용.
+> ⚠️ **부서별 독립 접수**: 동일 문서가 여러 부서에 수신될 때, 각 부서는 독립적으로 접수 처리. A부서 접수 완료해도 B부서는 여전히 WAITING. `reception_status`는 해당 수신부서 기준으로 정확히 판단됨.
 > ⚠️ **부서 접근 권한**: 사용자는 소속 부서 외에 담당자 지정된 부서 문서함도 접근 가능. `v_appr_user_accessible_depts` 참조.
 ```sql
 -- 접수 대기
