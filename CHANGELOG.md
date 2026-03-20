@@ -5,6 +5,12 @@
 
 ---
 
+## [2026-03-20]
+- **수정** [Briefing] 수신문서 접수대기 정확도 개선 — accessible_depts JOIN, reception_status=WAITING 필터, is_assigned 레거시 제거 → [상세](docs/history/2026-03-20_BriefingReceivedDocsFix.md)
+- **추가** [VisualizationWorker] SVG 인포그래픽/다이어그램 생성 — MCP 서버, 보안 정제, 인라인 렌더링(확대/다운로드), 인텐트 키워드 확장 → [상세](docs/history/2026-03-20_SVGVisualGenerator.md)
+
+---
+
 ## [2026-03-19]
 - **추가** [OutlineWorker + Embed] Outline Wiki 연동 — MCP 서버 5개 도구, `/embed` iframe 채팅 페이지, outline_embed 모드 인텐트 격리, postMessage 링크 연동, HANDOFF 비활성화 → [상세](docs/history/2026-03-19_OutlineWikiWorker.md)
 - **추가** [PPTWorker] PPTX 생성 퀄리티 대폭 개선 — Shape 3종 추가(callout_box/kpi_card/divider), 차트 스타일(색상/라벨/범례), 레이아웃 패턴 10종, 디자인 규칙/차트 예시 프롬프트 → [상세](docs/history/2026-03-19_PPTXQualityEnhancement.md)
