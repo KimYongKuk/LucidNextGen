@@ -113,7 +113,7 @@ class ApprovalWorker(BaseWorker):
 
 ## CRITICAL RULES - 반드시 준수
 1. **텍스트 응답 없이 즉시 execute_approval_query 도구를 호출하세요.** 도구 호출이 최우선입니다.
-2. 위 사용자 정보의 login_id/user_id/dept_id를 SQL WHERE 조건에 그대로 사용하세요. **절대 다른 값으로 변경하거나 추측하지 마세요.**
+2. 위 사용자 정보의 login_id/user_id/employee_number를 SQL WHERE 조건에 그대로 사용하세요. **절대 다른 값으로 변경하거나 추측하지 마세요.** (부서 뷰는 v_appr_user_accessible_depts JOIN으로 접근)
 3. 도구 호출 시 employee_number에 반드시 "{{employee_number}}" 값을 사용하세요.
 4. **문서 접근 범위 규칙**:
    - 사용자가 특정 문서를 요청하면 (제목, 문서번호 등), **먼저 사용자가 접근 가능한 뷰(기안함, 결재함, 참조함, 수신문서함 등)에서 검색하세요.**
@@ -126,16 +126,22 @@ class ApprovalWorker(BaseWorker):
 
 ## WORKFLOW
 사용자 정보는 위에 이미 조회되어 있습니다. **바로 SQL 쿼리를 생성하고 execute_approval_query를 호출하세요.**
-1. 위 사용자 정보의 login_id/user_id/dept_id를 WHERE 조건에 사용
+1. 위 사용자 정보의 login_id/user_id/employee_number를 WHERE 조건에 사용
 2. execute_approval_query 도구로 SQL 실행 (v_appr_* 뷰만 접근 가능)
    - 개인 뷰 (v_appr_user_*): login_id 사용
-   - 부서 뷰 (v_appr_dept_*): dept_id 사용
+   - **부서 뷰 (v_appr_dept_*): 반드시 v_appr_user_accessible_depts JOIN 사용** (사용자가 접근 가능한 모든 부서 검색)
+     ```
+     FROM v_appr_dept_received r
+     JOIN v_appr_user_accessible_depts a ON r.dept_id = a.dept_id
+     WHERE a.employee_number = '{{employee_number}}'
+     ```
    - 병목 분석 뷰 (v_appr_doc_progress): drafter_login_id 사용
+   ⚠️ 부서 뷰에서 단일 dept_id만 사용하면 소속 부서 외 접근 가능한 부서 문서를 놓칩니다. 반드시 JOIN 패턴을 사용하세요.
 
 ## SQL QUERY RULES
 1. SELECT만 허용됩니다 (INSERT, UPDATE, DELETE 등 금지)
 2. v_appr_* 뷰만 접근 가능합니다
-3. 반드시 login_id, user_id, dept_id, drafter_login_id 중 하나로 필터링하세요
+3. 반드시 login_id, user_id, employee_number, drafter_login_id 중 하나로 필터링하세요 (부서 뷰는 v_appr_user_accessible_depts의 employee_number로 필터링)
 4. LIMIT을 권장합니다 (기본 10~20건)
 5. DateStyle은 서버에서 자동 설정됩니다 (쿼리에 SET DateStyle 불필요)
 6. 날짜 비교 시 문자열 형식 사용: drafted_at >= '{current_year}-01-01'
@@ -166,17 +172,17 @@ class ApprovalWorker(BaseWorker):
 - "임시저장 문서" → v_appr_user_drafted + appr_status = 'TEMPSAVE'
 - "긴급 결재" → v_appr_user_pending + is_emergency = true
 - "안 읽은 참조" → v_appr_user_referenced + is_read = false
-- "부서 기안 문서" → v_appr_dept_completed
-- "부서 수신 문서" → v_appr_dept_received
-- "접수 대기 문서" → v_appr_dept_received + is_assigned = false AND is_reception_returned = false
-- "접수 반려된 문서" → v_appr_dept_received + is_reception_returned = true
-- "부서 참조 문서" → v_appr_dept_referenced
+- "부서 기안 문서" → v_appr_dept_completed JOIN v_appr_user_accessible_depts (employee_number)
+- "부서 수신 문서" → v_appr_dept_received JOIN v_appr_user_accessible_depts (employee_number, use_reception=true)
+- "접수 대기 문서" → v_appr_dept_received JOIN ... + reception_status = 'WAITING'
+- "접수 반려된 문서" → v_appr_dept_received JOIN ... + reception_status = 'RECV_RETURNED'
+- "부서 참조 문서" → v_appr_dept_referenced JOIN v_appr_user_accessible_depts (employee_number)
 - "누구한테 멈춰있어?", "병목", "결재 안 해?" → v_appr_doc_progress
 - "3일 넘게 대기" → v_appr_doc_progress + days_pending > 3
 - "문서 본문 보여줘", "기안서 내용 확인" → 해당 뷰 + doc_body 포함 (단건 조회만, doc_id 지정 필수)
 - **"내 참조함의 '제목' (문서번호: N)"** → v_appr_user_referenced WHERE doc_id = N (doc_id로 즉시 단건 조회, doc_body 포함)
 - **"내 결재 대기함의 '제목' (문서번호: N)"** → v_appr_user_pending WHERE doc_id = N (doc_id로 즉시 단건 조회, doc_body 포함)
-- **"내 수신문서함의 '제목' (문서번호: N)"** → v_appr_dept_received WHERE doc_id = N (doc_id로 즉시 단건 조회, doc_body 포함)
+- **"내 수신문서함의 '제목' (문서번호: N)"** → v_appr_dept_received r JOIN v_appr_user_accessible_depts a ON r.dept_id = a.dept_id WHERE a.employee_number = '...' AND r.doc_id = N (doc_body 포함)
 
 ## RESPONSE FORMAT
 - 한국어로 응답

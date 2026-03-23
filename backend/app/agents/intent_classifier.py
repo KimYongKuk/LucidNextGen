@@ -296,16 +296,16 @@ class IntentClassifier:
                 print(f"[INTENT] Override: user_files -> direct (no session files, workspace_has_files={workspace_has_files})")
                 return Intent.DIRECT
 
-        # 워크스페이스에 파일이 있고, 정보 검색 의도면 → 워크스페이스 문서 우선 검색
-        workspace_has_files = context.get("workspace_has_files", False)
-        if workspace_has_files and intent in (Intent.CORP_RAG, Intent.IT_SUPPORT, Intent.ACCT_SUPPORT):
-            print(f"[INTENT] Override: {intent.value} -> user_files (workspace has files, search workspace docs first)")
-            return Intent.USER_FILES
-
         # 워크스페이스에 파일이 있는데 direct로 분류되면 → user_files로 오버라이드
+        # (워크스페이스에 문서가 있으면 문서 기반 응답이 우선)
+        workspace_has_files = context.get("workspace_has_files", False)
         if workspace_has_files and intent == Intent.DIRECT:
             print(f"[INTENT] Override: direct -> user_files (workspace has files, ensure document-grounded response)")
             return Intent.USER_FILES
+
+        # NOTE: corp_rag/it_support/acct_support 등 전문 인텐트는 더 이상 user_files로
+        # 강제 오버라이드하지 않음. orchestrator에서 workspace 모드일 때
+        # user_files를 1순위로 실행 후 NO_RESULTS 시 원래 인텐트 워커로 폴백.
 
         return intent
 

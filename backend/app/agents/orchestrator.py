@@ -155,6 +155,36 @@ class Orchestrator:
             print(f"[ORCHESTRATOR] CLARIFY intent → injecting clarify_mode into context")
 
         # ============================================================
+        # Phase 1.8: Workspace-first routing
+        # 워크스페이스에 파일이 있고, 전문 워커로 분류되었으면
+        # → user_files를 1순위로 실행, NO_RESULTS 시 원래 워커로 폴백
+        # ============================================================
+        workspace_has_files = context.get("workspace_has_files", False)
+        workspace_original_intent = None  # 원래 분류된 전문 인텐트 (폴백용)
+        workspace_original_worker = None
+
+        # user_files/direct가 아닌 전문 인텐트 + 워크스페이스에 파일 있음
+        # → user_files를 먼저 실행하도록 교체
+        _WS_FIRST_ELIGIBLE = {
+            Intent.CORP_RAG, Intent.IT_SUPPORT, Intent.ACCT_SUPPORT,
+            Intent.WEB_SEARCH, Intent.BOARD,
+        }
+        if workspace_has_files and intent in _WS_FIRST_ELIGIBLE:
+            workspace_original_intent = intent
+            workspace_original_worker = worker_name
+            intent = Intent.USER_FILES
+            worker_name = INTENT_TO_WORKER[Intent.USER_FILES]
+            print(f"[ORCHESTRATOR] Workspace-first: {workspace_original_intent.value} → user_files (try workspace docs first)")
+
+            yield {
+                "type": "intent_classified",
+                "intent": "user_files",
+                "worker": worker_name,
+                "timing_ms": classify_time,
+                "workspace_first": True,
+            }
+
+        # ============================================================
         # Phase 2: Worker Dispatch (+ 도구 가용성 체크)
         # ============================================================
         worker_dispatch_start = time.time()
@@ -211,6 +241,47 @@ class Orchestrator:
 
         worker_time = int((time.time() - worker_start) * 1000)
         print(f"[ORCHESTRATOR] Worker execution time: {worker_time}ms")
+
+        # ============================================================
+        # Phase 4.5: Workspace-first fallback
+        # user_files에서 NO_RESULTS → 원래 분류된 전문 워커로 폴백
+        # ============================================================
+        workspace_fallback_time = 0
+        if (workspace_original_intent is not None
+                and "<!--NO_RESULTS-->" in collected_text):
+
+            print(f"[ORCHESTRATOR] Workspace-first fallback: user_files → {workspace_original_worker} (NO_RESULTS from workspace docs)")
+
+            from langchain_core.messages import AIMessageChunk
+            yield {
+                "event": "on_chat_model_stream",
+                "data": {"chunk": AIMessageChunk(content="\n\n---\n\n**워크스페이스 문서에서 관련 내용을 찾지 못해, 다른 곳에서 찾아보겠습니다...**\n\n")},
+            }
+
+            yield {
+                "type": "intent_classified",
+                "intent": workspace_original_intent.value,
+                "worker": workspace_original_worker,
+                "timing_ms": 0,
+                "workspace_fallback": True,
+            }
+
+            # 원래 전문 워커로 폴백 실행
+            ws_fb_start = time.time()
+            ws_fb_worker = get_worker(workspace_original_worker)
+            collected_text = ""  # NO_RESULTS 체크 리셋 (Phase 6 fallback과 연계)
+            async for event in ws_fb_worker.stream_response(
+                messages, context, all_tools, memory_context, user_memory_context
+            ):
+                collected_text += self._extract_text(event)
+                yield event
+
+            workspace_fallback_time = int((time.time() - ws_fb_start) * 1000)
+            print(f"[ORCHESTRATOR] Workspace fallback worker time: {workspace_fallback_time}ms")
+
+            # workspace 폴백 후에는 원래 intent로 복원 (Phase 6 fallback 판단용)
+            intent = workspace_original_intent
+            worker_name = workspace_original_worker
 
         # ============================================================
         # Phase 5: HANDOFF Check — 다른 워커의 데이터가 필요한 경우
@@ -322,13 +393,16 @@ class Orchestrator:
         print(f"[ORCHESTRATOR] ===== A2A Pipeline End =====\n")
 
         # 타이밍 이벤트 전송
-        yield {
+        timing_event = {
             "type": "orchestrator_timing",
             "classify_ms": classify_time,
             "worker_ms": worker_time,
             "fallback_worker_ms": fallback_worker_time,
             "total_ms": total_time,
         }
+        if workspace_fallback_time:
+            timing_event["workspace_fallback_ms"] = workspace_fallback_time
+        yield timing_event
 
     @staticmethod
     def _extract_text(event: Dict[str, Any]) -> str:

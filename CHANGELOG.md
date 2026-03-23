@@ -6,6 +6,8 @@
 ---
 
 ## [2026-03-23]
+- **수정** [Orchestrator] 워크스페이스 우선 실행 + 전문 워커 폴백 — user_files 강제 오버라이드 제거, workspace-first 1순위 실행 후 NO_RESULTS 시 원래 전문 워커 자동 폴백 → [상세](docs/history/2026-03-23_워크스페이스-우선실행-폴백.md)
+- **수정** [ApprovalWorker] 부서 문서함 접근 범위 수정 — dept_id 단일 필터 → v_appr_user_accessible_depts JOIN으로 변경, 소속+담당자 지정 부서 모두 검색 가능 → [상세](docs/history/2026-03-23_부서문서함-접근범위-수정.md)
 - **수정** [Architecture] 공유 도구함 + 시각화 3모드 리팩토링 — VisualizationWorker 제거, shared_tool_names 4개 에이전트 분배, Recharts(데이터)+SVG(구조)+HTML위젯(복합) 3모드, HTML iframe CSS변수 테마 대응+실시간 높이 갱신, 차트 output_mode 통합, HANDOFF 마커 필터 → [상세](docs/history/2026-03-23_공유도구함_인라인SVG.md)
 
 ---

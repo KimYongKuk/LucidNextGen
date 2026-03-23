@@ -65,6 +65,7 @@ ALLOWED_VIEWS = [
     'V_APPR_USER_APPROVED',
     'V_APPR_USER_REFERENCED',
     'V_APPR_USER_REDRAFTED',
+    'V_APPR_USER_ACCESSIBLE_DEPTS',
     'V_APPR_DEPT_COMPLETED',
     'V_APPR_DEPT_RECEIVED',
     'V_APPR_DEPT_REFERENCED',
@@ -244,22 +245,23 @@ async def execute_approval_query(employee_number: str, sql_query: str) -> str:
     validation_steps.append("3단계: 인증된 사용자 필터 확인")
     print("[검증 3/5] 인증된 사용자 필터 확인 중...", file=sys.stderr)
 
-    # 쿼리에 인증된 사용자의 login_id, user_id, dept_id 중 하나가 포함되어야 함
+    # 쿼리에 인증된 사용자의 login_id, user_id, dept_id, employee_number 중 하나가 포함되어야 함
     query_str = sql_query  # 대소문자 원본 유지하여 값 비교
     has_auth_id = (
         f"'{auth_login_id}'" in query_str  # login_id = 'wg0403'
         or f"= {auth_user_id}" in query_str  # user_id = 123
         or f"= {auth_dept_id}" in query_str  # dept_id = 507
+        or f"'{employee_number}'" in query_str  # employee_number = 'A2304013' (v_appr_user_accessible_depts JOIN용)
     )
 
     if not has_auth_id:
-        print(f"[검증 3/5] 실패: 인증된 사용자 ID 미포함 (login_id='{auth_login_id}', user_id={auth_user_id}, dept_id={auth_dept_id})", file=sys.stderr)
-        validation_steps.append(f"   실패: 인증된 사용자의 login_id('{auth_login_id}'), user_id({auth_user_id}), dept_id({auth_dept_id}) 중 하나가 WHERE 조건에 포함되어야 합니다")
+        print(f"[검증 3/5] 실패: 인증된 사용자 ID 미포함 (login_id='{auth_login_id}', user_id={auth_user_id}, dept_id={auth_dept_id}, employee_number='{employee_number}')", file=sys.stderr)
+        validation_steps.append(f"   실패: 인증된 사용자의 login_id('{auth_login_id}'), user_id({auth_user_id}), dept_id({auth_dept_id}), employee_number('{employee_number}') 중 하나가 WHERE 조건에 포함되어야 합니다")
         return (
             "\n".join(validation_steps) + "\n\n"
             f"오류: 보안 검증 실패. 본인의 데이터만 조회 가능합니다.\n"
-            f"get_user_approval_info에서 받은 login_id('{auth_login_id}')를 WHERE 조건에 사용하세요.\n"
-            f"예: WHERE login_id = '{auth_login_id}'"
+            f"개인 뷰: WHERE login_id = '{auth_login_id}'\n"
+            f"부서 뷰: JOIN v_appr_user_accessible_depts a ... WHERE a.employee_number = '{employee_number}'"
         )
     print("[검증 3/5] 통과\n", file=sys.stderr)
     validation_steps.append("   통과")
