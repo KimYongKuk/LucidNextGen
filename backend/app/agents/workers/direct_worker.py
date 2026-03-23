@@ -23,7 +23,15 @@ class DirectResponseWorker(BaseWorker):
 
     @property
     def tool_names(self) -> List[str]:
-        return []  # 도구 없음
+        return []  # 전용 도구 없음
+
+    @property
+    def shared_tool_names(self) -> List[str]:
+        """공유 도구: 차트(Recharts), PDF, DOCX 생성"""
+        return [
+            "create_line_chart", "create_bar_chart", "create_pie_chart", "create_multi_chart",
+            "create_document_pdf", "create_table_spec_pdf", "create_document_docx",
+        ]
 
     @property
     def use_sonnet(self) -> bool:
@@ -55,15 +63,22 @@ RESPONSE FORMAT:
         self,
         messages: List[BaseMessage],
         context: Dict[str, Any],
-        all_tools: List,  # 사용하지 않음
+        all_tools: List,
         memory_context: Optional[Dict[str, Any]] = None,
         user_memory_context: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """
-        도구 없이 직접 LLM 스트리밍
-
-        도구가 없으므로 create_react_agent 대신 직접 LLM 호출
+        공유 도구가 있으면 ReAct 루프, 없으면 직접 LLM 스트리밍
         """
+        # 공유 도구 사용 가능 여부 확인
+        available_tools = self.filter_tools(all_tools)
+        if available_tools:
+            # 공유 도구 사용 가능 → BaseWorker의 ReAct 루프 사용
+            async for event in super().stream_response(
+                messages, context, all_tools, memory_context, user_memory_context
+            ):
+                yield event
+            return
         import time
 
         # Phase 0: 대화 히스토리가 길면 Haiku로 사전 요약

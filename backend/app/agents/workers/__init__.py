@@ -8,7 +8,6 @@ from .youtube_worker import YouTubeWorker
 from .url_fetch_worker import URLFetchWorker
 from .it_support_worker import ITSupportWorker
 from .acct_support_worker import AcctSupportWorker
-from .visualization_worker import VisualizationWorker
 from .ppt_worker import PPTWorker
 from .mail_worker import MailWorker
 from .approval_worker import ApprovalWorker
@@ -26,7 +25,6 @@ WORKER_REGISTRY = {
     "URLFetchWorker": URLFetchWorker,
     "ITSupportWorker": ITSupportWorker,
     "AcctSupportWorker": AcctSupportWorker,
-    "VisualizationWorker": VisualizationWorker,
     "PPTWorker": PPTWorker,
     "MailWorker": MailWorker,
     "ApprovalWorker": ApprovalWorker,
@@ -53,7 +51,6 @@ __all__ = [
     "URLFetchWorker",
     "ITSupportWorker",
     "AcctSupportWorker",
-    "VisualizationWorker",
     "PPTWorker",
     "MailWorker",
     "ApprovalWorker",

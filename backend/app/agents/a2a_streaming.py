@@ -572,6 +572,9 @@ async def stream_a2a_response(
 
                         # <search> 태그 제거 (모델이 도구 대신 텍스트로 출력하는 경우 방지)
                         content = re.sub(r'<search>.*?</search>\s*', '', content)
+                        # 내부 마커 제거 (UI에 노출되지 않도록)
+                        content = re.sub(r'<!--HANDOFF:\w+-->\s*', '', content)
+                        content = re.sub(r'<!--NO_RESULTS-->\s*', '', content)
                         if not content:
                             continue
 

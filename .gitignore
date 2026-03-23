@@ -100,8 +100,7 @@ backend/email_backup_reference/
 backend/chdata/
 backend/metadata/
 
-# MCP 설정 (API 키 포함)
-backend/mcp_config.json
+# MCP 설정 (API 키는 .env에서 참조, mcp_config.json 자체는 추적)
 
 # 임시 파일
 nul

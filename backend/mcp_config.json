@@ -1,0 +1,170 @@
+{
+  "mcpServers": {
+    "tavily-mcp": {
+      "command": "C:\\Users\\Administrator\\AppData\\Roaming\\npm\\tavily-mcp.cmd",
+      "args": [],
+      "env": {
+        "TAVILY_API_KEY": "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",
+        "DEFAULT_PARAMETERS": "{\"include_answer\": false, \"max_results\": 20, \"search_depth\": \"basic\", \"topic\": \"general\", \"country\": \"south korea\"}"
+      },
+      "description": "웹서치 검색이 필요한 경우 반드시 사용"
+    },
+    "rag": {
+      "command": "python",
+      "args": [
+        "app/mcp_servers/rag_server.py"
+      ],
+      "transport": "stdio",
+      "description": "사내 문서, 조직문화 문서를 Vector 형태로 보관/조회하는 검색 (직접 호출로 대체됨)",
+      "enabled": false
+    },
+    "youtube": {
+      "command": "python",
+      "args": [
+        "app/mcp_servers/youtube_tool.py"
+      ],
+      "transport": "stdio",
+      "description": "유튜브 비디오 요약 (제목, 인사이트, 키워드, 타임스탬프별 세그먼트)",
+      "enabled": true
+    },
+    "works_it": {
+      "command": "python",
+      "args": [
+        "app/mcp_servers/works_it_mcp_server.py"
+      ],
+      "transport": "stdio",
+      "description": "IT/보안 지원요청 해결 사례 조회 (LFON WORKS APP VOC 지식베이스)",
+      "enabled": true
+    },
+    "works_acct": {
+      "command": "python",
+      "args": [
+        "app/mcp_servers/works_acct_mcp_server.py"
+      ],
+      "transport": "stdio",
+      "description": "회계/재경 지원요청 해결 사례 조회 (LFON WORKS APP VOC 지식베이스)",
+      "enabled": true
+    },
+    "org_chart": {
+      "command": "python",
+      "args": [
+        "app/mcp_servers/org_chart_mcp_server.py"
+      ],
+      "transport": "stdio",
+      "description": "사내 조직도/담당자 검색 (부서, 직책, 직무, 근무지 조회)",
+      "enabled": true
+    },
+    "perplexity": {
+      "command": "npx",
+      "args": ["-yq", "@perplexity-ai/mcp-server"],
+      "env": {
+        "PERPLEXITY_API_KEY": "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",
+        "PERPLEXITY_TIMEOUT_MS": "300000",
+        "PERPLEXITY_LOG_LEVEL": "ERROR"
+      },
+      "description": "Perplexity AI 기반 웹 검색, 심층 리서치, 추론 도구 (Tavily 비교용)",
+      "enabled": false
+    },
+    "ppt_generator": {
+      "command": "python",
+      "args": [
+        "app/mcp_servers/ppt_generator/server.py"
+      ],
+      "transport": "stdio",
+      "description": "사내 템플릿 기반 PPT 프레젠테이션 생성 (표지, 목차, 내용, 테이블, 차트)",
+      "enabled": true
+    },
+    "pdf_generator": {
+      "command": "python",
+      "args": [
+        "app/mcp_servers/pdf_generator/server.py"
+      ],
+      "transport": "stdio",
+      "description": "마크다운/텍스트를 PDF로 변환 (테이블 정의서, 보고서, 문서 등)",
+      "enabled": true
+    },
+    "docx_generator": {
+      "command": "python",
+      "args": [
+        "app/mcp_servers/docx_generator/server.py"
+      ],
+      "transport": "stdio",
+      "description": "마크다운/텍스트를 Word(DOCX)로 변환 (편집 가능한 문서, 보고서, 매뉴얼 등)",
+      "enabled": true
+    },
+    "chart_generator": {
+      "command": "python",
+      "args": [
+        "app/mcp_servers/chart_generator/server.py"
+      ],
+      "transport": "stdio",
+      "description": "데이터 시각화 차트 생성 (라인, 막대, 파이, 복합 차트)",
+      "enabled": true
+    },
+    "fetch": {
+      "command": "python",
+      "args": ["-m", "mcp_server_fetch"],
+      "env": {
+        "PYTHONIOENCODING": "utf-8"
+      },
+      "transport": "stdio",
+      "description": "웹 페이지 콘텐츠 추출 (HTML → 마크다운 변환)",
+      "enabled": true
+    },
+    "mail_server": {
+      "command": "python",
+      "args": [
+        "app/mcp_servers/mail_server/server.py"
+      ],
+      "env": {
+        "MAIL_API_KEY": "${MAIL_API_KEY}",
+        "MAIL_API_URL": "${MAIL_API_URL}",
+        "TIMS_DATABASE_URL": "${TIMS_DATABASE_URL}"
+      },
+      "transport": "stdio",
+      "description": "사내 메일 조회 (받은편지함, 보낸편지함, 검색, 안읽은 메일)",
+      "enabled": true
+    },
+    "approval_server": {
+      "command": "python",
+      "args": [
+        "app/mcp_servers/approval_mcp_server.py"
+      ],
+      "env": {
+        "TIMS_DATABASE_URL": "${TIMS_DATABASE_URL}"
+      },
+      "transport": "stdio",
+      "description": "전자결재 문서 조회 (기안함, 결재대기, 결재완료, 참조함, 부서문서함, 병목분석)",
+      "enabled": true
+    },
+    "excel_server": {
+      "command": "excel-mcp-server",
+      "args": ["stdio"],
+      "transport": "stdio",
+      "description": "Excel(XLSX) 파일 생성/읽기/수정/서식/차트/피벗테이블",
+      "enabled": true
+    },
+    "board_server": {
+      "command": "python",
+      "args": [
+        "app/mcp_servers/board_mcp_server.py"
+      ],
+      "transport": "stdio",
+      "description": "사내 게시판 검색 (전사/회사별 공지사항, 게시글 조회)",
+      "enabled": true
+    },
+    "outline_server": {
+      "command": "python",
+      "args": [
+        "app/mcp_servers/outline_server/server.py"
+      ],
+      "env": {
+        "OUTLINE_API_URL": "${OUTLINE_API_URL}",
+        "OUTLINE_API_KEY": "${OUTLINE_API_KEY}"
+      },
+      "transport": "stdio",
+      "description": "Outline Wiki 문서 검색/조회 (키워드 검색, 최근 문서, 컬렉션 탐색)",
+      "enabled": true
+    }
+  }
+}

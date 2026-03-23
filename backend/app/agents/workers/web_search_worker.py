@@ -26,6 +26,14 @@ class WebSearchWorker(BaseWorker):
         ]
 
     @property
+    def shared_tool_names(self) -> List[str]:
+        """공유 도구: 차트(Recharts), PDF, DOCX 생성"""
+        return [
+            "create_line_chart", "create_bar_chart", "create_pie_chart", "create_multi_chart",
+            "create_document_pdf", "create_table_spec_pdf", "create_document_docx",
+        ]
+
+    @property
     def use_sonnet(self) -> bool:
         """Sonnet 모델 사용 (검색 결과 종합을 위해)"""
         return True

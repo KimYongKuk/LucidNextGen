@@ -1,14 +1,13 @@
 """
 Chart Generator MCP Server
-차트 데이터 생성 + 파일 저장 이중 모드 지원
+차트 데이터 생성 + PNG 자동 저장 통합 모드
 
-모드:
-- display (기본): 프론트엔드 렌더링용 데이터 반환
-- file: matplotlib으로 PNG 파일 저장 (다운로드/PDF 삽입용)
+항상 Recharts JSON(프론트엔드 렌더링용) + PNG 파일(PDF 임베딩용)을 함께 반환합니다.
 """
 
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any
 
@@ -17,7 +16,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
-# 차트 생성 (파일 모드용)
+# 차트 생성 (PNG 저장용)
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -29,6 +28,10 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # MCP 서버 생성
 server = Server("chart-generator")
+
+# 공유 컬러 팔레트
+COLORS = ["#4A90D9", "#50C878", "#FF6B6B", "#FFD93D", "#9B59B6", "#1ABC9C"]
+COLORS_EXTENDED = COLORS + ["#E74C3C", "#3498DB", "#F39C12", "#2ECC71"]
 
 
 def setup_korean_font():
@@ -43,9 +46,11 @@ def setup_korean_font():
 setup_korean_font()
 
 
-def sanitize_filename(filename: str) -> str:
-    """파일명 정리"""
-    return re.sub(r'[<>:"/\\|?*`\'"\s]', '', filename).strip()
+def _generate_filename(title: str, chart_type: str) -> str:
+    """타이틀 + 타임스탬프 기반 고유 파일명 생성"""
+    safe_title = re.sub(r'[<>:"/\\|?*`\'"\s]', '', title).strip()[:30]
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{chart_type}_{safe_title}_{ts}"
 
 
 def validate_data(data: List[Dict[str, Any]], required_columns: List[str]) -> Dict[str, Any]:
@@ -67,11 +72,12 @@ def validate_data(data: List[Dict[str, Any]], required_columns: List[str]) -> Di
 
 
 # ============================================================
-# Display Mode (프론트엔드 렌더링용)
+# 통합 차트 생성 (Recharts JSON + PNG 자동 저장)
 # ============================================================
 
-def create_display_line_chart(data, x_column, y_columns, title):
-    return {
+def create_line_chart(data, x_column, y_columns, title):
+    """라인 차트: Recharts JSON 반환 + PNG 자동 저장"""
+    display_result = {
         "success": True,
         "type": "chart_data",
         "chart_type": "line",
@@ -80,13 +86,45 @@ def create_display_line_chart(data, x_column, y_columns, title):
         "config": {
             "xKey": x_column,
             "yKeys": y_columns,
-            "colors": ["#4A90D9", "#50C878", "#FF6B6B", "#FFD93D", "#9B59B6", "#1ABC9C"]
+            "colors": COLORS
         }
     }
 
+    # PNG 자동 저장
+    try:
+        df = pd.DataFrame(data)
+        fig, ax = plt.subplots(figsize=(10, 6))
 
-def create_display_bar_chart(data, x_column, y_column, title, horizontal):
-    return {
+        for idx, col in enumerate(y_columns):
+            if col in df.columns:
+                ax.plot(df[x_column], df[col], marker='o', linewidth=2,
+                       markersize=6, label=col, color=COLORS[idx % len(COLORS)])
+
+        ax.set_title(title, fontsize=14, fontweight='bold', pad=15)
+        ax.set_xlabel(x_column, fontsize=11)
+        ax.legend(loc='best')
+        ax.grid(True, alpha=0.3, linestyle='--')
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+
+        plt.tight_layout()
+        fname = _generate_filename(title, "line")
+        output_path = OUTPUT_DIR / f"{fname}.png"
+        fig.savefig(output_path, dpi=150, bbox_inches='tight', facecolor='white')
+        plt.close(fig)
+
+        display_result["file_path"] = str(output_path)
+    except Exception as e:
+        plt.close('all')
+        print(f"[CHART] PNG save failed (line): {e}")
+        # PNG 실패해도 display 데이터는 반환
+
+    return display_result
+
+
+def create_bar_chart(data, x_column, y_column, title, horizontal=False):
+    """막대 차트: Recharts JSON 반환 + PNG 자동 저장"""
+    display_result = {
         "success": True,
         "type": "chart_data",
         "chart_type": "bar",
@@ -100,112 +138,7 @@ def create_display_bar_chart(data, x_column, y_column, title, horizontal):
         }
     }
 
-
-def create_display_pie_chart(data, labels_column, values_column, title):
-    pie_data = [
-        {"name": row[labels_column], "value": row[values_column]}
-        for row in data
-    ]
-    return {
-        "success": True,
-        "type": "chart_data",
-        "chart_type": "pie",
-        "title": title,
-        "data": pie_data,
-        "config": {
-            "colors": ["#4A90D9", "#50C878", "#FF6B6B", "#FFD93D", "#9B59B6",
-                       "#1ABC9C", "#E74C3C", "#3498DB", "#F39C12", "#2ECC71"]
-        }
-    }
-
-
-def create_display_multi_chart(data, chart_type, config, title):
-    x_column = config.get("x_column")
-
-    if chart_type == "combo":
-        return {
-            "success": True,
-            "type": "chart_data",
-            "chart_type": "combo",
-            "title": title,
-            "data": data,
-            "config": {
-                "xKey": x_column,
-                "barKeys": config.get("bar_columns", []),
-                "lineKeys": config.get("line_columns", []),
-                "barColors": ["#4A90D9", "#50C878", "#FFD93D"],
-                "lineColors": ["#E74C3C", "#9B59B6", "#1ABC9C"]
-            }
-        }
-    elif chart_type == "stacked_bar":
-        return {
-            "success": True,
-            "type": "chart_data",
-            "chart_type": "stacked_bar",
-            "title": title,
-            "data": data,
-            "config": {
-                "xKey": x_column,
-                "stackKeys": config.get("stack_columns", []),
-                "colors": ["#4A90D9", "#50C878", "#FF6B6B", "#FFD93D", "#9B59B6"]
-            }
-        }
-    elif chart_type == "area":
-        return {
-            "success": True,
-            "type": "chart_data",
-            "chart_type": "area",
-            "title": title,
-            "data": data,
-            "config": {
-                "xKey": x_column,
-                "areaKeys": config.get("area_columns", []),
-                "colors": ["#4A90D9", "#50C878", "#FF6B6B", "#FFD93D"]
-            }
-        }
-    else:
-        return {"success": False, "error": f"지원하지 않는 차트 타입: {chart_type}"}
-
-
-# ============================================================
-# File Mode (PNG 파일 저장용)
-# ============================================================
-
-def create_file_line_chart(data, x_column, y_columns, title, filename):
-    try:
-        df = pd.DataFrame(data)
-        fig, ax = plt.subplots(figsize=(10, 6))
-
-        colors = ['#4A90D9', '#50C878', '#FF6B6B', '#FFD93D', '#9B59B6', '#1ABC9C']
-        for idx, col in enumerate(y_columns):
-            if col in df.columns:
-                ax.plot(df[x_column], df[col], marker='o', linewidth=2,
-                       markersize=6, label=col, color=colors[idx % len(colors)])
-
-        ax.set_title(title, fontsize=14, fontweight='bold', pad=15)
-        ax.set_xlabel(x_column, fontsize=11)
-        ax.legend(loc='best')
-        ax.grid(True, alpha=0.3, linestyle='--')
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-
-        plt.tight_layout()
-        safe_filename = sanitize_filename(filename)
-        output_path = OUTPUT_DIR / f"{safe_filename}.png"
-        fig.savefig(output_path, dpi=150, bbox_inches='tight', facecolor='white')
-        plt.close(fig)
-
-        return {
-            "success": True,
-            "type": "chart_file",
-            "file_path": str(output_path),
-            "message": f"라인 차트가 저장되었습니다: {output_path.name}"
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-def create_file_bar_chart(data, x_column, y_column, title, filename, horizontal):
+    # PNG 자동 저장
     try:
         df = pd.DataFrame(data)
         fig, ax = plt.subplots(figsize=(10, 6))
@@ -232,28 +165,40 @@ def create_file_bar_chart(data, x_column, y_column, title, filename, horizontal)
         ax.spines['right'].set_visible(False)
 
         plt.tight_layout()
-        safe_filename = sanitize_filename(filename)
-        output_path = OUTPUT_DIR / f"{safe_filename}.png"
+        fname = _generate_filename(title, "bar")
+        output_path = OUTPUT_DIR / f"{fname}.png"
         fig.savefig(output_path, dpi=150, bbox_inches='tight', facecolor='white')
         plt.close(fig)
 
-        return {
-            "success": True,
-            "type": "chart_file",
-            "file_path": str(output_path),
-            "message": f"막대 차트가 저장되었습니다: {output_path.name}"
-        }
+        display_result["file_path"] = str(output_path)
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        plt.close('all')
+        print(f"[CHART] PNG save failed (bar): {e}")
+
+    return display_result
 
 
-def create_file_pie_chart(data, labels_column, values_column, title, filename):
+def create_pie_chart(data, labels_column, values_column, title):
+    """파이 차트: Recharts JSON 반환 + PNG 자동 저장"""
+    pie_data = [
+        {"name": row[labels_column], "value": row[values_column]}
+        for row in data
+    ]
+    display_result = {
+        "success": True,
+        "type": "chart_data",
+        "chart_type": "pie",
+        "title": title,
+        "data": pie_data,
+        "config": {
+            "colors": COLORS_EXTENDED
+        }
+    }
+
+    # PNG 자동 저장
     try:
         df = pd.DataFrame(data)
         fig, ax = plt.subplots(figsize=(10, 8))
-
-        colors = ['#4A90D9', '#50C878', '#FF6B6B', '#FFD93D', '#9B59B6',
-                  '#1ABC9C', '#E74C3C', '#3498DB', '#F39C12', '#2ECC71']
 
         values = df[values_column].tolist()
         max_idx = values.index(max(values))
@@ -261,7 +206,7 @@ def create_file_pie_chart(data, labels_column, values_column, title, filename):
 
         wedges, texts, autotexts = ax.pie(
             df[values_column], labels=df[labels_column], autopct='%1.1f%%',
-            colors=colors[:len(df)], explode=explode, shadow=True, startangle=90
+            colors=COLORS_EXTENDED[:len(df)], explode=explode, shadow=True, startangle=90
         )
 
         for text in texts:
@@ -273,26 +218,71 @@ def create_file_pie_chart(data, labels_column, values_column, title, filename):
         ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
 
         plt.tight_layout()
-        safe_filename = sanitize_filename(filename)
-        output_path = OUTPUT_DIR / f"{safe_filename}.png"
+        fname = _generate_filename(title, "pie")
+        output_path = OUTPUT_DIR / f"{fname}.png"
         fig.savefig(output_path, dpi=150, bbox_inches='tight', facecolor='white')
         plt.close(fig)
 
-        return {
-            "success": True,
-            "type": "chart_file",
-            "file_path": str(output_path),
-            "message": f"파이 차트가 저장되었습니다: {output_path.name}"
-        }
+        display_result["file_path"] = str(output_path)
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        plt.close('all')
+        print(f"[CHART] PNG save failed (pie): {e}")
+
+    return display_result
 
 
-def create_file_multi_chart(data, chart_type, config, title, filename):
+def create_multi_chart(data, chart_type, config, title):
+    """복합 차트: Recharts JSON 반환 + PNG 자동 저장"""
+    x_column = config.get("x_column")
+
+    # Display JSON 생성
+    if chart_type == "combo":
+        display_result = {
+            "success": True,
+            "type": "chart_data",
+            "chart_type": "combo",
+            "title": title,
+            "data": data,
+            "config": {
+                "xKey": x_column,
+                "barKeys": config.get("bar_columns", []),
+                "lineKeys": config.get("line_columns", []),
+                "barColors": ["#4A90D9", "#50C878", "#FFD93D"],
+                "lineColors": ["#E74C3C", "#9B59B6", "#1ABC9C"]
+            }
+        }
+    elif chart_type == "stacked_bar":
+        display_result = {
+            "success": True,
+            "type": "chart_data",
+            "chart_type": "stacked_bar",
+            "title": title,
+            "data": data,
+            "config": {
+                "xKey": x_column,
+                "stackKeys": config.get("stack_columns", []),
+                "colors": ["#4A90D9", "#50C878", "#FF6B6B", "#FFD93D", "#9B59B6"]
+            }
+        }
+    elif chart_type == "area":
+        display_result = {
+            "success": True,
+            "type": "chart_data",
+            "chart_type": "area",
+            "title": title,
+            "data": data,
+            "config": {
+                "xKey": x_column,
+                "areaKeys": config.get("area_columns", []),
+                "colors": ["#4A90D9", "#50C878", "#FF6B6B", "#FFD93D"]
+            }
+        }
+    else:
+        return {"success": False, "error": f"지원하지 않는 차트 타입: {chart_type}"}
+
+    # PNG 자동 저장
     try:
         df = pd.DataFrame(data)
-        x_column = config.get('x_column', df.columns[0])
-
         fig, ax1 = plt.subplots(figsize=(12, 6))
 
         if chart_type == "combo":
@@ -359,19 +349,17 @@ def create_file_multi_chart(data, chart_type, config, title, filename):
         ax1.spines['right'].set_visible(False)
 
         plt.tight_layout()
-        safe_filename = sanitize_filename(filename)
-        output_path = OUTPUT_DIR / f"{safe_filename}.png"
+        fname = _generate_filename(title, chart_type)
+        output_path = OUTPUT_DIR / f"{fname}.png"
         fig.savefig(output_path, dpi=150, bbox_inches='tight', facecolor='white')
         plt.close(fig)
 
-        return {
-            "success": True,
-            "type": "chart_file",
-            "file_path": str(output_path),
-            "message": f"복합 차트가 저장되었습니다: {output_path.name}"
-        }
+        display_result["file_path"] = str(output_path)
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        plt.close('all')
+        print(f"[CHART] PNG save failed ({chart_type}): {e}")
+
+    return display_result
 
 
 # ============================================================
@@ -385,10 +373,7 @@ async def list_tools():
         Tool(
             name="create_line_chart",
             description="""라인/트렌드 차트를 생성합니다.
-
-출력 모드:
-- display (기본): 채팅에 인터랙티브 차트로 바로 표시
-- file: PNG 파일로 저장 (다운로드/PDF 삽입용)
+채팅에 인터랙티브 차트로 표시되며, PNG 파일도 자동 저장됩니다.
 
 용도: 시간에 따른 변화 추이, 트렌드 비교
 예시: 월별 매출 추이, 연도별 성장률""",
@@ -406,17 +391,7 @@ async def list_tools():
                         "items": {"type": "string"},
                         "description": "Y축 컬럼명 목록 (복수 라인 지원)"
                     },
-                    "title": {"type": "string", "description": "차트 제목"},
-                    "output_mode": {
-                        "type": "string",
-                        "enum": ["display", "file"],
-                        "default": "display",
-                        "description": "출력 모드: display(화면표시), file(파일저장)"
-                    },
-                    "filename": {
-                        "type": "string",
-                        "description": "파일명 (output_mode=file일 때만 필요)"
-                    }
+                    "title": {"type": "string", "description": "차트 제목"}
                 },
                 "required": ["data", "x_column", "y_columns", "title"]
             }
@@ -424,10 +399,7 @@ async def list_tools():
         Tool(
             name="create_bar_chart",
             description="""막대 차트를 생성합니다.
-
-출력 모드:
-- display (기본): 채팅에 인터랙티브 차트로 바로 표시
-- file: PNG 파일로 저장
+채팅에 인터랙티브 차트로 표시되며, PNG 파일도 자동 저장됩니다.
 
 용도: 카테고리별 비교, 순위 시각화
 예시: 부서별 인원, 제품별 매출""",
@@ -446,13 +418,7 @@ async def list_tools():
                         "type": "boolean",
                         "default": False,
                         "description": "가로 막대 차트 여부"
-                    },
-                    "output_mode": {
-                        "type": "string",
-                        "enum": ["display", "file"],
-                        "default": "display"
-                    },
-                    "filename": {"type": "string", "description": "파일명 (file 모드용)"}
+                    }
                 },
                 "required": ["data", "x_column", "y_column", "title"]
             }
@@ -460,10 +426,7 @@ async def list_tools():
         Tool(
             name="create_pie_chart",
             description="""파이 차트를 생성합니다.
-
-출력 모드:
-- display (기본): 채팅에 인터랙티브 차트로 바로 표시
-- file: PNG 파일로 저장
+채팅에 인터랙티브 차트로 표시되며, PNG 파일도 자동 저장됩니다.
 
 용도: 비율/점유율, 구성 비율
 예시: 시장 점유율, 비용 구성""",
@@ -477,13 +440,7 @@ async def list_tools():
                     },
                     "labels_column": {"type": "string", "description": "레이블 컬럼명"},
                     "values_column": {"type": "string", "description": "값 컬럼명"},
-                    "title": {"type": "string", "description": "차트 제목"},
-                    "output_mode": {
-                        "type": "string",
-                        "enum": ["display", "file"],
-                        "default": "display"
-                    },
-                    "filename": {"type": "string", "description": "파일명 (file 모드용)"}
+                    "title": {"type": "string", "description": "차트 제목"}
                 },
                 "required": ["data", "labels_column", "values_column", "title"]
             }
@@ -491,15 +448,12 @@ async def list_tools():
         Tool(
             name="create_multi_chart",
             description="""복합 차트를 생성합니다.
+채팅에 인터랙티브 차트로 표시되며, PNG 파일도 자동 저장됩니다.
 
 타입:
 - combo: 막대 + 라인 (이중 Y축)
 - stacked_bar: 누적 막대
-- area: 영역 차트
-
-출력 모드:
-- display (기본): 채팅에 인터랙티브 차트로 바로 표시
-- file: PNG 파일로 저장""",
+- area: 영역 차트""",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -516,13 +470,7 @@ async def list_tools():
                         "type": "object",
                         "description": "차트 설정. combo: {x_column, bar_columns, line_columns}"
                     },
-                    "title": {"type": "string", "description": "차트 제목"},
-                    "output_mode": {
-                        "type": "string",
-                        "enum": ["display", "file"],
-                        "default": "display"
-                    },
-                    "filename": {"type": "string", "description": "파일명 (file 모드용)"}
+                    "title": {"type": "string", "description": "차트 제목"}
                 },
                 "required": ["data", "chart_type", "config", "title"]
             }
@@ -533,8 +481,6 @@ async def list_tools():
 @server.call_tool()
 async def call_tool(name: str, arguments: dict):
     """도구 실행"""
-    output_mode = arguments.get("output_mode", "display")
-    filename = arguments.get("filename", "chart")
 
     if name == "create_line_chart":
         data = arguments.get("data", [])
@@ -546,10 +492,7 @@ async def call_tool(name: str, arguments: dict):
         if not validation["valid"]:
             return [TextContent(type="text", text=f"오류: {validation['error']}")]
 
-        if output_mode == "file":
-            result = create_file_line_chart(data, x_column, y_columns, title, filename)
-        else:
-            result = create_display_line_chart(data, x_column, y_columns, title)
+        result = create_line_chart(data, x_column, y_columns, title)
 
     elif name == "create_bar_chart":
         data = arguments.get("data", [])
@@ -562,10 +505,7 @@ async def call_tool(name: str, arguments: dict):
         if not validation["valid"]:
             return [TextContent(type="text", text=f"오류: {validation['error']}")]
 
-        if output_mode == "file":
-            result = create_file_bar_chart(data, x_column, y_column, title, filename, horizontal)
-        else:
-            result = create_display_bar_chart(data, x_column, y_column, title, horizontal)
+        result = create_bar_chart(data, x_column, y_column, title, horizontal)
 
     elif name == "create_pie_chart":
         data = arguments.get("data", [])
@@ -577,10 +517,7 @@ async def call_tool(name: str, arguments: dict):
         if not validation["valid"]:
             return [TextContent(type="text", text=f"오류: {validation['error']}")]
 
-        if output_mode == "file":
-            result = create_file_pie_chart(data, labels_column, values_column, title, filename)
-        else:
-            result = create_display_pie_chart(data, labels_column, values_column, title)
+        result = create_pie_chart(data, labels_column, values_column, title)
 
     elif name == "create_multi_chart":
         data = arguments.get("data", [])
@@ -592,10 +529,7 @@ async def call_tool(name: str, arguments: dict):
         if not x_column:
             return [TextContent(type="text", text="오류: config에 x_column이 필요합니다.")]
 
-        if output_mode == "file":
-            result = create_file_multi_chart(data, chart_type, config, title, filename)
-        else:
-            result = create_display_multi_chart(data, chart_type, config, title)
+        result = create_multi_chart(data, chart_type, config, title)
 
     else:
         return [TextContent(type="text", text=f"알 수 없는 도구: {name}")]

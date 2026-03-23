@@ -8,6 +8,8 @@ import { Streamdown } from "streamdown";
 import { cn } from "@/lib/utils";
 import { CodeBlock, CodeBlockCopyButton } from "@/components/elements/code-block";
 import { MermaidDiagram } from "@/components/mermaid-diagram";
+import { SVGStreamBlock } from "@/components/svg-stream-block";
+import { HTMLWidgetBlock } from "@/components/html-widget-block";
 import { FileDown, TableIcon, CheckIcon, Eye } from "lucide-react";
 import { copyToClipboard } from "@/lib/clipboard";
 import { useXlsxViewer } from "@/hooks/use-xlsx-viewer";
@@ -107,13 +109,88 @@ const XLSXDownloadLink = ({ filename }: { filename: string }) => {
   );
 };
 
+// 시각 블록 분리: 텍스트에서 <svg>...</svg> 및 <lucid-html>...</lucid-html> 블록을 추출
+// 스트리밍 중 불완전한 블록(닫히지 않은)도 감지하여 실시간 렌더링 지원
+type ContentSegment = { type: 'text' | 'svg' | 'html'; content: string };
+
+// 시각 블록 마커 정의
+const VISUAL_MARKERS = [
+  { type: 'svg' as const, open: '<svg', close: '</svg>', closeLen: 6 },
+  { type: 'html' as const, open: '<lucid-html>', close: '</lucid-html>', closeLen: 14 },
+] as const;
+
+function splitVisualBlocks(content: string, isStreaming: boolean = false): ContentSegment[] {
+  if (!content) return [{ type: 'text', content: '' }];
+
+  // 시각 블록이 없으면 전체를 텍스트로 반환 (빠른 경로)
+  const hasVisual = VISUAL_MARKERS.some(m => content.includes(m.open));
+  if (!hasVisual) {
+    return [{ type: 'text', content }];
+  }
+
+  const segments: ContentSegment[] = [];
+  let remaining = content;
+
+  while (remaining.length > 0) {
+    // 가장 가까운 시각 블록 찾기
+    let nearest: { marker: typeof VISUAL_MARKERS[number]; pos: number } | null = null;
+    for (const marker of VISUAL_MARKERS) {
+      const pos = remaining.indexOf(marker.open);
+      if (pos !== -1 && (!nearest || pos < nearest.pos)) {
+        nearest = { marker, pos };
+      }
+    }
+
+    if (!nearest) {
+      // 더 이상 시각 블록 없음
+      segments.push({ type: 'text', content: remaining });
+      break;
+    }
+
+    const { marker, pos: blockStart } = nearest;
+
+    // 블록 시작 전 텍스트
+    if (blockStart > 0) {
+      segments.push({ type: 'text', content: remaining.slice(0, blockStart) });
+    }
+
+    // 종료 태그 찾기
+    const searchFrom = blockStart + marker.open.length;
+    const blockEnd = remaining.indexOf(marker.close, searchFrom);
+
+    if (blockEnd !== -1) {
+      // 완성된 블록
+      let blockContent = remaining.slice(blockStart, blockEnd + marker.closeLen);
+      // <lucid-html> 래퍼 태그 제거 (내부 HTML만 추출)
+      if (marker.type === 'html') {
+        blockContent = blockContent.slice(marker.open.length, -(marker.closeLen));
+      }
+      segments.push({ type: marker.type, content: blockContent });
+      remaining = remaining.slice(blockEnd + marker.closeLen);
+    } else {
+      // 닫히지 않은 블록 (스트리밍 중)
+      if (isStreaming) {
+        let blockContent = remaining.slice(blockStart);
+        if (marker.type === 'html' && blockContent.startsWith(marker.open)) {
+          blockContent = blockContent.slice(marker.open.length);
+        }
+        segments.push({ type: marker.type, content: blockContent });
+      } else {
+        segments.push({ type: 'text', content: remaining.slice(blockStart) });
+      }
+      break;
+    }
+  }
+
+  return segments.length > 0 ? segments : [{ type: 'text', content }];
+}
+
 // PDF 경로에서 파일명 추출 및 다운로드 링크로 변환
 // workerName: 해당 워커일 때만 광범위 패턴(1,2) 활성화, 미지정 시 전체 활성(하위호환)
 const processPDFContent = (content: string, workerName?: string): { processedContent: string; pdfFiles: string[] } => {
   const pdfFiles: string[] = [];
-  // 워커 마커가 있으면 해당 워커만, 없으면 모든 패턴 활성 (기존 메시지 하위호환)
-  // Note: 백엔드 INTENT_TO_WORKER는 PascalCase ("VisualizationWorker") 전송
-  const useBroadPatterns = !workerName || /^visualization/i.test(workerName);
+  // 공유 도구로 PDF 생성 가능한 워커: Direct, WebSearch, UserFiles, CorpRAG (+ 기존 Visualization 하위호환)
+  const useBroadPatterns = !workerName || /^(visualization|direct|websearch|userfiles|corprag)/i.test(workerName);
 
   // 파일명에서 백틱, 따옴표, 별표 등 특수문자 제거
   const cleanFilename = (filename: string): string => {
@@ -307,7 +384,8 @@ const processXLSXContent = (content: string, workerName?: string): { processedCo
 // DOCX 경로에서 파일명 추출 및 다운로드 링크로 변환
 const processDocxContent = (content: string, workerName?: string): { processedContent: string; docxFiles: string[] } => {
   const docxFiles: string[] = [];
-  const useBroadPatterns = !workerName || /^visualization/i.test(workerName);
+  // 공유 도구로 DOCX 생성 가능한 워커: Direct, WebSearch, UserFiles, CorpRAG (+ 기존 Visualization 하위호환)
+  const useBroadPatterns = !workerName || /^(visualization|direct|websearch|userfiles|corprag)/i.test(workerName);
 
   const cleanFilename = (filename: string): string => {
     let cleaned = filename
@@ -556,79 +634,109 @@ export const Response = memo(
     // DOCX 파일 감지 및 처리
     const { processedContent: markdownContent, docxFiles } = processDocxContent(xlsxProcessed, workerName);
 
-    // 마크다운 렌더링
-    return (
-      <div className={cn("size-full prose prose-sm max-w-none dark:prose-invert", className)}>
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkBreaks]}
-          components={{
-            p({ children, ...props }: any) {
-              // Hydration 에러 방지: <p> 안에 <pre>, <div> 등 블록 요소가 들어가지 않도록
-              const childArray = Array.isArray(children) ? children : [children];
-              const hasBlockElement = childArray.some((child: any) => {
-                if (typeof child === "object" && child !== null && child.type) {
-                  const type = child.type;
-                  if (typeof type === "string") {
-                    return ["pre", "div", "table", "ul", "ol", "blockquote", "hr"].includes(type);
-                  }
-                  // React 컴포넌트 (CodeBlock 등) - 블록 요소를 렌더링할 수 있음
-                  return typeof type === "function" || typeof type === "object";
+    // SVG 블록 분리: <svg>...</svg> 블록을 텍스트에서 추출하여 별도 렌더링
+    // 스트리밍 중 불완전한 <svg>...(닫히지 않은)도 감지하여 실시간 렌더링
+    const svgSegments = splitVisualBlocks(markdownContent, isStreaming);
+
+    // 마크다운 + SVG 혼합 렌더링
+    const MarkdownRenderer = ({ text }: { text: string }) => (
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkBreaks]}
+        components={{
+          p({ children, ...props }: any) {
+            // Hydration 에러 방지: <p> 안에 <pre>, <div> 등 블록 요소가 들어가지 않도록
+            const childArray = Array.isArray(children) ? children : [children];
+            const hasBlockElement = childArray.some((child: any) => {
+              if (typeof child === "object" && child !== null && child.type) {
+                const type = child.type;
+                if (typeof type === "string") {
+                  return ["pre", "div", "table", "ul", "ol", "blockquote", "hr"].includes(type);
                 }
-                return false;
-              });
-              if (hasBlockElement) {
-                return <div {...props}>{children}</div>;
+                // React 컴포넌트 (CodeBlock 등) - 블록 요소를 렌더링할 수 있음
+                return typeof type === "function" || typeof type === "object";
               }
-              return <p {...props}>{children}</p>;
-            },
-            table({ children, ...props }: any) {
-              return <TableWithCopyButton {...props}>{children}</TableWithCopyButton>;
-            },
-            code({ node, className, children, ...props }: any) {
-              const match = /language-(\w+)/.exec(className || "");
-              const codeString = String(children).replace(/\n$/, "");
+              return false;
+            });
+            if (hasBlockElement) {
+              return <div {...props}>{children}</div>;
+            }
+            return <p {...props}>{children}</p>;
+          },
+          table({ children, ...props }: any) {
+            return <TableWithCopyButton {...props}>{children}</TableWithCopyButton>;
+          },
+          code({ node, className, children, ...props }: any) {
+            const match = /language-(\w+)/.exec(className || "");
+            const codeString = String(children).replace(/\n$/, "");
 
-              // react-markdown v9+: inline prop이 제거됨
-              // 블록 코드 판별: language class가 있거나 개행 포함
-              const isInline = !className && !codeString.includes('\n');
+            // react-markdown v9+: inline prop이 제거됨
+            // 블록 코드 판별: language class가 있거나 개행 포함
+            const isInline = !className && !codeString.includes('\n');
 
-              // 블록 코드 (언어 지정 또는 미지정)
-              if (!isInline) {
-                // Mermaid 다이어그램 감지
-                const language = match ? match[1] : "";
-                if (language === "mermaid" && !isStreaming) {
-                  return <MermaidDiagram code={codeString} />;
-                }
+            // 블록 코드 (언어 지정 또는 미지정)
+            if (!isInline) {
+              // Mermaid 다이어그램 감지
+              const language = match ? match[1] : "";
+              if (language === "mermaid" && !isStreaming) {
+                return <MermaidDiagram code={codeString} />;
+              }
 
-                if (isStreaming) {
-                  return (
-                    <pre className="my-4 overflow-auto rounded-md border bg-background p-4">
-                      <code className="font-mono text-sm">{codeString}</code>
-                    </pre>
-                  );
-                }
+              if (isStreaming) {
                 return (
-                  <CodeBlock
-                    code={codeString}
-                    language={language || "text"}
-                    className="my-4"
-                  >
-                    <CodeBlockCopyButton />
-                  </CodeBlock>
+                  <pre className="my-4 overflow-auto rounded-md border bg-background p-4">
+                    <code className="font-mono text-sm">{codeString}</code>
+                  </pre>
                 );
               }
-
-              // 인라인 코드
               return (
-                <code className={cn("bg-muted px-1.5 py-0.5 rounded text-sm", className)} {...props}>
-                  {children}
-                </code>
+                <CodeBlock
+                  code={codeString}
+                  language={language || "text"}
+                  className="my-4"
+                >
+                  <CodeBlockCopyButton />
+                </CodeBlock>
               );
-            },
-          }}
-        >
-          {markdownContent}
-        </ReactMarkdown>
+            }
+
+            // 인라인 코드
+            return (
+              <code className={cn("bg-muted px-1.5 py-0.5 rounded text-sm", className)} {...props}>
+                {children}
+              </code>
+            );
+          },
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    );
+
+    return (
+      <div className={cn("size-full prose prose-sm max-w-none dark:prose-invert", className)}>
+        {svgSegments.map((segment: ContentSegment, idx: number) => {
+          if (segment.type === 'svg') {
+            return (
+              <SVGStreamBlock
+                key={`svg-${idx}`}
+                svgContent={segment.content}
+                isStreaming={isStreaming && idx === svgSegments.length - 1}
+              />
+            );
+          }
+          if (segment.type === 'html') {
+            return (
+              <HTMLWidgetBlock
+                key={`html-${idx}`}
+                htmlContent={segment.content}
+                isStreaming={isStreaming && idx === svgSegments.length - 1}
+              />
+            );
+          }
+          // 텍스트 세그먼트 — 빈 문자열은 스킵
+          if (!segment.content.trim()) return null;
+          return <MarkdownRenderer key={`text-${idx}`} text={segment.content} />;
+        })}
 
         {/* PDF 다운로드 링크 */}
         {pdfFiles.length > 0 && (

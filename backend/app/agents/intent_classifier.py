@@ -28,8 +28,6 @@ CLASSIFIER_PROMPT = """You are an intent classifier. Classify the user's message
 INTENTS:
 - ppt_generation: Create PowerPoint presentations, slides, PPT files
   Keywords: "PPT", "파워포인트", "프레젠테이션", "발표자료", "슬라이드로", "PT자료"
-- visualization: Create charts, graphs, PDF documents, Word/DOCX documents, reports, data visualization, infographics, flowcharts, timelines, diagrams
-  Keywords: "차트", "그래프", "PDF로", "워드로", "Word로", "DOCX", "시각화", "막대", "라인", "파이", "보고서로 정리", "인포그래픽", "플로우차트", "타임라인", "다이어그램", "구조도"
 - xlsx: Create, modify, or manipulate Excel (XLSX) files
   NOTE: Analyzing uploaded xlsx content → "user_files". Creating/modifying xlsx → "xlsx"
 - user_files: Questions about user's uploaded files or workspace documents
@@ -72,7 +70,7 @@ CONVERSATION HISTORY (last few messages for context):
 
 RULES:
 1. PPT/PowerPoint/presentation → ALWAYS "ppt_generation"
-2. Charts/graphs/PDF/visualization → ALWAYS "visualization"
+2. Charts/graphs/PDF/DOCX requests → "direct" (shared tools handle visualization)
 3. xlsx: CREATE/MODIFY/FORMAT Excel → "xlsx". Analyzing content → "user_files"
    If has_session_xlsx=True AND modification request (수정, 편집, 서식, 추가, 삭제, 정리, 값 입력 등) → "xlsx"
    But: "파일 내용 요약/분석" + has_session_xlsx=True → "user_files" (READ request)
@@ -100,13 +98,10 @@ WORKSPACE RULES (when has_workspace=True AND workspace has files):
 EXAMPLES:
 - "분기 실적 PPT 만들어줘" → ppt_generation
 - "발표자료 슬라이드로 정리해줘" → ppt_generation
-- "매출 막대 그래프로 보여줘" → visualization
-- "이 데이터로 차트 그려줘" → visualization
-- "이거 워드로 만들어줘" → visualization
-- "Word 문서로 정리해줘" → visualization
-- "프로세스 플로우차트로 보여줘" → visualization
-- "인포그래픽으로 정리해줘" → visualization
-- "타임라인으로 만들어줘" → visualization
+- "매출 막대 그래프로 보여줘" → direct
+- "이 데이터로 차트 그려줘" → direct
+- "이거 워드로 만들어줘" → direct
+- "프로세스 플로우차트로 보여줘" → direct
 - "이번달 2차전지 산업 동향 정리" → web_search
 - "반도체 산업 전망 정리해줘" → web_search
 - "마케팅 담당자 누구야?" → corp_rag
@@ -133,7 +128,7 @@ RESPONSE FORMAT:
 - Respond with the PRIMARY intent, optionally followed by a FALLBACK intent separated by comma.
 - Fallback = the next most likely search scope if the primary finds nothing.
 - Only include fallback for search-type intents (approval, board, corp_rag, it_support, acct_support, web_search).
-- Do NOT include fallback for: direct, ppt_generation, visualization, xlsx, youtube, mail, user_files, clarify, url_fetch.
+- Do NOT include fallback for: direct, ppt_generation, xlsx, youtube, mail, user_files, clarify, url_fetch.
 - Examples: "approval,board" / "acct_support,web_search" / "direct" / "web_search,corp_rag"
 No explanation."""
 
@@ -198,16 +193,9 @@ class IntentClassifier:
                 print(f"[INTENT] Quick: explicit mail action → MAIL")
                 return Intent.MAIL
 
-        # ========= Step 2: 생성/산출물 인텐트 (차트, PPT 등) =========
-        # 이 워커들은 tavily_search 도구를 자체 보유하므로,
-        # "OO 데이터를 차트로 만들어줘" 같은 복합 요청도 단일 워커 내에서 처리 가능
-        viz_pattern = r'(차트|그래프|시각화|막대.*그|라인.*그|파이.*그|꺾은선|인포그래픽|플로우차트|타임라인|다이어그램).{0,15}(만들|생성|그려|보여|작성|그리|표시)'
-        viz_pattern2 = r'(만들|생성|그려|보여|작성|그리|표시).{0,15}(차트|그래프|시각화|인포그래픽|플로우차트|타임라인|다이어그램)'
-        viz_pattern3 = r'(PDF로|pdf로|PDF\s?문서|보고서로\s?정리|워드로|Word로|word로|DOCX로|docx로|워드\s?문서|Word\s?문서)'
-        if re.search(viz_pattern, message, re.IGNORECASE) or re.search(viz_pattern2, message, re.IGNORECASE) or re.search(viz_pattern3, message, re.IGNORECASE):
-            print(f"[INTENT] Quick: visualization keyword → VISUALIZATION")
-            return Intent.VISUALIZATION
-
+        # ========= Step 2: 생성/산출물 인텐트 (PPT 등) =========
+        # visualization 인텐트 제거: 차트/PDF/DOCX는 공유 도구로 어떤 에이전트든 직접 생성 가능
+        # SVG 인포그래픽/다이어그램은 모든 에이전트가 인라인 SVG로 생성 가능
         ppt_pattern = r'(PPT|ppt|파워포인트|프레젠테이션|발표\s?자료|슬라이드로|PT\s?자료)'
         if re.search(ppt_pattern, message, re.IGNORECASE):
             print(f"[INTENT] Quick: PPT keyword → PPT_GENERATION")

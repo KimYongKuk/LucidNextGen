@@ -15,7 +15,6 @@ class Intent(str, Enum):
     URL_FETCH = "url_fetch"         # 일반 URL 콘텐츠 가져오기 (뉴스, 블로그, GitHub 등)
     IT_SUPPORT = "it_support"       # IT/보안 VOC
     ACCT_SUPPORT = "acct_support"   # 회계/재경 VOC
-    VISUALIZATION = "visualization" # PDF 생성, 문서 변환, 시각화
     PPT_GENERATION = "ppt_generation" # PPT 프레젠테이션 생성
     MAIL = "mail"                   # 메일 조회, 메일 검색
     APPROVAL = "approval"           # 전자결재 조회, 기안/결재/참조/부서문서
@@ -35,7 +34,6 @@ INTENT_TO_WORKER = {
     Intent.URL_FETCH: "URLFetchWorker",
     Intent.IT_SUPPORT: "ITSupportWorker",
     Intent.ACCT_SUPPORT: "AcctSupportWorker",
-    Intent.VISUALIZATION: "VisualizationWorker",
     Intent.PPT_GENERATION: "PPTWorker",
     Intent.MAIL: "MailWorker",
     Intent.APPROVAL: "ApprovalWorker",
@@ -59,7 +57,6 @@ WORKER_CAPABILITIES = {
     Intent.BOARD: "사내 게시판 검색 (공지사항, 게시글)",
     Intent.OUTLINE: "Outline Wiki 문서 검색/조회 (위키 문서, 컬렉션 탐색)",
     Intent.XLSX: "엑셀 파일 생성/수정 (서식, 차트, 피벗테이블)",
-    Intent.VISUALIZATION: "PDF/Word 문서 생성, 차트/그래프 시각화",
     Intent.PPT_GENERATION: "PPT 프레젠테이션 생성",
     Intent.YOUTUBE: "YouTube 영상 요약",
     Intent.URL_FETCH: "웹 페이지 콘텐츠 추출",

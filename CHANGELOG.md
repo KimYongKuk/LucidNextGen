@@ -5,6 +5,11 @@
 
 ---
 
+## [2026-03-23]
+- **수정** [Architecture] 공유 도구함 + 시각화 3모드 리팩토링 — VisualizationWorker 제거, shared_tool_names 4개 에이전트 분배, Recharts(데이터)+SVG(구조)+HTML위젯(복합) 3모드, HTML iframe CSS변수 테마 대응+실시간 높이 갱신, 차트 output_mode 통합, HANDOFF 마커 필터 → [상세](docs/history/2026-03-23_공유도구함_인라인SVG.md)
+
+---
+
 ## [2026-03-20]
 - **수정** [Briefing] 수신문서 접수대기 정확도 개선 — accessible_depts JOIN, reception_status=WAITING 필터, is_assigned 레거시 제거 → [상세](docs/history/2026-03-20_BriefingReceivedDocsFix.md)
 - **추가** [VisualizationWorker] SVG 인포그래픽 + Mermaid 다이어그램 — SVG MCP 서버(regex 정제, DOMPurify), Mermaid 코드 블록 자동 렌더링, 시각화 3종 체계(Charts/Mermaid/SVG) → [상세](docs/history/2026-03-20_SVGVisualGenerator.md)

@@ -198,11 +198,6 @@ WORKER_FOLLOW_UP_CAPABILITIES = {
         "Transform: 관련 규정 요약 PDF/PPT 생성",
         "Explore: 유사 규정 비교, 관련 IT/회계 VOC 검색",
     ],
-    "VisualizationWorker": [
-        "Deepen: 차트/문서의 데이터를 다른 형태로 재시각화",
-        "Transform: 다른 차트 유형으로 변환, PPT에 포함",
-        "Explore: 추가 데이터 분석, 기간 변경, 비교 항목 추가",
-    ],
     "YouTubeWorker": [
         "Deepen: 영상의 특정 구간 상세 분석, 핵심 인사이트 심화",
         "Transform: 요약을 PDF 보고서나 PPT로 변환",
@@ -449,15 +444,26 @@ class BaseWorker(ABC):
         """
         return False
 
+    @property
+    def shared_tool_names(self) -> List[str]:
+        """공유 도구함 — 파일 산출물 생성용 (기본: 비활성)
+
+        차트(Recharts), PDF, DOCX 등 시각화/문서 생성 도구를 공유합니다.
+        VisualizationWorker 없이도 각 에이전트가 필요 시 직접 사용 가능.
+        opt-in 방식: 필요한 Worker만 오버라이드합니다.
+        """
+        return []
+
     def get_model_config(self) -> ModelConfig:
         """모델 설정 반환"""
         return get_worker_config(use_sonnet=self.use_sonnet)
 
     def filter_tools(self, all_tools: List[BaseTool]) -> List[BaseTool]:
-        """MCP 도구 중 이 Worker가 사용할 도구만 필터링"""
-        if not self.tool_names:
+        """MCP 도구 중 이 Worker가 사용할 도구만 필터링 (전용 + 공유)"""
+        all_tool_names = self.tool_names + self.shared_tool_names
+        if not all_tool_names:
             return []
-        return [t for t in all_tools if t.name in self.tool_names]
+        return [t for t in all_tools if t.name in all_tool_names]
 
     # Output 파일을 생성하는 MCP 도구 목록 (아카이브 대상)
     ARCHIVABLE_TOOLS = {
@@ -696,6 +702,123 @@ class BaseWorker(ABC):
 - 결과를 찾은 경우에는 마커를 출력하지 마세요 (정상 응답만)
 """
             prompt += fallback_instruction
+
+        # ============ 인라인 SVG 시각화 가이드 (모든 에이전트 공통) ============
+        inline_viz_guide = """
+
+## 시각화 활용 가이드
+
+텍스트만으로 충분한 답변에는 시각화를 추가하지 마세요.
+사용자가 명시적으로 요청하지 않아도, 내용의 이해를 돕는다고 판단되면 자연스럽게 포함하세요.
+
+### 선택 기준 (3가지 모드)
+
+**축이 있으면 → Recharts 차트 도구 호출**
+수치 데이터의 추이/비교/분포. 5개 이상 데이터 포인트.
+→ create_line_chart, create_bar_chart, create_pie_chart, create_multi_chart
+(이 도구가 있는 경우에만 사용 가능)
+
+**화살표가 있으면 → SVG 직접 생성**
+프로세스, 관계, 구조, 흐름을 도식화. 박스+화살표가 핵심.
+→ 응답에 `<svg>` 태그 직접 출력
+
+**행/열이 있으면 → HTML 위젯**
+비교표, 카드 그리드, 대시보드, 텍스트+구조 혼합 레이아웃.
+→ 응답에 `<lucid-html>` 태그로 감싸서 출력
+
+**회색지대:** 항목 5개 이하 단순 바 비교 → HTML (CSS width 바). 항목 5개 초과 → Recharts.
+**애매한 경우:** 데이터 비중 높으면 Recharts, 아니면 HTML.
+
+---
+
+### SVG 모드 규칙
+응답 텍스트에 `<svg>` 태그를 직접 출력하면 프론트엔드가 실시간 렌더링합니다.
+
+**필수 속성:**
+- `xmlns="http://www.w3.org/2000/svg"` 필수
+- `viewBox="0 0 800 600"` (가로) 또는 `viewBox="0 0 600 900"` (세로)
+- width/height 속성 생략 (프론트엔드가 반응형 처리)
+
+**다크 테마 디자인:**
+- 텍스트: `#E2E8F0`, 부제: `#94A3B8`
+- 강조: `#60A5FA`(파랑), `#34D399`(초록), `#F87171`(빨강), `#FBBF24`(노랑), `#A78BFA`(보라)
+- 카드: `fill="#2d2d2d" stroke="#404040" rx="12"`
+- 폰트: `font-family="Malgun Gothic, sans-serif"`
+- 연결선: `stroke="#94A3B8" stroke-width="2"`
+- **모든 텍스트가 viewBox 안에 들어와야 함** (넘침 금지)
+
+**금지:** `<script>`, `<foreignObject>`, `on*` 이벤트 핸들러
+
+---
+
+### HTML 위젯 모드 규칙
+`<lucid-html>` 태그로 감싸서 출력하면 프론트엔드가 iframe 안에서 격리 렌더링합니다.
+
+**출력 형식:**
+```
+<lucid-html>
+<style>
+  /* CSS 먼저 (짧게) */
+</style>
+<div class="dashboard">
+  <!-- HTML 구조 -->
+</div>
+</lucid-html>
+```
+
+**스트리밍 친화 순서:** `<style>` 짧게 먼저 → HTML 구조 바로 이어서 → `<script>`는 맨 마지막 (선택)
+이 순서를 지키면 사용자가 코드 완성 전에도 레이아웃이 점진적으로 보입니다.
+
+**기본 스타일 (iframe이 자동 제공, 별도 선언 불필요):**
+- `background`, `color`, `font-family`, `table`, `th`, `td` 등 기본 스타일 자동 적용
+
+**CSS 변수 사용 (필수 — 테마 자동 대응):**
+iframe에 미리 정의된 CSS 변수를 사용하세요. 하드코딩 색상 대신 변수를 쓰면 라이트/다크 테마가 자동 전환됩니다.
+
+| 변수 | 용도 |
+|------|------|
+| `var(--w-bg)` | 메인 배경 |
+| `var(--w-bg-sub)` | 서브 영역/카드 배경 |
+| `var(--w-text)` | 기본 텍스트 |
+| `var(--w-text-sub)` | 부제/캡션 텍스트 |
+| `var(--w-border)` | 테두리/구분선 |
+| `var(--w-link)` | 링크 색상 |
+| `var(--w-accent-blue)` | 강조 파랑 |
+| `var(--w-accent-green)` | 강조 초록 |
+| `var(--w-accent-red)` | 강조 빨강 |
+| `var(--w-accent-yellow)` | 강조 노랑 |
+| `var(--w-positive)` | 양수/긍정 |
+| `var(--w-negative)` | 음수/부정 |
+| `var(--w-card)` | 카드 배경 |
+| `var(--w-row-alt)` | 테이블 짝수 행 배경 |
+
+**스타일 예시:**
+- 카드: `background:var(--w-card); border:1px solid var(--w-border); border-radius:12px; padding:16px`
+- 비교 바: 배경 `var(--w-border)` 위에 데이터 `var(--w-accent-blue); border-radius:4px; height:24px`
+- 배지: `background:var(--w-badge-bg); color:var(--w-badge-text); border-radius:10px; padding:2px 8px`
+- 양수: `color:var(--w-positive)`, 음수: `color:var(--w-negative)`
+- 구분선: `border-bottom:1px solid var(--w-border)`
+- 행 구분: 짝수 행 `background:var(--w-row-alt)`
+- 그리드: `display:grid; grid-template-columns:1fr 1fr; gap:16px`
+
+**중요: 색상을 하드코딩하지 마세요.** `#2d2d2d` 대신 `var(--w-card)`, `#E2E8F0` 대신 `var(--w-text)` 사용.
+
+**구성 패턴 (비교/분석 시):**
+1. 헤더 (제목 + 부제 + 날짜)
+2. 요약 카드 그리드 (핵심 수치 2~3열)
+3. 비교 바 (CSS width로 수평 바 차트)
+4. 상세 비교 테이블 (행 배경 교차)
+5. 전망/결론 카드
+6. 출처 (캡션 크기)
+
+---
+
+### 파일 산출물 (PDF/DOCX) 출력 규칙
+PDF 또는 DOCX 도구를 호출한 후 응답에 **반드시 파일명을 포함**하세요.
+형식: `파일명: 생성된파일명.pdf` 또는 `파일명: 생성된파일명.docx`
+(프론트엔드가 이 패턴을 감지하여 다운로드 링크를 자동 생성합니다)
+"""
+        prompt += inline_viz_guide
 
         # ============ HANDOFF — 다른 워커의 데이터가 필요할 때 ============
         # outline_embed 모드에서는 HANDOFF 비활성화 (OUTLINE + DIRECT만 사용)
