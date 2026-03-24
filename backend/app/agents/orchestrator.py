@@ -406,11 +406,22 @@ class Orchestrator:
 
     @staticmethod
     def _extract_text(event: Dict[str, Any]) -> str:
-        """on_chat_model_stream 이벤트에서 텍스트 추출 (NO_RESULTS 마커 감지용)"""
+        """on_chat_model_stream 이벤트에서 텍스트 추출 (NO_RESULTS/HANDOFF 마커 감지용)"""
         if event.get("event") == "on_chat_model_stream":
             chunk = event.get("data", {}).get("chunk")
-            if chunk and hasattr(chunk, "content") and isinstance(chunk.content, str):
-                return chunk.content
+            if chunk and hasattr(chunk, "content"):
+                content = chunk.content
+                if isinstance(content, str):
+                    return content
+                elif isinstance(content, list):
+                    # Bedrock Converse API: [{"type": "text", "text": "..."}] 형태
+                    text = ""
+                    for item in content:
+                        if isinstance(item, dict) and "text" in item:
+                            text += item["text"]
+                        elif isinstance(item, str):
+                            text += item
+                    return text
         return ""
 
     def _build_messages(

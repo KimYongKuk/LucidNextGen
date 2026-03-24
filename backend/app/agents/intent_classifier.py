@@ -193,6 +193,14 @@ class IntentClassifier:
         if re.search(URL_PATTERN, message):
             return Intent.URL_FETCH
 
+        # 업로드 파일 명시 참조 + 파일 존재 → USER_FILES (다른 도메인 키워드보다 우선)
+        has_files = context.get("has_files", False)
+        if has_files:
+            upload_file_ref = r'(업로드\s?한?\s?파일|올린\s?파일|첨부\s?파일|위\s?파일|해당\s?파일|이\s?파일|그\s?파일|방금\s?파일)'
+            if re.search(upload_file_ref, message, re.IGNORECASE):
+                print(f"[INTENT] Quick: explicit file reference + has_files → USER_FILES")
+                return Intent.USER_FILES
+
         # 명시적 메일 액션 ("메일 확인해줘", "메일 요약해줘" 등)
         # 단, 게시글/게시판 키워드가 함께 있으면 Step 3에서 multi-intent로 처리
         mail_enabled = os.environ.get("MAIL_WORKER_ENABLED", "true").lower() == "true"

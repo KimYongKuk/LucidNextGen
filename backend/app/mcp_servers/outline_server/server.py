@@ -1,15 +1,19 @@
 """Outline Wiki MCP 서버
 
-Outline Wiki REST API를 통해 문서를 검색/조회합니다.
+Outline Wiki REST API를 통해 문서를 검색/조회/생성합니다.
 - 문서 키워드 검색 (documents.search)
 - 최근 문서 목록 (documents.list)
 - 문서 상세 조회 (documents.info)
 - 컬렉션 목록 (collections.list)
 - 컬렉션 내 문서 트리 (collections.documents)
+- 파일 → 마크다운 추출 (extract_file_for_wiki)
+- 이미지 → Outline 첨부파일 업로드 (upload_image_to_outline)
+- 위키 문서 생성 (create_wiki_document)
 """
 import sys
 import os
 import json
+from pathlib import Path
 from typing import Optional, List
 
 import httpx
@@ -30,6 +34,12 @@ DOC_BODY_MAX_LENGTH = int(os.environ.get("OUTLINE_DOC_MAX_LENGTH", "12000"))
 # 검색 결과 기본 최대 건수
 DEFAULT_SEARCH_LIMIT = 10
 DEFAULT_LIST_LIMIT = 10
+
+# 사용자 업로드 파일 루트
+USER_UPLOAD_DIR = Path(os.environ.get(
+    "USER_UPLOAD_DIR",
+    str(Path(__file__).parent.parent.parent.parent / "data" / "user_uploads"),
+))
 
 
 # ── HTTP 헬퍼 ─────────────────────────────────────────
@@ -80,7 +90,59 @@ def _format_document_summary(doc: dict) -> dict:
     }
 
 
-# ── MCP 도구 ──────────────────────────────────────────
+async def _outline_upload(
+    filename: str, file_bytes: bytes, content_type: str, document_id: str = ""
+) -> dict:
+    """Outline attachments.create (multipart/form-data)"""
+    if not OUTLINE_API_KEY:
+        return {"error": "OUTLINE_API_KEY가 설정되지 않았습니다."}
+
+    url = f"{OUTLINE_API_URL.rstrip('/')}/attachments.create"
+    headers = {"Authorization": f"Bearer {OUTLINE_API_KEY}"}
+
+    try:
+        files = {"file": (filename, file_bytes, content_type)}
+        data = {}
+        if document_id:
+            data["documentId"] = document_id
+
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(url, headers=headers, files=files, data=data)
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        return {"error": f"첨부파일 업로드 오류 ({e.response.status_code}): {e.response.text[:500]}"}
+    except Exception as e:
+        return {"error": f"업로드 실패: {str(e)[:300]}"}
+
+
+def _find_uploaded_file(user_id: str, filename: str) -> Optional[Path]:
+    """user_uploads/{date}/{user_id}/{filename}에서 가장 최근 파일 탐색"""
+    if not USER_UPLOAD_DIR.exists():
+        return None
+
+    # 사용자 ID 경로 안전 처리 (upload.py와 동일 로직)
+    safe_uid = user_id.replace("/", "").replace("\\", "").replace("..", "").replace(" ", "_")
+
+    # 날짜 디렉토리를 역순(최신 우선)으로 탐색
+    try:
+        date_dirs = sorted(
+            [d for d in USER_UPLOAD_DIR.iterdir() if d.is_dir()],
+            key=lambda d: d.name,
+            reverse=True,
+        )
+    except Exception:
+        return None
+
+    for date_dir in date_dirs:
+        candidate = date_dir / safe_uid / filename
+        if candidate.exists():
+            return candidate
+
+    return None
+
+
+# ── MCP 도구 (읽기) ──────────────────────────────────────────
 
 @mcp.tool()
 async def search_documents(
