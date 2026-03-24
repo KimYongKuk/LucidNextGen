@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../.
 from fastmcp import FastMCP
 
 # doc_body 본문 처리 상수
-DOC_BODY_MAX_LENGTH = 3000  # 본문 텍스트 최대 길이 (HTML 태그 제거 후)
+DOC_BODY_MAX_LENGTH = 8000  # 본문 텍스트 최대 길이 (HTML 태그 제거 후, base_worker compact가 이전 결과 압축)
 
 
 def _strip_html_tags(html_content: str) -> str:

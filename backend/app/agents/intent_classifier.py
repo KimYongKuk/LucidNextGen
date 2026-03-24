@@ -49,8 +49,9 @@ INTENTS:
   Approval form names (양식명): WA전표품의, 품의서, 보고, 사전지출승인서, 예외처리 신청서, 인장 및 법인서류 요청서
 - board: Search company bulletin boards, notices, announcements, posts
   NOTE: Board posts/notices → "board". Company policies/regulations (not posts) → "corp_rag"
-- outline: Search or browse Outline Wiki documents, collections, recent wiki updates
+- outline: Search or browse Outline Wiki documents, collections, recent wiki updates, OR publish uploaded files to wiki
   Keywords: "위키", "wiki", "outline", "아웃라인", "위키 문서", "위키에서"
+  Examples: "위키에서 보안 정책 찾아줘", "이 파일 위키에 올려줘", "PDF를 위키 문서로 만들어줘"
   NOTE: "위키" explicitly mentioned → "outline". General company docs without "위키" → "corp_rag"
 - clarify: The query asks to FIND a specific item/document/record, but NONE of the above intents match
   ONLY use as last resort when: no domain keywords, not a knowledge question, not how-to — purely "find this thing" with no clue where

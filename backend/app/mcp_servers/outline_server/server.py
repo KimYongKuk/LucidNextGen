@@ -338,6 +338,180 @@ async def list_collection_documents(collection_id: str) -> str:
     )
 
 
+# ── MCP 도구 (쓰기) ──────────────────────────────────
+
+@mcp.tool()
+async def extract_file_for_wiki(
+    user_id: str,
+    filename: str,
+) -> str:
+    """사용자가 업로드한 파일(PDF/PPTX/DOCX)에서 마크다운 텍스트와 이미지를 추출합니다.
+
+    추출된 이미지는 스테이징 디렉토리에 저장되며,
+    마크다운 본문에는 {{IMAGE_N}} 플레이스홀더가 삽입됩니다.
+    이미지를 Outline에 업로드한 후 플레이스홀더를 실제 URL로 교체하세요.
+
+    Args:
+        user_id: 사용자 ID (사번, 시스템이 자동 주입)
+        filename: 업로드된 파일명 (예: "보고서.pdf")
+    """
+    from .file_extractor import extract_file, cleanup_old_staging
+
+    # 오래된 스테이징 정리 (부수 효과)
+    cleanup_old_staging(max_age_hours=1)
+
+    # 파일 경로 탐색
+    file_path = _find_uploaded_file(user_id, filename)
+    if not file_path:
+        return json.dumps(
+            {"error": f"파일을 찾을 수 없습니다: {filename} (user_id={user_id})"},
+            ensure_ascii=False,
+        )
+
+    # 지원 형식 검증
+    ext = file_path.suffix.lower()
+    if ext not in {".pdf", ".pptx", ".docx"}:
+        return json.dumps(
+            {"error": f"지원하지 않는 형식입니다: {ext} (지원: PDF, PPTX, DOCX)"},
+            ensure_ascii=False,
+        )
+
+    # 추출 실행
+    result = extract_file(str(file_path))
+
+    if "error" in result:
+        return json.dumps(result, ensure_ascii=False)
+
+    return json.dumps({
+        "title": result["title"],
+        "markdown": result["markdown"],
+        "image_count": len(result.get("images", [])),
+        "images": [
+            {
+                "placeholder": img["placeholder"],
+                "filename": img["filename"],
+                "path": img["path"],
+                "size": img.get("size", 0),
+            }
+            for img in result.get("images", [])
+        ],
+        "staging_dir": result.get("staging_dir", ""),
+    }, ensure_ascii=False, default=str)
+
+
+@mcp.tool()
+async def upload_image_to_outline(
+    staging_path: str,
+) -> str:
+    """스테이징 디렉토리의 이미지를 Outline Wiki에 업로드합니다.
+
+    extract_file_for_wiki 결과의 images[].path 값을 전달하세요.
+    반환된 URL을 마크다운의 해당 플레이스홀더와 교체합니다.
+
+    Args:
+        staging_path: 이미지 파일 경로 (extract_file_for_wiki 결과에서 제공)
+    """
+    path = Path(staging_path)
+    if not path.exists():
+        return json.dumps(
+            {"error": f"이미지 파일을 찾을 수 없습니다: {staging_path}"},
+            ensure_ascii=False,
+        )
+
+    # 보안: 스테이징 디렉토리 내 파일만 허용
+    from .file_extractor import STAGING_ROOT
+    try:
+        path.resolve().relative_to(STAGING_ROOT.resolve())
+    except ValueError:
+        return json.dumps(
+            {"error": "허용되지 않는 경로입니다. 스테이징 디렉토리 내 파일만 업로드 가능합니다."},
+            ensure_ascii=False,
+        )
+
+    # 파일 읽기 + Content-Type 추측
+    import mimetypes
+    file_bytes = path.read_bytes()
+    content_type = mimetypes.guess_type(path.name)[0] or "image/png"
+
+    # Outline 업로드
+    result = await _outline_upload(path.name, file_bytes, content_type)
+
+    if "error" in result:
+        return json.dumps(result, ensure_ascii=False)
+
+    # attachments.create 응답에서 URL 추출
+    data = result.get("data", {})
+    attachment_url = data.get("url", "")
+
+    if not attachment_url:
+        return json.dumps(
+            {"error": "업로드는 성공했으나 URL을 받지 못했습니다."},
+            ensure_ascii=False,
+        )
+
+    return json.dumps({
+        "url": attachment_url,
+        "filename": path.name,
+        "message": f"{path.name} 업로드 완료",
+    }, ensure_ascii=False)
+
+
+@mcp.tool()
+async def create_wiki_document(
+    title: str,
+    text: str,
+    collection_id: str,
+    parent_document_id: str = "",
+    publish: bool = True,
+) -> str:
+    """Outline Wiki에 새 문서를 생성합니다.
+
+    extract_file_for_wiki로 추출한 마크다운에서
+    {{IMAGE_N}} 플레이스홀더를 upload_image_to_outline 결과 URL로 교체한 뒤 호출하세요.
+
+    Args:
+        title: 문서 제목
+        text: 문서 본문 (마크다운)
+        collection_id: 문서를 생성할 컬렉션 ID (list_collections 결과에서 선택)
+        parent_document_id: 상위 문서 ID (선택, 하위 문서로 생성 시)
+        publish: 즉시 게시 여부 (기본 True)
+    """
+    if not title or not title.strip():
+        return json.dumps({"error": "문서 제목은 필수입니다."}, ensure_ascii=False)
+    if not collection_id:
+        return json.dumps({"error": "collection_id는 필수입니다."}, ensure_ascii=False)
+    if not text or not text.strip():
+        return json.dumps({"error": "문서 본문은 필수입니다."}, ensure_ascii=False)
+
+    payload: dict = {
+        "title": title.strip(),
+        "text": text,
+        "collectionId": collection_id,
+        "publish": publish,
+    }
+
+    if parent_document_id:
+        payload["parentDocumentId"] = parent_document_id
+
+    result = await _outline_request("documents.create", payload)
+
+    if "error" in result:
+        return json.dumps(result, ensure_ascii=False)
+
+    doc = result.get("data", {})
+    if not doc:
+        return json.dumps({"error": "문서 생성 응답이 비어있습니다."}, ensure_ascii=False)
+
+    return json.dumps({
+        "id": doc.get("id", ""),
+        "title": doc.get("title", ""),
+        "url": doc.get("url", ""),
+        "collectionId": doc.get("collectionId", ""),
+        "createdAt": doc.get("createdAt", ""),
+        "message": f"위키 문서 '{doc.get('title', '')}' 생성 완료",
+    }, ensure_ascii=False, default=str)
+
+
 # ── 엔트리포인트 ──────────────────────────────────────
 
 if __name__ == "__main__":
