@@ -34,6 +34,7 @@ import { YouTubeCard } from "./youtube-card";
 import { YouTubeModal } from "./youtube-modal";
 import { ChartDisplay } from "./chart-display";
 import { SVGDisplay } from "./svg-display";
+import { LucidLogo } from "./lucid-logo";
 
 // Separate component to handle YouTube summary with card and modal
 const YoutubeSummaryCard = ({ summary }: { summary: any }) => {
@@ -107,11 +108,7 @@ const PurePreviewMessage = ({
       >
         {message.role === "assistant" && (
           <div className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-full">
-            <img
-              src={isLoading ? "/logo.svg" : "/logo.png"}
-              alt="Lucid AI"
-              className="size-8"
-            />
+            <LucidLogo isLoading={isLoading} className="size-8" />
           </div>
         )}
 
@@ -444,7 +441,7 @@ export const ThinkingMessage = () => {
     >
       <div className="flex items-start justify-start gap-3">
         <div className="-mt-1 flex size-8 shrink-0 items-center justify-center rounded-full">
-          <img src="/logo.svg" alt="Lucid AI" className="size-8" />
+          <LucidLogo isLoading={true} className="size-8" />
         </div>
 
         <div className="flex w-full flex-col gap-2 md:gap-4">

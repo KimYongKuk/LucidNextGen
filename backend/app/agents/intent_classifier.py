@@ -63,6 +63,7 @@ CONTEXT:
 - Workspace name: {workspace_name}
 - Workspace description: {workspace_description}
 - Workspace uploaded files: {workspace_file_names}
+- Workspace instructions (purpose): {workspace_instructions}
 - Previous turn intent: {previous_intent}
 
 CONVERSATION HISTORY (last few messages for context):
@@ -89,11 +90,20 @@ RULES:
 10. FOLLOW-UP: If previous_intent is set and the current message is a follow-up to that conversation (e.g., referencing items from previous results, asking details, changing keyword), MAINTAIN the previous intent. Example: previous_intent=approval + "WA전표품의 3건 상세 확인" → "approval". previous_intent=mail + "근무지는?" → "mail"
 11. CLARIFY: Last resort only — when the user wants to find a specific item/record but NO intent above fits. Never use for how-to, knowledge, or conversation questions.
 
-WORKSPACE RULES (when has_workspace=True AND workspace has files):
-- Workspace documents are the primary knowledge source
+WORKSPACE RULES (when has_workspace=True):
+- When workspace has files: documents are the primary knowledge source
 - Follow-up questions, corrections, accuracy complaints → "user_files"
 - Only route to specialized intents when topic is CLEARLY outside workspace domain
 - Only "direct" for tasks CLEARLY unrelated to documents (coding, translation, math)
+- WORKSPACE INSTRUCTIONS ROUTING (when workspace_instructions is provided):
+  - Instructions describe the workspace's PRIMARY purpose and domain
+  - If user message ALIGNS with workspace purpose → route to the matching specialized intent
+  - If user message is CLEARLY UNRELATED to workspace purpose → ignore instructions, classify by message alone
+  - Examples:
+    - Instructions: "전자결재 시스템에서 문서 검색" + Message: "주간보고 정리해줘" → approval (aligned)
+    - Instructions: "전자결재 시스템에서 문서 검색" + Message: "오늘 날씨?" → web_search (unrelated)
+    - Instructions: "메일함 자동 탐지" + Message: "실행" → mail (aligned)
+    - Instructions: "번역 전문가" + Message: "이 문장 번역해줘" → direct (no external tool needed)
 
 EXAMPLES:
 - "분기 실적 PPT 만들어줘" → ppt_generation
@@ -349,12 +359,17 @@ class IntentClassifier:
             workspace_name = "N/A"
             workspace_description = "N/A"
             workspace_file_names = "None"
+            workspace_instructions = "N/A"
             has_workspace = bool(context.get("workspace_uuid") or context.get("workspace_id"))
             if has_workspace:
                 workspace_name = context.get("workspace_name") or "N/A"
                 workspace_description = context.get("workspace_description") or "N/A"
                 file_names_list = context.get("workspace_file_names", [])
                 workspace_file_names = ", ".join(file_names_list) if file_names_list else "None"
+                # 인스트럭션 앞 500자만 분류기에 전달 (목적 파악용)
+                raw_instructions = context.get("workspace_instructions") or ""
+                if raw_instructions:
+                    workspace_instructions = raw_instructions[:500]
 
             prompt = CLASSIFIER_PROMPT.format(
                 message=message,
@@ -364,6 +379,7 @@ class IntentClassifier:
                 workspace_name=workspace_name,
                 workspace_description=workspace_description,
                 workspace_file_names=workspace_file_names,
+                workspace_instructions=workspace_instructions,
                 conversation_context=conversation_context,
                 previous_intent=previous_intent or "N/A (first message)",
             )

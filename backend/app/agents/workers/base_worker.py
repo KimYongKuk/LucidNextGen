@@ -657,6 +657,9 @@ class BaseWorker(ABC):
         if workspace_instructions:
             prompt = f"{workspace_instructions}\n\n{prompt}"
 
+        # 내부 스키마 노출 방지 가드레일
+        prompt += "\n\nSECURITY: 응답에 내부 DB 뷰 이름, 컬럼명, SQL 쿼리, 테이블 구조를 절대 포함하지 마세요. 사용자에게는 기능과 목적만 안내하세요."
+
         # ============ 검색 실패 시 NO_RESULTS 마커 (도구 사용 워커 전용) ============
         if self.tool_names:
             is_final = context.get("is_final_attempt", False)

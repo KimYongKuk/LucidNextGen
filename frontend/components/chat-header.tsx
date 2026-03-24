@@ -8,7 +8,7 @@ import { SidebarToggle } from "@/components/sidebar-toggle";
 import { Button } from "@/components/ui/button";
 import { PlusIcon } from "./icons";
 import { useSidebar } from "./ui/sidebar";
-import { Bell, Folder, HelpCircle, Moon, Sun, Sparkles, Shield, X } from "lucide-react";
+import { Bell, Folder, Globe, HelpCircle, Moon, Sun, Shield, X } from "lucide-react";
 import Link from "next/link";
 import { getUserId, isAdminUser } from "@/lib/utils";
 import { useOnboarding } from "@/components/onboarding/onboarding-provider";
@@ -89,18 +89,22 @@ function PureChatHeader({
       <div className="order-3 ml-auto" />
 
       {isAdmin && (
-        <Button
-          asChild
-          className="order-3 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
-          variant="ghost"
-          size="icon"
-          title="관리자"
-        >
-          <Link href="/admin">
-            <Shield className="h-4 w-4" />
-            <span className="sr-only">관리자</span>
-          </Link>
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              asChild
+              className="order-3 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
+              variant="ghost"
+              size="icon"
+            >
+              <Link href="/admin">
+                <Shield className="h-4 w-4" />
+                <span className="sr-only">관리자</span>
+              </Link>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>관리자</TooltipContent>
+        </Tooltip>
       )}
 
       {hasNotifications && (
@@ -121,30 +125,39 @@ function PureChatHeader({
         </Tooltip>
       )}
 
-      <Button
-        className="relative order-5 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
-        onClick={openWhatsNew}
-        variant="ghost"
-        size="icon"
-        title="새 기능"
-      >
-        <Sparkles className="h-4 w-4" />
-        {hasUnseenAnnouncements && (
-          <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-blue-500" />
-        )}
-        <span className="sr-only">새 기능</span>
-      </Button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            className="relative order-5 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
+            onClick={openWhatsNew}
+            variant="ghost"
+            size="icon"
+          >
+            <Globe className="h-4 w-4" />
+            {hasUnseenAnnouncements && (
+              <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-blue-500" />
+            )}
+            <span className="sr-only">L&F WIKI</span>
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>L&F WIKI</TooltipContent>
+      </Tooltip>
 
-      <Button
-        className="order-7 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
-        onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-        variant="outline"
-        size="icon"
-      >
-        <Sun className="h-4 w-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-        <Moon className="absolute h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
-        <span className="sr-only">Toggle theme</span>
-      </Button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            className="order-7 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
+            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            variant="outline"
+            size="icon"
+          >
+            <Sun className="h-4 w-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
+            <Moon className="absolute h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
+            <span className="sr-only">Toggle theme</span>
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{theme === "dark" ? "라이트 모드" : "다크 모드"}</TooltipContent>
+      </Tooltip>
       
       {/* <Button
         className="order-6 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
