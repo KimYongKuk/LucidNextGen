@@ -19,6 +19,7 @@ from typing import Optional, List
 import httpx
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))  # file_extractor 임포트용
 
 from fastmcp import FastMCP
 
@@ -93,23 +94,62 @@ def _format_document_summary(doc: dict) -> dict:
 async def _outline_upload(
     filename: str, file_bytes: bytes, content_type: str, document_id: str = ""
 ) -> dict:
-    """Outline attachments.create (multipart/form-data)"""
+    """Outline attachments.create (2단계: presigned URL → 파일 업로드)
+
+    Step 1: POST /api/attachments.create (JSON) → presigned URL + form fields
+    Step 2: POST to presigned URL (multipart) → 실제 파일 업로드
+    """
     if not OUTLINE_API_KEY:
         return {"error": "OUTLINE_API_KEY가 설정되지 않았습니다."}
 
-    url = f"{OUTLINE_API_URL.rstrip('/')}/attachments.create"
-    headers = {"Authorization": f"Bearer {OUTLINE_API_KEY}"}
-
     try:
-        files = {"file": (filename, file_bytes, content_type)}
-        data = {}
+        # Step 1: presigned URL 요청
+        payload: dict = {
+            "name": filename,
+            "size": len(file_bytes),
+            "contentType": content_type,
+        }
         if document_id:
-            data["documentId"] = document_id
+            payload["documentId"] = document_id
 
+        step1 = await _outline_request("attachments.create", payload)
+        if "error" in step1:
+            return step1
+
+        data = step1.get("data", {})
+        upload_url = data.get("uploadUrl", "")
+        form_fields = data.get("form", {})
+        attachment = data.get("attachment", {})
+
+        if not upload_url:
+            return {"error": "presigned URL을 받지 못했습니다."}
+
+        # 상대 경로인 경우 베이스 URL 붙이기 (로컬 스토리지 환경)
+        if upload_url.startswith("/"):
+            base = OUTLINE_API_URL.rstrip("/").replace("/api", "")
+            upload_url = f"{base}{upload_url}"
+
+        # Step 2: presigned URL에 파일 업로드
         async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(url, headers=headers, files=files, data=data)
-            resp.raise_for_status()
-            return resp.json()
+            # form fields를 multipart data로 구성 (presigned 필드 + 파일)
+            files_data = {}
+            form_data = {}
+            for k, v in form_fields.items():
+                form_data[k] = v
+
+            resp = await client.post(
+                upload_url,
+                headers={"Authorization": f"Bearer {OUTLINE_API_KEY}"},
+                data=form_data,
+                files={"file": (filename, file_bytes, content_type)},
+            )
+            # S3 presigned upload는 200~204를 반환
+            if resp.status_code >= 400:
+                return {"error": f"파일 업로드 실패 ({resp.status_code}): {resp.text[:500]}"}
+
+        # attachment URL 반환
+        return {"data": attachment}
+
     except httpx.HTTPStatusError as e:
         return {"error": f"첨부파일 업로드 오류 ({e.response.status_code}): {e.response.text[:500]}"}
     except Exception as e:
@@ -344,6 +384,7 @@ async def list_collection_documents(collection_id: str) -> str:
 async def extract_file_for_wiki(
     user_id: str,
     filename: str,
+    refine_mode: bool = False,
 ) -> str:
     """사용자가 업로드한 파일(PDF/PPTX/DOCX)에서 마크다운 텍스트와 이미지를 추출합니다.
 
@@ -354,8 +395,9 @@ async def extract_file_for_wiki(
     Args:
         user_id: 사용자 ID (사번, 시스템이 자동 주입)
         filename: 업로드된 파일명 (예: "보고서.pdf")
+        refine_mode: 정제 모드 여부. True이면 Vision API로 이미지 설명을 생성합니다.
     """
-    from .file_extractor import extract_file, cleanup_old_staging
+    from file_extractor import extract_file, cleanup_old_staging, describe_images
 
     # 오래된 스테이징 정리 (부수 효과)
     cleanup_old_staging(max_age_hours=1)
@@ -382,18 +424,25 @@ async def extract_file_for_wiki(
     if "error" in result:
         return json.dumps(result, ensure_ascii=False)
 
+    images = result.get("images", [])
+
+    # 정제 모드: Vision API로 이미지 설명 생성
+    if refine_mode and images:
+        images = describe_images(images)
+
     return json.dumps({
         "title": result["title"],
         "markdown": result["markdown"],
-        "image_count": len(result.get("images", [])),
+        "image_count": len(images),
         "images": [
             {
                 "placeholder": img["placeholder"],
                 "filename": img["filename"],
                 "path": img["path"],
                 "size": img.get("size", 0),
+                **({"description": img["description"]} if img.get("description") else {}),
             }
-            for img in result.get("images", [])
+            for img in images
         ],
         "staging_dir": result.get("staging_dir", ""),
     }, ensure_ascii=False, default=str)
@@ -419,7 +468,7 @@ async def upload_image_to_outline(
         )
 
     # 보안: 스테이징 디렉토리 내 파일만 허용
-    from .file_extractor import STAGING_ROOT
+    from file_extractor import STAGING_ROOT
     try:
         path.resolve().relative_to(STAGING_ROOT.resolve())
     except ValueError:

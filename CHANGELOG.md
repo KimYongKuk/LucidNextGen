@@ -5,6 +5,13 @@
 
 ---
 
+## [2026-03-25]
+- **추가** [OutlineWorker] 컬렉션 접근 제어 — 사번 기반 Outline DB 권한 조회로 읽기/쓰기 도구에 사용자별 컬렉션 필터링 적용 → [상세](docs/history/2026-03-25_OutlineWorker-컬렉션-접근제어.md)
+- **수정** [PDFVisionService] Vision OCR 판정 로직 개선 + PPTX media_type 버그 수정 → [상세](docs/history/2026-03-25_Vision-OCR-판정로직-개선.md)
+- **수정** [ChromaDB] PPTX 이미지 해시 중복 제거 + 모델 로드 안정화 (low_cpu_mem_usage)
+
+---
+
 ## [2026-03-24]
 - **추가** [OutlineWorker,MCP] 파일→위키 문서 생성 기능 — PDF/PPTX/DOCX 업로드 파일에서 텍스트+이미지 추출하여 Outline Wiki 문서 자동 게시 → [상세](docs/history/2026-03-24_OutlineWiki-파일-문서생성.md)
 - **수정** [Orchestrator,IntentClassifier] HANDOFF 마커 감지 실패 + 파일 참조 인텐트 오분류 — `_extract_text` list content 처리 추가, 업로드 파일 명시 참조 시 USER_FILES 우선 → [상세](docs/history/2026-03-24_핸드오프-파일참조-인텐트-수정.md)

@@ -51,6 +51,22 @@
 - `_outline_upload()`: multipart/form-data로 이미지 업로드 (기존 JSON POST와 별도)
 - `_find_uploaded_file()`: `user_uploads/{date}/{user_id}/{filename}` 경로에서 최신 파일 탐색
 
+### 두 가지 게시 모드
+
+| 모드 | 동작 | Vision API |
+|------|------|-----------|
+| **원본 모드** | 파일 내용 1:1 마크다운 변환 → 바로 게시 | 사용 안 함 |
+| **정제 모드** | LLM이 구조 재구성 (헤딩, 목차, 맥락 보충) → 사용자 확인 → 게시 | 이미지 설명 생성 |
+
+- 정제 모드: `extract_file_for_wiki(refine_mode=true)` → images[].description 포함
+- **정제 절대 원칙**: 내용 보존. 정제는 구조를 다듬는 것이지 내용을 줄이는 것이 아님
+- Vision API: Bedrock Haiku로 이미지당 2~3문장 설명 생성 (비용 효율)
+
+### 이미지 Vision 처리 (`file_extractor.py`)
+- `_describe_image_via_vision()`: Bedrock Claude Haiku 직접 호출 (MCP 서브프로세스 내)
+- `describe_images()`: 이미지 목록에 description 필드 일괄 추가
+- 정제 모드에서만 호출 (원본 모드는 Vision 없이 빠르게 처리)
+
 ## 결정 사항 및 주의점
 - **벡터 다이어그램(Visio/draw.io) 미지원**: PDF에 벡터로 그려진 다이어그램은 `get_images()`로 추출 불가. 추후 페이지 렌더링 방식으로 보완 예정
 - **Admin API 키 사용**: 문서 생성은 Admin 키로 수행되므로, 작성자가 서비스 계정으로 표시됨

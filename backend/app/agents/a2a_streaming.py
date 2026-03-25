@@ -262,7 +262,17 @@ async def stream_a2a_response(
         "has_files": has_files,
         "has_session_xlsx": _has_session_xlsx(session_id),
         "chat_mode": chat_mode,
+        "session_file_names": [],  # 아래에서 채움
     }
+
+    # 세션 업로드 파일명 목록 조회 (OutlineWorker 등에서 파일명 주입용)
+    if has_files and session_id:
+        try:
+            from app.services.chromadb_service import get_chromadb_service
+            chromadb = get_chromadb_service()
+            req_context["session_file_names"] = chromadb.get_session_file_names(session_id)
+        except Exception:
+            pass
 
     # 이전 턴의 intent 조회 (follow-up 판단용)
     previous_intent = None

@@ -122,11 +122,12 @@ class PDFVisionService:
 
     def is_page_complex(self, page: fitz.Page) -> bool:
         """
-        페이지가 복잡한 레이아웃인지 판단 (표, 차트 등)
+        페이지가 복잡한 레이아웃인지 판단 (표, 차트, 큰 이미지 등)
 
-        개선: 작은 로고/아이콘은 무시하고, 실제로 복잡한 레이아웃만 감지
-        - 페이지의 5% 이상을 차지하는 이미지만 고려
-        - 채워진 도형이나 복잡한 경로만 복잡한 드로잉으로 카운트
+        판단 기준:
+        1. 페이지의 20% 이상을 차지하는 큰 이미지가 있으면 → complex (스크린샷, 다이어그램 등)
+        2. 의미 있는 이미지 + 복잡한 드로잉이 많으면 → complex (표+이미지 혼합)
+        3. 복잡한 드로잉이 매우 많으면 → complex (표, 차트 단독)
 
         Args:
             page: PyMuPDF 페이지 객체
@@ -141,21 +142,23 @@ class PDFVisionService:
             if page_area == 0:
                 return False
 
-            # 의미 있는 이미지만 카운트 (페이지의 5% 이상 차지)
+            # 의미 있는 이미지 카운트 + 큰 이미지 감지
             images = page.get_images(full=True)
             significant_images = 0
+            has_large_image = False
 
             for img in images:
                 try:
                     xref = img[0]
                     rects = page.get_image_rects(xref)
                     if rects and len(rects) > 0:
-                        img_area = rects[0].width * rects[0].height
-                        # 페이지의 5% 이상이면 의미 있는 이미지
-                        if img_area / page_area > 0.05:
+                        img_ratio = rects[0].width * rects[0].height / page_area
+                        if img_ratio > 0.05:
                             significant_images += 1
+                        # 페이지의 20% 이상 차지하면 큰 이미지 (스크린샷, 다이어그램)
+                        if img_ratio > 0.20:
+                            has_large_image = True
                 except Exception:
-                    # 이미지 정보 추출 실패시 무시
                     pass
 
             # 복잡한 드로잉만 카운트 (채워진 도형, 복잡한 경로)
@@ -163,17 +166,18 @@ class PDFVisionService:
             complex_drawings = 0
 
             for d in drawings:
-                # 채워진 도형이거나 경로가 복잡한 경우만 카운트
                 if d.get("fill") or len(d.get("items", [])) > 3:
                     complex_drawings += 1
 
-            # 더 엄격한 기준:
-            # - 의미 있는 이미지가 있고 복잡한 드로잉도 많은 경우
-            # - 또는 복잡한 드로잉이 매우 많은 경우 (표/차트 등)
-            return (significant_images > 0 and complex_drawings > 30) or complex_drawings > 100
+            # 판정 기준:
+            # 1. 큰 이미지(20%+)가 있으면 → Vision 필요 (스크린샷, 다이어그램 등)
+            # 2. 의미 있는 이미지 + 복잡한 드로잉 → Vision 필요 (표+이미지 혼합)
+            # 3. 복잡한 드로잉이 매우 많으면 → Vision 필요 (표/차트 단독)
+            return has_large_image or \
+                   (significant_images > 0 and complex_drawings > 30) or \
+                   complex_drawings > 100
 
         except Exception:
-            # 판단 실패시 복잡하지 않은 것으로 처리 (텍스트 추출 시도)
             return False
 
     def _sync_invoke_vision_api(self, request_body: dict) -> dict:
@@ -240,6 +244,19 @@ class PDFVisionService:
         sys.stdout.flush()
         raise last_exception
 
+    @staticmethod
+    def _detect_media_type(image_bytes: bytes) -> str:
+        """이미지 바이너리의 매직바이트로 실제 media_type 감지"""
+        if image_bytes[:8] == b'\x89PNG\r\n\x1a\n':
+            return "image/png"
+        if image_bytes[:2] == b'\xff\xd8':
+            return "image/jpeg"
+        if image_bytes[:4] == b'GIF8':
+            return "image/gif"
+        if image_bytes[:4] == b'RIFF' and len(image_bytes) > 12 and image_bytes[8:12] == b'WEBP':
+            return "image/webp"
+        return "image/jpeg"  # 폴백
+
     async def extract_text_from_image(
         self,
         image_bytes: bytes
@@ -250,7 +267,7 @@ class PDFVisionService:
         개선: run_in_executor를 사용하여 이벤트 루프 블로킹 방지
 
         Args:
-            image_bytes: PNG 이미지 바이트
+            image_bytes: 이미지 바이트 (PNG/JPEG/GIF/WEBP)
 
         Returns:
             추출된 텍스트
@@ -287,7 +304,7 @@ class PDFVisionService:
                             "type": "image",
                             "source": {
                                 "type": "base64",
-                                "media_type": "image/jpeg",
+                                "media_type": self._detect_media_type(image_bytes),
                                 "data": base64_image
                             }
                         },
@@ -372,31 +389,42 @@ class PDFVisionService:
                 }
 
             elif text_length < self.text_threshold:
-                # 텍스트가 거의 없는 페이지 → 이미지 기반 PDF일 가능성 높음
-                # is_complex 여부와 무관하게 Vision API로 OCR 시도
-                t0 = time.time()
-                await asyncio.sleep(0)
-                img_bytes = self.capture_page_as_image(page, dpi=self.dpi)
-                await asyncio.sleep(0)
-                _log_timing(f"Page {page_num} image capture", t0, f"{len(img_bytes)} bytes")
+                # 텍스트가 거의 없는 페이지
+                # 이미지가 있을 때만 Vision API 호출 (빈 페이지/구분선 페이지 낭비 방지)
+                has_images = len(page.get_images(full=True)) > 0
+                if has_images or is_complex:
+                    t0 = time.time()
+                    await asyncio.sleep(0)
+                    img_bytes = self.capture_page_as_image(page, dpi=self.dpi)
+                    await asyncio.sleep(0)
+                    _log_timing(f"Page {page_num} image capture", t0, f"{len(img_bytes)} bytes")
 
-                # Vision API 호출
-                t0 = time.time()
-                extracted_text = await self.extract_text_from_image(img_bytes)
-                _log_timing(f"Page {page_num} Vision API", t0, f"{len(extracted_text)} chars extracted")
+                    # Vision API 호출
+                    t0 = time.time()
+                    extracted_text = await self.extract_text_from_image(img_bytes)
+                    _log_timing(f"Page {page_num} Vision API", t0, f"{len(extracted_text)} chars extracted")
 
-                # Vision API도 텍스트를 못 뽑으면 원본 텍스트라도 반환
-                final_text = extracted_text if extracted_text.strip() else text
+                    final_text = extracted_text if extracted_text.strip() else text
 
-                _log_timing(f"Page {page_num} TOTAL", page_start, f"vision_api (complex={is_complex})")
-                return {
-                    "page_num": page_num,
-                    "type": "image_to_text",
-                    "content": final_text,
-                    "text_length": len(final_text),
-                    "method": "vision_api_extraction",
-                    "original_text_length": text_length
-                }
+                    _log_timing(f"Page {page_num} TOTAL", page_start, f"vision_api (complex={is_complex})")
+                    return {
+                        "page_num": page_num,
+                        "type": "image_to_text",
+                        "content": final_text,
+                        "text_length": len(final_text),
+                        "method": "vision_api_extraction",
+                        "original_text_length": text_length
+                    }
+                else:
+                    # 텍스트 < 30자 + 이미지 없음 → 빈 페이지, Vision 불필요
+                    _log_timing(f"Page {page_num} TOTAL", page_start, "direct_text (no images, skip vision)")
+                    return {
+                        "page_num": page_num,
+                        "type": "text_only",
+                        "content": text,
+                        "text_length": text_length,
+                        "method": "direct_text_extraction"
+                    }
 
             else:
                 # text >= 30 AND is_complex: 텍스트는 충분하지만 복잡한 레이아웃

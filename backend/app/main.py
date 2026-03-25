@@ -12,6 +12,7 @@ if sys.platform == 'win32':
     os.environ['OMP_NUM_THREADS'] = '1'
     os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError

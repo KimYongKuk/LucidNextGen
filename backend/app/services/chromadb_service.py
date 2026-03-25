@@ -82,6 +82,7 @@ class SafeSentenceTransformerEmbeddingFunction:
                 print(f"[ChromaDB] CUDA not available, using CPU (this will be slow)", file=sys.stderr)
 
             # PyTorch 2.6+/2.7+ 호환성: GPU 직접 로드
+            # low_cpu_mem_usage=True: safetensors mmap 커밋 차지 최소화 (Windows 환경)
             try:
                 print(f"[ChromaDB] Loading model directly on {self._device}...", file=sys.stderr)
                 self._model = SentenceTransformer(
@@ -89,7 +90,7 @@ class SafeSentenceTransformerEmbeddingFunction:
                     device=self._device,
                     trust_remote_code=True,
                     model_kwargs={
-                        "low_cpu_mem_usage": False,  # meta tensor 사용 방지
+                        "low_cpu_mem_usage": True,
                     }
                 )
                 print(f"[ChromaDB] Loaded model: {self.model_name} on {self._device}", file=sys.stderr)
@@ -364,14 +365,23 @@ class ChromaDBService:
         elif ext in ['pptx', 'ppt']:
             prs = Presentation(file_path)
             all_text_parts = []
+            import hashlib
             all_images = []  # (slide_idx, image_bytes) 튜플 리스트
+            seen_hashes = set()  # 중복 이미지 제거 (로고, 배경 등 매 슬라이드 반복 방지)
 
             for slide_idx, slide in enumerate(prs.slides):
                 all_text_parts.append(f"\n--- 슬라이드 {slide_idx + 1} ---\n")
                 slide_images = []
                 text = self._extract_shapes_text_sync(slide.shapes, slide_images)
                 all_text_parts.append(text)
-                all_images.extend([(slide_idx, img) for img in slide_images])
+                for img in slide_images:
+                    if len(all_images) >= PPTX_MAX_IMAGES_PER_FILE:
+                        break
+                    img_hash = hashlib.md5(img).hexdigest()
+                    if img_hash in seen_hashes:
+                        continue
+                    seen_hashes.add(img_hash)
+                    all_images.append((slide_idx, img))
 
             # 이미지 Vision API 일괄 OCR 처리
             if all_images:
@@ -728,6 +738,19 @@ class ChromaDBService:
             return collection.count() > 0
         except Exception:
             return False
+
+    def get_session_file_names(self, session_id: str) -> List[str]:
+        """세션에 업로드된 파일명 목록 반환 (중복 제거)"""
+        try:
+            collection = self.get_collection("anonymous", session_id)
+            result = collection.get(include=["metadatas"])
+            names = set()
+            for meta in (result.get("metadatas") or []):
+                if meta and meta.get("filename"):
+                    names.add(meta["filename"])
+            return sorted(names)
+        except Exception:
+            return []
 
     async def delete_session_files(self, session_id: str) -> Dict:
         """세션 파일 전체 삭제"""

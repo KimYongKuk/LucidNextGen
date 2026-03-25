@@ -11,7 +11,10 @@ PDF / PPTX / DOCX 파일에서 텍스트를 마크다운으로 변환하고,
 """
 
 import os
+import sys
 import uuid
+import json
+import base64
 import mimetypes
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -20,6 +23,7 @@ from typing import Dict, List, Optional, Any
 IMAGE_MIN_SIZE_BYTES = 5 * 1024       # 5KB 미만 이미지 필터 (아이콘/로고)
 IMAGE_MAX_COUNT = 15                   # 문서당 최대 이미지 수
 MARKDOWN_MAX_LENGTH = 100_000          # 마크다운 최대 길이 (Outline 문서 한도)
+IMAGE_DESCRIPTION_MAX_TOKENS = 300     # 이미지 설명 최대 토큰
 
 # 스테이징 루트 (server.py에서 설정 가능)
 STAGING_ROOT = Path(os.environ.get(
@@ -69,6 +73,107 @@ def _save_image(
         "content_type": content_type,
         "size": len(image_bytes),
     }
+
+
+# ── Vision API (이미지 설명 생성) ──────────────────────
+
+def _describe_image_via_vision(image_bytes: bytes, content_type: str = "image/png") -> str:
+    """Bedrock Claude Vision API로 이미지 내용 설명 생성 (동기 호출)
+
+    정제 모드에서만 사용. 이미지 안의 텍스트, 다이어그램, 표 등을 설명합니다.
+    MCP 서버 서브프로세스에서 직접 Bedrock 호출.
+    """
+    try:
+        import boto3
+        from botocore.config import Config as BotoConfig
+    except ImportError:
+        return ""
+
+    b64 = base64.b64encode(image_bytes).decode("utf-8")
+
+    # media_type 정규화
+    media_map = {"image/jpg": "image/jpeg"}
+    media_type = media_map.get(content_type, content_type)
+    if media_type not in ("image/png", "image/jpeg", "image/gif", "image/webp"):
+        media_type = "image/png"
+
+    request_body = {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": IMAGE_DESCRIPTION_MAX_TOKENS,
+        "temperature": 0,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": b64,
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": (
+                        "이 이미지의 내용을 한국어로 간결하게 설명하세요. "
+                        "다이어그램이면 흐름/구성요소를, 표면 주요 항목을, "
+                        "텍스트가 포함되어 있으면 핵심 내용을 포함하세요. "
+                        "2~3문장 이내로."
+                    ),
+                },
+            ],
+        }],
+    }
+
+    try:
+        region = os.environ.get("AWS_REGION", "us-west-2")
+        model_id = os.environ.get(
+            "BEDROCK_HAIKU_MODEL_ID",
+            "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        )
+        config = BotoConfig(read_timeout=30, connect_timeout=10)
+        client = boto3.client("bedrock-runtime", region_name=region, config=config)
+
+        resp = client.invoke_model(
+            modelId=model_id,
+            body=json.dumps(request_body),
+            contentType="application/json",
+            accept="application/json",
+        )
+        body = json.loads(resp["body"].read())
+        if body.get("content"):
+            return body["content"][0].get("text", "")
+    except Exception as e:
+        print(f"[FileExtractor] Vision API 오류: {e}", file=sys.stderr)
+    return ""
+
+
+def describe_images(images: List[Dict]) -> List[Dict]:
+    """이미지 목록에 description 필드를 추가합니다 (정제 모드용).
+
+    각 이미지의 staging path에서 바이너리를 읽어 Vision API로 설명을 생성합니다.
+
+    Args:
+        images: extract_file 결과의 images 리스트
+
+    Returns:
+        description 필드가 추가된 images 리스트
+    """
+    for img in images:
+        img_path = Path(img.get("path", ""))
+        if not img_path.exists():
+            img["description"] = ""
+            continue
+
+        try:
+            img_bytes = img_path.read_bytes()
+            content_type = img.get("content_type", "image/png")
+            description = _describe_image_via_vision(img_bytes, content_type)
+            img["description"] = description
+        except Exception:
+            img["description"] = ""
+
+    return images
 
 
 # ── PDF 추출 ─────────────────────────────────────────

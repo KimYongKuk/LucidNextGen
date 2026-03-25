@@ -195,10 +195,15 @@ class IntentClassifier:
             return Intent.URL_FETCH
 
         # 업로드 파일 명시 참조 + 파일 존재 → USER_FILES (다른 도메인 키워드보다 우선)
+        # 단, 위키 키워드가 함께 있으면 OUTLINE으로 넘김 (파일→위키 게시 시나리오)
         has_files = context.get("has_files", False)
         if has_files:
             upload_file_ref = r'(업로드\s?한?\s?파일|올린\s?파일|첨부\s?파일|위\s?파일|해당\s?파일|이\s?파일|그\s?파일|방금\s?파일)'
+            wiki_guard = r'(위키|wiki|outline|아웃라인)'
             if re.search(upload_file_ref, message, re.IGNORECASE):
+                if re.search(wiki_guard, message, re.IGNORECASE):
+                    print(f"[INTENT] Quick: file reference + wiki keyword → OUTLINE")
+                    return Intent.OUTLINE
                 print(f"[INTENT] Quick: explicit file reference + has_files → USER_FILES")
                 return Intent.USER_FILES
 
