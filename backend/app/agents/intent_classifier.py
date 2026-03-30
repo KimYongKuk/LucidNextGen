@@ -264,11 +264,8 @@ class IntentClassifier:
             xlsx_pattern2 = r'(만들|생성|수정|편집|추가|삭제|서식|포맷|정리|작성|변환|내보내).{0,20}(엑셀|excel|xlsx|xls|스프레드시트)'
             if re.search(xlsx_pattern, message, re.IGNORECASE) or re.search(xlsx_pattern2, message, re.IGNORECASE):
                 matched_intents.append(Intent.XLSX)
-            # 패턴 2: 세션에 xlsx 파일 존재 + 수정/서식 키워드 (엑셀 키워드 없이)
-            elif context.get("has_session_xlsx", False):
-                xlsx_modify_keywords = r'(수정|편집|변경|고치|바꿔|바꾸|업데이트|update|서식|포맷|테두리|배경색|글꼴|볼드|bold|정렬|색상|수식|formula|합계|sum|필터|filter|셀\s?병합|merge|행\s?추가|열\s?추가|행\s?삭제|열\s?삭제|데이터\s?추가|데이터\s?입력|값\s?입력|값\s?넣|값\s?변경|값\s?수정|내용\s?변경|내용\s?수정|시트\s?추가|시트\s?삭제|피벗|pivot|채우|넣어|입력|작성|정리|다듬)'
-                if re.search(xlsx_modify_keywords, message, re.IGNORECASE):
-                    matched_intents.append(Intent.XLSX)
+            # 패턴 2 제거: "엑셀" 키워드 없이 세션 xlsx + 수정 키워드만으로 판단하는 것은
+            # 오분류 위험이 높아 LLM 분류에 위임 (예: 이미지 첨부 + "채워줘" → xlsx로 오분류)
 
         # ========= Step 4: 판정 =========
         if len(matched_intents) >= 2:
