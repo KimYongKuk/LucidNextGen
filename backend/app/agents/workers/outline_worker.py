@@ -3,7 +3,7 @@
 담당 도구:
   읽기: search_documents, list_recent_documents, get_document,
         list_collections, list_collection_documents
-  쓰기: extract_file_for_wiki, upload_image_to_outline, create_wiki_document
+  쓰기: publish_file_to_wiki (파일 파싱→이미지 업로드→문서 생성 원스텝)
 
 Sonnet 모델 사용: 문서 내용 요약 및 종합 응답 생성에 고품질 필요
 """
@@ -26,14 +26,12 @@ OUTLINE_BASE_URL = os.environ.get("OUTLINE_API_URL", "http://192.168.90.30:3003/
 # 도구별 tool result 최대 길이
 OUTLINE_LIST_RESULT_MAX_CHARS = 16000   # 목록/검색: 다건 커버
 OUTLINE_DOC_RESULT_MAX_CHARS = 10000    # 문서 상세: 본문
-OUTLINE_EXTRACT_RESULT_MAX_CHARS = 20000  # 파일 추출: 마크다운 본문
 
 # 대형 결과를 반환하는 도구 (차등 truncation)
 _OUTLINE_LIST_TOOLS = {
     "search_documents", "list_recent_documents",
     "list_collections", "list_collection_documents",
 }
-_OUTLINE_EXTRACT_TOOLS = {"extract_file_for_wiki"}
 
 # ── Outline 컬렉션 접근 제어 ──────────────────────────────────
 OUTLINE_DATABASE_URL = os.environ.get("OUTLINE_DATABASE_URL", "")
@@ -43,7 +41,7 @@ _ACCESS_CONTROLLED_READ_TOOLS = {
     "search_documents", "list_recent_documents", "get_document",
     "list_collections", "list_collection_documents",
 }
-_ACCESS_CONTROLLED_WRITE_TOOLS = {"create_wiki_document"}
+_ACCESS_CONTROLLED_WRITE_TOOLS = {"publish_file_to_wiki"}
 
 # 캐시: emp_code → (readable_ids, writable_ids, timestamp)
 _collection_access_cache: Dict[str, Tuple[Set[str], Set[str], float]] = {}
@@ -213,10 +211,8 @@ class OutlineWorker(BaseWorker):
             "get_document",
             "list_collections",
             "list_collection_documents",
-            # 쓰기
-            "extract_file_for_wiki",
-            "upload_image_to_outline",
-            "create_wiki_document",
+            # 쓰기 (원스텝 파이프라인)
+            "publish_file_to_wiki",
         ]
 
     @property
@@ -225,18 +221,8 @@ class OutlineWorker(BaseWorker):
 
     @property
     def max_agent_steps(self) -> int:
-        """읽기 워크플로우 + 쓰기 워크플로우 (extract + N image uploads + create)"""
-        return 40
-
-    @property
-    def compact_previous_results(self) -> bool:
-        """이전 단계 Tool 결과 압축 활성화 (토큰 누적 방지)"""
-        return True
-
-    @property
-    def compact_keep_recent_pairs(self) -> int:
-        """최근 6쌍 원본 유지 (다건 문서 요약 워크플로우 보호)"""
-        return 6
+        """읽기 워크플로우 + 쓰기 (publish 1회)"""
+        return 20
 
     @property
     def system_prompt(self) -> str:
@@ -258,9 +244,12 @@ class OutlineWorker(BaseWorker):
 - list_collection_documents: 특정 컬렉션의 문서 트리 조회 (collection_id 필수)
 
 ## AVAILABLE TOOLS (쓰기)
-- extract_file_for_wiki: 업로드 파일에서 마크다운+이미지 추출 (user_id 자동주입, filename 필수)
-- upload_image_to_outline: 추출된 이미지를 Outline에 업로드 (staging_path 필수)
-- create_wiki_document: 위키 문서 생성 (title, text, collection_id 필수)
+- publish_file_to_wiki: 업로드 파일을 위키에 원스텝 게시 (파싱→이미지 업로드→문서 생성 자동)
+  - user_id: 시스템 자동 주입
+  - filename: 업로드된 파일명 (필수)
+  - collection_id: 게시할 컬렉션 ID (필수)
+  - title: 문서 제목 (선택, 빈 값이면 파일명 사용)
+  - parent_document_id: 상위 문서 ID (선택)
 
 ## TOOL SELECTION GUIDE (읽기)
 | 사용자 요청 | 도구 |
@@ -286,87 +275,26 @@ class OutlineWorker(BaseWorker):
 2. list_collection_documents로 해당 컬렉션 문서 트리 조회
 3. 필요 시 get_document로 개별 문서 조회
 
-## DOCUMENT CREATION WORKFLOW (파일 → 위키 업로드)
+## DOCUMENT CREATION WORKFLOW (파일 → 위키 게시)
 
-사용자가 업로드한 파일을 위키에 올려달라고 요청하면 아래 순서를 따르세요.
-
-### 모드 판단
-사용자의 표현에 따라 두 모드 중 하나를 선택합니다:
-
-| 사용자 표현 | 모드 |
-|------------|------|
-| "올려줘", "게시해줘", "그대로 올려" | **원본 모드** |
-| "정리해서", "정제해서", "깔끔하게", "위키에 맞게", "다듬어서" | **정제 모드** |
-| "OO 부분만 올려줘" | **정제 모드** (부분 추출) |
-| 모호한 경우 | 사용자에게 "원본 그대로 올릴까요, 위키에 맞게 정리해서 올릴까요?" 확인 |
+사용자가 업로드한 파일을 위키에 올려달라고 요청하면:
 
 ### Step 1: 컬렉션 선택
 - list_collections 호출하여 컬렉션 목록을 가져옵니다
 - 사용자에게 번호 목록으로 보여주고 **반드시 선택을 요청**하세요 (자동 선택 금지)
 - "어떤 컬렉션에 올릴까요?" 라고 물어보세요
 
-### Step 2: 파일 추출
-- 사용자가 컬렉션을 선택하면 extract_file_for_wiki 호출
-  - 원본 모드: extract_file_for_wiki(filename=파일명)
-  - 정제 모드: extract_file_for_wiki(filename=파일명, refine_mode=true) ← Vision API로 이미지 설명 포함
-- user_id는 시스템이 자동으로 주입하므로 전달하지 않아도 됩니다
-- 결과에서 markdown, images 배열을 확인합니다 (정제 모드에서는 images[].description 포함)
+### Step 2: 게시
+- 사용자가 컬렉션을 선택하면 publish_file_to_wiki 호출
+- 파일 파싱, 이미지 업로드, 문서 생성이 한 번에 처리됩니다
+- user_id는 시스템이 자동으로 주입합니다
 
-### Step 3: 이미지 업로드
-- images 배열의 각 항목에 대해 upload_image_to_outline(staging_path=path) 호출
-- 반환된 url을 기록합니다
-- 이미지가 없으면 이 단계를 건너뜁니다
-
-### Step 4: 마크다운 완성
-
-#### 원본 모드
-- 추출된 markdown을 그대로 사용합니다
-- {{IMAGE_N}} 플레이스홀더만 업로드된 URL로 교체합니다
-- 예: `{{IMAGE_0}}` → `https://wiki.example.com/api/attachments.redirect?id=xxx`
-
-#### 정제 모드
-아래 원칙에 따라 마크다운을 재구성합니다:
-
-**[절대 원칙] 내용 보존 — 정제는 구조를 다듬는 것이지, 내용을 줄이는 것이 아닙니다**
-- 모든 데이터, 수치, 통계, 결론은 반드시 보존
-- 모든 항목, 조건, 절차, 예외사항은 빠짐없이 포함
-- 원문에 있는 세부 내용을 "간결하게" 라는 이유로 생략 금지
-- 표의 행/열 데이터는 한 건도 누락 없이 전체 유지
-- 의심스러우면 빼지 말고 포함
-
-**정제 시 할 수 있는 것:**
-- 헤딩 구조 정리 (위키 문서답게 계층화)
-- 중복 반복 문구 제거 (동일 내용이 2번 이상 나올 때)
-- 슬라이드 번호, 페이지 번호 등 불필요한 메타 제거
-- 이미지 앞뒤에 맥락 설명 추가 (이미지 description 활용)
-- 목차 추가
-- 문단 순서 재배치 (논리적 흐름 개선)
-
-**정제 시 해서는 안 되는 것:**
-- 내용 요약/축약
-- 항목 병합으로 인한 세부사항 손실
-- "기타" 로 묶어서 생략
-- 데이터가 포함된 표의 행 생략
-
-**이미지 활용:**
-- images 배열의 description 필드가 있으면 이미지 내용을 파악할 수 있습니다
-- 이미지 설명을 참고하여 적절한 위치에 배치하고, 전후 맥락을 서술하세요
-- 예: "아래 흐름도는 보안점검 프로세스를 나타냅니다:" + 이미지 + 텍스트 보충
-
-**사용자 확인:**
-- 정제된 구조를 먼저 사용자에게 제시하고 확인을 받은 뒤 문서를 생성하세요
-- "아래와 같은 구조로 정리했습니다. 이대로 올릴까요?"
-
-### Step 5: 문서 생성
-- create_wiki_document(title=추출된 제목, text=완성된 마크다운, collection_id=선택된 컬렉션)
-- 문서 제목은 파일명(확장자 제외)을 기본값으로 사용하되, 사용자가 다른 제목을 원하면 반영
-
-### Step 6: 결과 안내
+### Step 3: 결과 안내
 - 생성된 문서의 바로가기 링크를 안내합니다
-- "위키에 문서를 생성했습니다: [문서 제목](링크)"
+- "위키에 문서를 게시했습니다: [문서 제목](링크)"
+- 이미지 업로드 실패가 있으면 알려주세요
 
 ### 주의사항
-- 이미지가 10개 초과 시, 주요 이미지만 선별하여 업로드하세요
 - 추출 실패 시 사용자에게 오류 내용을 알리고 다른 방법을 제안하세요
 - 파일명이 여러 개인 경우 사용자에게 어떤 파일을 올릴지 확인하세요
 
@@ -398,7 +326,7 @@ class OutlineWorker(BaseWorker):
             if all_file_names:
                 names = ", ".join(all_file_names[:10])
                 file_info += f"\n업로드된 파일: {names}"
-                file_info += f"\nextract_file_for_wiki 호출 시 filename에 위 파일명을 사용하세요."
+                file_info += f"\npublish_file_to_wiki 호출 시 filename에 위 파일명을 사용하세요."
             file_info += "\n'위키에 올려줘' 요청 시 DOCUMENT CREATION WORKFLOW를 따르세요."
             prompt += file_info
 
@@ -407,25 +335,46 @@ class OutlineWorker(BaseWorker):
     def prepare_tools(
         self, tools: List[BaseTool], context: Dict[str, Any]
     ) -> List[BaseTool]:
-        """도구 결과 truncation + 접근 제어 + extract_file_for_wiki user_id 주입"""
+        """도구 결과 truncation + 접근 제어 + publish_file_to_wiki user_id 주입"""
         user_id = context.get("user_id", "anonymous")
 
         for tool in tools:
             original_ainvoke = getattr(tool, '_unwrapped_ainvoke', None) or tool.ainvoke
             object.__setattr__(tool, '_unwrapped_ainvoke', original_ainvoke)
 
-            if tool.name == "extract_file_for_wiki":
-                # user_id 자동 주입 (보안: 타인 파일 접근 방지) + truncation
+            if tool.name == "publish_file_to_wiki":
+                # user_id 자동 주입 + 쓰기 권한 검증
                 async def secured_ainvoke(
                     input_data, config=None, *,
                     _original=original_ainvoke,
                     _uid=user_id,
                     _tname=tool.name, **kwargs
                 ):
+                    # user_id 주입 (보안: 타인 파일 접근 방지)
                     if isinstance(input_data, dict) and "args" in input_data:
                         input_data["args"]["user_id"] = _uid
                     elif isinstance(input_data, dict):
                         input_data["user_id"] = _uid
+
+                    # 쓰기 권한 사전 검증
+                    access = await _get_collection_access(_uid)
+                    if access is not None:
+                        _, writable = access
+                        args = (input_data.get("args", {})
+                                if isinstance(input_data, dict) and "args" in input_data
+                                else input_data if isinstance(input_data, dict) else {})
+                        coll_id = args.get("collection_id", "")
+                        if coll_id and coll_id not in writable:
+                            err = json.dumps(
+                                {"error": "해당 컬렉션에 대한 쓰기 권한이 없습니다."},
+                                ensure_ascii=False,
+                            )
+                            return ToolMessage(
+                                content=err,
+                                tool_call_id=input_data.get("id", ""),
+                                name=_tname,
+                            )
+
                     result = await _original(input_data, config, **kwargs)
                     return _truncate_outline_result(result, _tname)
 
@@ -476,39 +425,8 @@ class OutlineWorker(BaseWorker):
 
                 object.__setattr__(tool, "ainvoke", secured_ainvoke)
 
-            elif tool.name in _ACCESS_CONTROLLED_WRITE_TOOLS:
-                # 쓰기 도구: 쓰기 권한 사전 검증
-                async def secured_ainvoke(
-                    input_data, config=None, *,
-                    _original=original_ainvoke,
-                    _emp=user_id,
-                    _tname=tool.name, **kwargs
-                ):
-                    access = await _get_collection_access(_emp)
-                    if access is not None:
-                        _, writable = access
-                        args = (input_data.get("args", {})
-                                if isinstance(input_data, dict) and "args" in input_data
-                                else input_data if isinstance(input_data, dict) else {})
-                        coll_id = args.get("collection_id", "")
-                        if coll_id and coll_id not in writable:
-                            err = json.dumps(
-                                {"error": "해당 컬렉션에 대한 쓰기 권한이 없습니다."},
-                                ensure_ascii=False,
-                            )
-                            return ToolMessage(
-                                content=err,
-                                tool_call_id=input_data.get("id", ""),
-                                name=_tname,
-                            )
-
-                    result = await _original(input_data, config, **kwargs)
-                    return _truncate_outline_result(result, _tname)
-
-                object.__setattr__(tool, "ainvoke", secured_ainvoke)
-
             else:
-                # 기타 (upload_image_to_outline 등): truncation만
+                # 기타: truncation만
                 async def secured_ainvoke(
                     input_data, config=None, *,
                     _original=original_ainvoke,
@@ -524,9 +442,7 @@ class OutlineWorker(BaseWorker):
 
 def _truncate_outline_result(result, tool_name: str):
     """도구별 차등 truncation"""
-    if tool_name in _OUTLINE_EXTRACT_TOOLS:
-        max_chars = OUTLINE_EXTRACT_RESULT_MAX_CHARS
-    elif tool_name in _OUTLINE_LIST_TOOLS:
+    if tool_name in _OUTLINE_LIST_TOOLS:
         max_chars = OUTLINE_LIST_RESULT_MAX_CHARS
     else:
         max_chars = OUTLINE_DOC_RESULT_MAX_CHARS

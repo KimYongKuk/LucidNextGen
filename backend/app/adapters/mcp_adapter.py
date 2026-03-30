@@ -157,6 +157,15 @@ class MCPAdapter:
     _cache_timestamp: Optional[float] = None
     CACHE_TTL: int = 3600  # 1시간
 
+    # 영구 실패 서버 블랙리스트 (FileNotFoundError 등 재시도 무의미)
+    _blacklisted_servers: Dict[str, str] = {}  # {server_name: error_message}
+
+    # 개별 서버 도구 로딩 타임아웃 (초)
+    SERVER_LOAD_TIMEOUT: int = 10
+
+    # 재시도 무의미한 영구 에러 타입
+    _PERMANENT_ERRORS = (FileNotFoundError, PermissionError, NotADirectoryError)
+
     def __init__(self, config_path: str):
         """MCPAdapter 초기화
 
@@ -248,28 +257,56 @@ class MCPAdapter:
             return MCPAdapter._global_tools_cache
 
         # 캐시 미스 - 서버별 개별 로드 (한 서버 실패 시 나머지 정상 동작)
-        # 단일 MCP 서버가 죽은 경우 터지니까 그걸 헷지하기 위함
         print("[MCP] Fetching tools from MCP servers...")
-        server_names = list(self._client.connections.keys())
+        all_server_names = list(self._client.connections.keys())
+
+        # 블랙리스트 서버 제외
+        server_names = [
+            n for n in all_server_names
+            if n not in MCPAdapter._blacklisted_servers
+        ]
+        if MCPAdapter._blacklisted_servers:
+            print(f"[MCP] Skipping blacklisted: {', '.join(MCPAdapter._blacklisted_servers.keys())}")
 
         async def _load_server_tools(name: str):
-            """개별 서버에서 도구 로드 (실패 시 빈 리스트 반환)"""
+            """개별 서버에서 도구 로드 (타임아웃 + 영구실패 블랙리스트)"""
             try:
-                return await self._client.get_tools(server_name=name)
+                return await asyncio.wait_for(
+                    self._client.get_tools(server_name=name),
+                    timeout=MCPAdapter.SERVER_LOAD_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                print(f"[MCP] WARNING: Server '{name}' timed out ({MCPAdapter.SERVER_LOAD_TIMEOUT}s)")
+                return []
             except Exception as e:
-                print(f"[MCP] WARNING: Server '{name}' failed to load: {type(e).__name__}: {e}")
+                # ExceptionGroup 내부의 실제 에러 추출
+                root = e
+                if isinstance(e, BaseExceptionGroup):
+                    flat = e.exceptions
+                    if len(flat) == 1:
+                        root = flat[0]
+                        # 중첩 ExceptionGroup 한 단계 더 풀기
+                        if isinstance(root, BaseExceptionGroup) and len(root.exceptions) == 1:
+                            root = root.exceptions[0]
+
+                if isinstance(root, MCPAdapter._PERMANENT_ERRORS):
+                    err_msg = f"{type(root).__name__}: {root}"
+                    MCPAdapter._blacklisted_servers[name] = err_msg
+                    print(f"[MCP] BLACKLISTED: Server '{name}' — {err_msg} (permanent failure, won't retry)")
+                else:
+                    print(f"[MCP] WARNING: Server '{name}' failed to load: {type(e).__name__}: {e}")
                 return []
 
         results = await asyncio.gather(*[_load_server_tools(n) for n in server_names])
 
         tools = []
-        failed_servers = []
+        transient_failed = []
         for name, server_tools in zip(server_names, results):
             if server_tools:
                 tools.extend(server_tools)
                 print(f"[MCP]   {name}: {len(server_tools)} tools loaded")
             else:
-                failed_servers.append(name)
+                transient_failed.append(name)
 
         # 직접 호출 RAG 도구 추가 (MCP 프로세스 오버헤드 제거)
         from app.agents.tools.rag_direct_tools import get_direct_rag_tools
@@ -277,13 +314,21 @@ class MCPAdapter:
         tools.extend(direct_rag_tools)
         print(f"[MCP] Added {len(direct_rag_tools)} direct RAG tools")
 
-        # 글로벌 캐시 업데이트 (실패 서버 있으면 TTL 60초로 단축)
+        # 글로벌 캐시 업데이트
         MCPAdapter._global_tools_cache = tools
         MCPAdapter._cache_timestamp = now
-        if failed_servers:
-            MCPAdapter._cache_timestamp = now - MCPAdapter.CACHE_TTL + 60  # 60초 후 재시도
-            print(f"[MCP] WARNING: {len(failed_servers)} servers failed ({', '.join(failed_servers)}) → cache TTL reduced to 60s")
-        print(f"[MCP] Tools cached: {len(tools)} tools (from {len(server_names)} servers)")
+
+        # 일시적 실패(블랙리스트 제외)가 있을 때만 TTL 단축
+        transient_non_blacklisted = [
+            n for n in transient_failed
+            if n not in MCPAdapter._blacklisted_servers
+        ]
+        if transient_non_blacklisted:
+            MCPAdapter._cache_timestamp = now - MCPAdapter.CACHE_TTL + 60
+            print(f"[MCP] WARNING: {len(transient_non_blacklisted)} servers transiently failed ({', '.join(transient_non_blacklisted)}) → cache TTL reduced to 60s")
+
+        total_bl = len(MCPAdapter._blacklisted_servers)
+        print(f"[MCP] Tools cached: {len(tools)} tools (from {len(server_names)} servers, {total_bl} blacklisted)")
 
         return tools
 

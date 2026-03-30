@@ -138,7 +138,7 @@
       "enabled": true
     },
     "excel_server": {
-      "command": "excel-mcp-server",
+      "command": "C:\\Users\\Administrator\\AppData\\Local\\Programs\\Python\\Python313\\Scripts\\excel-mcp-server.exe",
       "args": ["stdio"],
       "transport": "stdio",
       "description": "Excel(XLSX) 파일 생성/읽기/수정/서식/차트/피벗테이블",

@@ -34,6 +34,7 @@ export function EmbedChat({
     id: sessionId,
     messages: [],
     chatMode: "outline_embed",
+    userId,
     generateId: generateUUID,
     onData: (dataPart) => {
       setDataStream((ds) => (ds ? [...ds, dataPart] : []));

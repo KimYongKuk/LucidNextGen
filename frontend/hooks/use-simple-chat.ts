@@ -27,6 +27,7 @@ interface UseSimpleChatOptions {
   onError?: (error: Error) => void;
   generateId?: () => string;
   workspaceId?: string | null;  // UUID string
+  userId?: string;  // 외부에서 주입 (embed 등 SSO 쿠키 없는 환경)
 }
 
 export function useSimpleChat({
@@ -38,12 +39,13 @@ export function useSimpleChat({
   onError,
   generateId: customGenerateId = generateId,
   workspaceId,
+  userId: externalUserId,
 }: UseSimpleChatOptions) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [status, setStatus] = useState<'ready' | 'streaming' | 'submitted'>('ready');
   const [followUpSuggestions, setFollowUpSuggestions] = useState<string[] | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const userId = getUserId() ?? "anonymous";
+  const userId = externalUserId || getUserId() || "anonymous";
 
   const sendMessage = useCallback(async (message: Omit<ChatMessage, 'id' | 'createdAt'>) => {
     // 이전 팔로우업 제안 초기화

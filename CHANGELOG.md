@@ -5,7 +5,16 @@
 
 ---
 
+## [2026-03-30]
+- **수정** [BaseWorker] 대화 요약 임계치 상향 + 프롬프트 강화 (6msg/5K→12msg/15K, 구조 보존 요약) — 옵션/선택지가 조기 요약으로 소실되는 문제 방지 → [상세](docs/history/2026-03-30_대화요약-임계치-상향.md)
+- **수정** [MCPAdapter] 캐시 리프레시 행(hang) — excel_server 영구실패→TTL 60초→대량 서브프로세스 스폰→행. 블랙리스트+타임아웃+절대경로 적용 → [상세](docs/history/2026-03-30_MCP-캐시-행-수정.md)
+- **수정** [Outline,Frontend] 임베드 채팅 userId anonymous 버그 — embed-chat.tsx에서 사번을 useSimpleChat에 미전달 → 로그 정상 기록 → [상세](docs/history/2026-03-30_Outline-embed-userId-버그수정.md)
+- **수정** [OutlineMCP] list_collections 문서 수 부정확 — Outline API의 캐시된 documentCount 대신 실제 문서 트리 병렬 조회로 정확한 카운트 반환 → [상세](docs/history/2026-03-30_Outline-컬렉션-문서수-수정.md)
+
+---
+
 ## [2026-03-25]
+- **수정** [OutlineWorker,MCP] 위키 게시 파이프라인 통합 — 3개 도구(extract+upload×N+create) → publish_file_to_wiki 원스텝으로 통합, 이미지 병렬 업로드, 정제 모드 제거 → [상세](docs/history/2026-03-25_OutlineWiki-게시-파이프라인-통합.md)
 - **추가** [OutlineWorker] 컬렉션 접근 제어 — 사번 기반 Outline DB 권한 조회로 읽기/쓰기 도구에 사용자별 컬렉션 필터링 적용 → [상세](docs/history/2026-03-25_OutlineWorker-컬렉션-접근제어.md)
 - **수정** [PDFVisionService] Vision OCR 판정 로직 개선 + PPTX media_type 버그 수정 → [상세](docs/history/2026-03-25_Vision-OCR-판정로직-개선.md)
 - **수정** [ChromaDB] PPTX 이미지 해시 중복 제거 + 모델 로드 안정화 (low_cpu_mem_usage)

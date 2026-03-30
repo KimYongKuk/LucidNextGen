@@ -6,15 +6,16 @@ Outline Wiki REST API를 통해 문서를 검색/조회/생성합니다.
 - 문서 상세 조회 (documents.info)
 - 컬렉션 목록 (collections.list)
 - 컬렉션 내 문서 트리 (collections.documents)
-- 파일 → 마크다운 추출 (extract_file_for_wiki)
-- 이미지 → Outline 첨부파일 업로드 (upload_image_to_outline)
-- 위키 문서 생성 (create_wiki_document)
+- 파일 → 위키 원스텝 게시 (publish_file_to_wiki)
 """
 import sys
 import os
+import re
 import json
+import asyncio
+import mimetypes
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict, Tuple
 
 import httpx
 
@@ -154,6 +155,69 @@ async def _outline_upload(
         return {"error": f"첨부파일 업로드 오류 ({e.response.status_code}): {e.response.text[:500]}"}
     except Exception as e:
         return {"error": f"업로드 실패: {str(e)[:300]}"}
+
+
+async def _upload_images_parallel(
+    images: List[Dict],
+) -> Tuple[Dict[str, str], int, int]:
+    """이미지 목록을 Outline에 병렬 업로드
+
+    Args:
+        images: file_extractor 결과의 images 리스트 (path, placeholder, filename, content_type 포함)
+
+    Returns:
+        (placeholder_to_url 매핑, 성공 수, 실패 수)
+    """
+    if not images:
+        return {}, 0, 0
+
+    async def _upload_one(img: Dict) -> Tuple[str, Optional[str]]:
+        """단일 이미지 업로드, (placeholder, url 또는 None) 반환"""
+        img_path = Path(img["path"])
+        if not img_path.exists():
+            return img["placeholder"], None
+        file_bytes = img_path.read_bytes()
+        content_type = img.get("content_type") or mimetypes.guess_type(img_path.name)[0] or "image/png"
+        result = await _outline_upload(img_path.name, file_bytes, content_type)
+        if "error" in result:
+            print(f"[Outline] 이미지 업로드 실패 {img_path.name}: {result['error']}", file=sys.stderr)
+            return img["placeholder"], None
+        url = result.get("data", {}).get("url", "")
+        return img["placeholder"], url or None
+
+    results = await asyncio.gather(
+        *[_upload_one(img) for img in images],
+        return_exceptions=True,
+    )
+
+    placeholder_to_url = {}
+    success = 0
+    fail = 0
+    for r in results:
+        if isinstance(r, Exception):
+            fail += 1
+            continue
+        placeholder, url = r
+        if url:
+            placeholder_to_url[placeholder] = url
+            success += 1
+        else:
+            fail += 1
+
+    return placeholder_to_url, success, fail
+
+
+def _replace_image_placeholders(markdown: str, placeholder_to_url: Dict[str, str]) -> str:
+    """마크다운 내 {{IMAGE_N}} 플레이스홀더를 실제 URL로 교체"""
+    for placeholder, url in placeholder_to_url.items():
+        # ![filename]({{IMAGE_N}}) 패턴을 ![filename](url)로 교체
+        markdown = markdown.replace(f"]({placeholder})", f"]({url})")
+        # 단독 {{IMAGE_N}}도 교체
+        markdown = markdown.replace(placeholder, f"![]({url})")
+    # 업로드 실패한 플레이스홀더 제거
+    markdown = re.sub(r'!\[[^\]]*\]\(\{\{IMAGE_\d+\}\}\)\n*', '', markdown)
+    markdown = re.sub(r'\{\{IMAGE_\d+\}\}', '', markdown)
+    return markdown
 
 
 def _find_uploaded_file(user_id: str, filename: str) -> Optional[Path]:
@@ -312,7 +376,8 @@ async def get_document(document_id: str) -> str:
 
 @mcp.tool()
 async def list_collections() -> str:
-    """Outline Wiki의 모든 컬렉션(카테고리) 목록을 조회합니다."""
+    """Outline Wiki의 모든 컬렉션(카테고리) 목록을 조회합니다.
+    각 컬렉션의 실제 문서 수를 포함합니다."""
     result = await _outline_request("collections.list", {"limit": 100})
     if "error" in result:
         return json.dumps(result, ensure_ascii=False)
@@ -321,15 +386,48 @@ async def list_collections() -> str:
     if not collections:
         return json.dumps({"message": "컬렉션이 없습니다.", "count": 0}, ensure_ascii=False)
 
+    # 각 컬렉션의 실제 문서 수를 병렬로 조회
+    async def _count_docs(col_id: str) -> int:
+        """collections.documents 트리를 조회해 실제 문서 수 반환"""
+        try:
+            tree_result = await _outline_request("collections.documents", {"id": col_id})
+            if "error" in tree_result:
+                return -1  # 조회 실패 시 -1
+
+            def _count_tree(nodes):
+                count = 0
+                for node in nodes:
+                    count += 1
+                    children = node.get("children", [])
+                    if children:
+                        count += _count_tree(children)
+                return count
+
+            return _count_tree(tree_result.get("data", []))
+        except Exception:
+            return -1
+
+    # 병렬 조회
+    doc_counts = await asyncio.gather(
+        *[_count_docs(col.get("id", "")) for col in collections],
+        return_exceptions=True,
+    )
+
     output = []
-    for col in collections:
-        output.append({
+    for i, col in enumerate(collections):
+        count = doc_counts[i] if not isinstance(doc_counts[i], Exception) else -1
+        entry = {
             "id": col.get("id", ""),
             "name": col.get("name", ""),
             "description": col.get("description", ""),
-            "documentCount": col.get("documentCount", 0),
             "updatedAt": col.get("updatedAt", ""),
-        })
+        }
+        if count >= 0:
+            entry["documentCount"] = count
+        else:
+            entry["documentCount"] = col.get("documentCount", 0)
+            entry["documentCountApproximate"] = True
+        output.append(entry)
 
     return json.dumps(
         {"count": len(output), "collections": output},
@@ -381,36 +479,42 @@ async def list_collection_documents(collection_id: str) -> str:
 # ── MCP 도구 (쓰기) ──────────────────────────────────
 
 @mcp.tool()
-async def extract_file_for_wiki(
+async def publish_file_to_wiki(
     user_id: str,
     filename: str,
-    refine_mode: bool = False,
+    collection_id: str,
+    title: str = "",
+    parent_document_id: str = "",
+    publish: bool = True,
 ) -> str:
-    """사용자가 업로드한 파일(PDF/PPTX/DOCX)에서 마크다운 텍스트와 이미지를 추출합니다.
+    """업로드한 파일(PDF/PPTX/DOCX)을 Outline Wiki에 원스텝으로 게시합니다.
 
-    추출된 이미지는 스테이징 디렉토리에 저장되며,
-    마크다운 본문에는 {{IMAGE_N}} 플레이스홀더가 삽입됩니다.
-    이미지를 Outline에 업로드한 후 플레이스홀더를 실제 URL로 교체하세요.
+    파일 파싱 → 이미지 병렬 업로드 → 마크다운 조립 → 문서 생성을 한 번에 수행합니다.
 
     Args:
         user_id: 사용자 ID (사번, 시스템이 자동 주입)
         filename: 업로드된 파일명 (예: "보고서.pdf")
-        refine_mode: 정제 모드 여부. True이면 Vision API로 이미지 설명을 생성합니다.
+        collection_id: 게시할 컬렉션 ID (list_collections 결과에서 선택)
+        title: 문서 제목 (빈 값이면 파일명 사용)
+        parent_document_id: 상위 문서 ID (선택, 하위 문서로 생성 시)
+        publish: 즉시 게시 여부 (기본 True)
     """
-    from file_extractor import extract_file, cleanup_old_staging, describe_images
+    from file_extractor import extract_file, cleanup_old_staging
+
+    if not collection_id:
+        return json.dumps({"error": "collection_id는 필수입니다."}, ensure_ascii=False)
 
     # 오래된 스테이징 정리 (부수 효과)
     cleanup_old_staging(max_age_hours=1)
 
-    # 파일 경로 탐색
+    # ① 파일 찾기
     file_path = _find_uploaded_file(user_id, filename)
     if not file_path:
         return json.dumps(
-            {"error": f"파일을 찾을 수 없습니다: {filename} (user_id={user_id})"},
+            {"error": f"파일을 찾을 수 없습니다: {filename}"},
             ensure_ascii=False,
         )
 
-    # 지원 형식 검증
     ext = file_path.suffix.lower()
     if ext not in {".pdf", ".pptx", ".docx"}:
         return json.dumps(
@@ -418,136 +522,41 @@ async def extract_file_for_wiki(
             ensure_ascii=False,
         )
 
-    # 추출 실행
+    # ② 파일 파싱 (마크다운 + 이미지 추출)
     result = extract_file(str(file_path))
-
     if "error" in result:
         return json.dumps(result, ensure_ascii=False)
 
+    markdown = result.get("markdown", "")
     images = result.get("images", [])
+    doc_title = title.strip() if title and title.strip() else result.get("title", file_path.stem)
 
-    # 정제 모드: Vision API로 이미지 설명 생성
-    if refine_mode and images:
-        images = describe_images(images)
+    # ③ 이미지 병렬 업로드 + 플레이스홀더 치환
+    if images:
+        placeholder_to_url, img_ok, img_fail = await _upload_images_parallel(images)
+        markdown = _replace_image_placeholders(markdown, placeholder_to_url)
+        print(f"[Outline] 이미지 업로드: {img_ok} 성공, {img_fail} 실패", file=sys.stderr)
+    else:
+        img_ok, img_fail = 0, 0
 
-    return json.dumps({
-        "title": result["title"],
-        "markdown": result["markdown"],
-        "image_count": len(images),
-        "images": [
-            {
-                "placeholder": img["placeholder"],
-                "filename": img["filename"],
-                "path": img["path"],
-                "size": img.get("size", 0),
-                **({"description": img["description"]} if img.get("description") else {}),
-            }
-            for img in images
-        ],
-        "staging_dir": result.get("staging_dir", ""),
-    }, ensure_ascii=False, default=str)
+    if not markdown or not markdown.strip():
+        return json.dumps({"error": "추출된 본문이 비어있습니다."}, ensure_ascii=False)
 
-
-@mcp.tool()
-async def upload_image_to_outline(
-    staging_path: str,
-) -> str:
-    """스테이징 디렉토리의 이미지를 Outline Wiki에 업로드합니다.
-
-    extract_file_for_wiki 결과의 images[].path 값을 전달하세요.
-    반환된 URL을 마크다운의 해당 플레이스홀더와 교체합니다.
-
-    Args:
-        staging_path: 이미지 파일 경로 (extract_file_for_wiki 결과에서 제공)
-    """
-    path = Path(staging_path)
-    if not path.exists():
-        return json.dumps(
-            {"error": f"이미지 파일을 찾을 수 없습니다: {staging_path}"},
-            ensure_ascii=False,
-        )
-
-    # 보안: 스테이징 디렉토리 내 파일만 허용
-    from file_extractor import STAGING_ROOT
-    try:
-        path.resolve().relative_to(STAGING_ROOT.resolve())
-    except ValueError:
-        return json.dumps(
-            {"error": "허용되지 않는 경로입니다. 스테이징 디렉토리 내 파일만 업로드 가능합니다."},
-            ensure_ascii=False,
-        )
-
-    # 파일 읽기 + Content-Type 추측
-    import mimetypes
-    file_bytes = path.read_bytes()
-    content_type = mimetypes.guess_type(path.name)[0] or "image/png"
-
-    # Outline 업로드
-    result = await _outline_upload(path.name, file_bytes, content_type)
-
-    if "error" in result:
-        return json.dumps(result, ensure_ascii=False)
-
-    # attachments.create 응답에서 URL 추출
-    data = result.get("data", {})
-    attachment_url = data.get("url", "")
-
-    if not attachment_url:
-        return json.dumps(
-            {"error": "업로드는 성공했으나 URL을 받지 못했습니다."},
-            ensure_ascii=False,
-        )
-
-    return json.dumps({
-        "url": attachment_url,
-        "filename": path.name,
-        "message": f"{path.name} 업로드 완료",
-    }, ensure_ascii=False)
-
-
-@mcp.tool()
-async def create_wiki_document(
-    title: str,
-    text: str,
-    collection_id: str,
-    parent_document_id: str = "",
-    publish: bool = True,
-) -> str:
-    """Outline Wiki에 새 문서를 생성합니다.
-
-    extract_file_for_wiki로 추출한 마크다운에서
-    {{IMAGE_N}} 플레이스홀더를 upload_image_to_outline 결과 URL로 교체한 뒤 호출하세요.
-
-    Args:
-        title: 문서 제목
-        text: 문서 본문 (마크다운)
-        collection_id: 문서를 생성할 컬렉션 ID (list_collections 결과에서 선택)
-        parent_document_id: 상위 문서 ID (선택, 하위 문서로 생성 시)
-        publish: 즉시 게시 여부 (기본 True)
-    """
-    if not title or not title.strip():
-        return json.dumps({"error": "문서 제목은 필수입니다."}, ensure_ascii=False)
-    if not collection_id:
-        return json.dumps({"error": "collection_id는 필수입니다."}, ensure_ascii=False)
-    if not text or not text.strip():
-        return json.dumps({"error": "문서 본문은 필수입니다."}, ensure_ascii=False)
-
+    # ④ 문서 생성
     payload: dict = {
-        "title": title.strip(),
-        "text": text,
+        "title": doc_title,
+        "text": markdown,
         "collectionId": collection_id,
         "publish": publish,
     }
-
     if parent_document_id:
         payload["parentDocumentId"] = parent_document_id
 
-    result = await _outline_request("documents.create", payload)
+    doc_result = await _outline_request("documents.create", payload)
+    if "error" in doc_result:
+        return json.dumps(doc_result, ensure_ascii=False)
 
-    if "error" in result:
-        return json.dumps(result, ensure_ascii=False)
-
-    doc = result.get("data", {})
+    doc = doc_result.get("data", {})
     if not doc:
         return json.dumps({"error": "문서 생성 응답이 비어있습니다."}, ensure_ascii=False)
 
@@ -557,7 +566,9 @@ async def create_wiki_document(
         "url": doc.get("url", ""),
         "collectionId": doc.get("collectionId", ""),
         "createdAt": doc.get("createdAt", ""),
-        "message": f"위키 문서 '{doc.get('title', '')}' 생성 완료",
+        "images_uploaded": img_ok,
+        "images_failed": img_fail,
+        "message": f"위키 문서 '{doc.get('title', '')}' 게시 완료 (이미지 {img_ok}개 포함)",
     }, ensure_ascii=False, default=str)
 
 
