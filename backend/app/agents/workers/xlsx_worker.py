@@ -200,6 +200,11 @@ class XlsxWorker(BaseWorker):
 **주의**: create_workbook 후 반드시 write_data_to_excel을 호출하라. create_workbook만 반복 호출하면 빈 파일만 생성됨!
 대화에서 데이터가 불명확하면, 최선의 추정으로 데이터를 구성하여 write_data_to_excel을 호출하라.
 
+## 기존 파일 읽기 워크플로우 (반드시 이 순서!)
+1. get_workbook_metadata → 시트명 목록 확인 (시트명을 추측하지 마라!)
+2. read_data_from_excel(sheet_name=확인된 시트명) → 데이터 읽기
+**주의**: 시트명이 "Sheet1"이라고 추측하지 마라. 반드시 get_workbook_metadata로 확인 후 사용!
+
 ## 규칙
 1. **경로**: 새 파일은 `{output_dir}/파일명.xlsx`, 기존 파일은 AVAILABLE FILES의 경로 사용
 2. **data 형식**: `List[List]` — 첫 행=헤더, 숫자는 따옴표 없이. Dict 형식 금지!
@@ -399,14 +404,18 @@ Answer in Korean unless asked otherwise."""
 
                 # 파일별 Lock으로 동시 접근 직렬화
                 # (LangGraph ToolNode가 병렬 실행해도 같은 파일은 순차 처리)
-                if resolved_filepath:
-                    lock = _get_file_lock(resolved_filepath)
-                    async with lock:
-                        print(f"[XlsxWorker] [LOCK] {_tname}: acquired lock for {Path(resolved_filepath).name}")
+                try:
+                    if resolved_filepath:
+                        lock = _get_file_lock(resolved_filepath)
+                        async with lock:
+                            print(f"[XlsxWorker] [LOCK] {_tname}: acquired lock for {Path(resolved_filepath).name}")
+                            result = await _original(input_data, config, **kwargs)
+                            print(f"[XlsxWorker] [LOCK] {_tname}: released lock for {Path(resolved_filepath).name}")
+                    else:
                         result = await _original(input_data, config, **kwargs)
-                        print(f"[XlsxWorker] [LOCK] {_tname}: released lock for {Path(resolved_filepath).name}")
-                else:
-                    result = await _original(input_data, config, **kwargs)
+                except Exception as e:
+                    print(f"[XlsxWorker] [ERROR] {_tname}: {type(e).__name__}: {e}")
+                    raise
 
                 # 긴 도구 결과 잘라서 토큰 폭증 방지 (Approach A)
                 return _truncate_tool_result(result, _tname)
