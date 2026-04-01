@@ -193,6 +193,13 @@ class XlsxWorker(BaseWorker):
 - 검색 결과의 구체적 수치/통계를 엑셀 데이터에 반영
 - 사용자가 직접 데이터를 제공했거나, 기존 파일 수정인 경우에는 검색 불필요
 
+## 새 파일 생성 워크플로우 (반드시 이 순서 준수!)
+1. create_workbook → 파일 생성 (1번만 호출! 절대 반복 호출 금지)
+2. write_data_to_excel → 대화에서 데이터를 추출하여 기본 시트("Sheet")에 작성
+3. (선택) rename_worksheet, format_range 등 후처리
+**주의**: create_workbook 후 반드시 write_data_to_excel을 호출하라. create_workbook만 반복 호출하면 빈 파일만 생성됨!
+대화에서 데이터가 불명확하면, 최선의 추정으로 데이터를 구성하여 write_data_to_excel을 호출하라.
+
 ## 규칙
 1. **경로**: 새 파일은 `{output_dir}/파일명.xlsx`, 기존 파일은 AVAILABLE FILES의 경로 사용
 2. **data 형식**: `List[List]` — 첫 행=헤더, 숫자는 따옴표 없이. Dict 형식 금지!
@@ -200,7 +207,7 @@ class XlsxWorker(BaseWorker):
 4. **기본 시트**: create_workbook은 "Sheet" 시트를 자동 생성함. 새 시트 만들지 말고 반드시 이 기본 시트에 먼저 작업! 이름 변경은 rename_worksheet 사용
 5. **파일명 안내**: 파일 생성/수정 후 반드시 "**파일명:** xxx.xlsx" 출력 (읽기/분석만 한 경우 출력 금지)
 6. **서식**: 사용자가 명시적으로 요청한 경우에만 format_range 사용
-7. **에러**: 같은 도구 2회 실패 시 사용자에게 안내 (3회 이상 재시도 금지)
+7. **에러**: 도구가 "Error:"로 시작하는 결과를 2회 반환 시 사용자에게 안내. 성공 결과("Created workbook" 등)는 에러가 아님!
 
 ## 응답 형식
 - 한국어 응답, JSON/data 배열 노출 금지
@@ -372,6 +379,19 @@ Answer in Korean unless asked otherwise."""
                         # create_workbook 시 기존 파일 덮어쓰기 방지
                         if _tname == "create_workbook":
                             validated = _deduplicate_filepath(validated)
+
+                            # 중복 호출 가드: 이미 이 세션에서 워크북을 생성했으면 안내 반환
+                            if hasattr(secured_ainvoke, "_created_workbook_path"):
+                                prev = secured_ainvoke._created_workbook_path
+                                msg = (
+                                    f"워크북이 이미 '{Path(prev).name}'으로 생성되었습니다. "
+                                    f"create_workbook을 다시 호출하지 마세요. "
+                                    f"이제 write_data_to_excel(filepath='{prev}', sheet_name='Sheet', data=[[...]]) "
+                                    f"를 호출하여 데이터를 입력하세요."
+                                )
+                                print(f"[XlsxWorker] [GUARD] create_workbook 중복 호출 차단 → 기존 파일: {Path(prev).name}")
+                                return msg
+                            secured_ainvoke._created_workbook_path = validated
 
                         target["filepath"] = validated
                         resolved_filepath = validated
