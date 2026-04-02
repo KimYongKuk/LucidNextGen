@@ -389,10 +389,10 @@ Answer in Korean unless asked otherwise."""
                             if hasattr(secured_ainvoke, "_created_workbook_path"):
                                 prev = secured_ainvoke._created_workbook_path
                                 msg = (
-                                    f"워크북이 이미 '{Path(prev).name}'으로 생성되었습니다. "
-                                    f"create_workbook을 다시 호출하지 마세요. "
-                                    f"이제 write_data_to_excel(filepath='{prev}', sheet_name='Sheet', data=[[...]]) "
-                                    f"를 호출하여 데이터를 입력하세요."
+                                    f"✅ 워크북이 이미 '{Path(prev).name}'에 생성되어 있습니다. "
+                                    f"create_workbook은 성공했습니다. "
+                                    f"다음 단계: write_data_to_excel(filepath='{prev}', sheet_name='Sheet', data=[[헤더...],[행1...],[행2...]]) "
+                                    f"를 호출하세요."
                                 )
                                 print(f"[XlsxWorker] [GUARD] create_workbook 중복 호출 차단 → 기존 파일: {Path(prev).name}")
                                 return msg
@@ -416,6 +416,14 @@ Answer in Korean unless asked otherwise."""
                 except Exception as e:
                     print(f"[XlsxWorker] [ERROR] {_tname}: {type(e).__name__}: {e}")
                     raise
+
+                # create_workbook 성공 시 다음 단계 안내 주입
+                if _tname == "create_workbook" and isinstance(result, str) and "Created" in result:
+                    result = (
+                        f"{result}\n\n"
+                        f"✅ 워크북 생성 완료. 이제 반드시 write_data_to_excel을 호출하여 "
+                        f"데이터를 입력하세요. sheet_name='Sheet' 사용."
+                    )
 
                 # 긴 도구 결과 잘라서 토큰 폭증 방지 (Approach A)
                 return _truncate_tool_result(result, _tname)
