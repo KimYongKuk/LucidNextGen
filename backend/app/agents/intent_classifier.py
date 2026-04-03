@@ -53,6 +53,14 @@ INTENTS:
   Keywords: "위키", "wiki", "outline", "아웃라인", "위키 문서", "위키에서"
   Examples: "위키에서 보안 정책 찾아줘", "이 파일 위키에 올려줘", "PDF를 위키 문서로 만들어줘"
   NOTE: "위키" explicitly mentioned → "outline". General company docs without "위키" → "corp_rag"
+- reservation: Meeting room/asset reservation - search, book, cancel reservations
+  Keywords: "예약", "회의실", "빈 회의실", "예약 현황", "예약 등록", "예약 취소", "회의룸", "C/R"
+  Examples: "내 예약 보여줘", "내일 본사 빈 회의실 있어?", "오후 2시에 회의실 잡아줘", "예약 취소해줘"
+  NOTE: "구독 예약", "식당 예약" 등 외부 예약은 해당 없음 → "direct" or "web_search"
+- calendar: Calendar schedule management - view, create, delete events on groupware calendar
+  Keywords: "일정", "캘린더", "스케줄", "빈 시간", "내 일정", "오늘 일정", "이번 주 일정"
+  Examples: "오늘 일정 보여줘", "내일 오후에 미팅 잡아줘", "이번 주 일정 확인", "캘린더에 등록해줘", "일정 삭제해줘"
+  NOTE: "회의실 예약" → reservation (not calendar). "일정/캘린더/스케줄" → calendar
 - clarify: The query asks to FIND a specific item/document/record, but NONE of the above intents match
   ONLY use as last resort when: no domain keywords, not a knowledge question, not how-to — purely "find this thing" with no clue where
 - direct: General conversation, coding, translation, math, creative writing — no external info needed
@@ -131,6 +139,14 @@ EXAMPLES:
 - "이 문장 영어로 번역해줘" → direct
 - "위키에서 VPN 문서 찾아줘" → outline
 - "아웃라인 최근 문서 보여줘" → outline
+- "내 예약 보여줘" → reservation
+- "내일 본사 빈 회의실 있어?" → reservation
+- "오후 2시에 회의실 잡아줘" → reservation
+- "예약 취소해줘" → reservation
+- "오늘 일정 보여줘" → calendar
+- "이번 주 일정 확인해줘" → calendar
+- "내일 오후에 미팅 잡아줘" → calendar
+- "캘린더에서 일정 삭제해줘" → calendar
 - "OO 건 조회해줘" (no domain keyword at all) → clarify
 
 USER MESSAGE: {message}
@@ -207,6 +223,13 @@ class IntentClassifier:
                 print(f"[INTENT] Quick: explicit file reference + has_files → USER_FILES")
                 return Intent.USER_FILES
 
+            # 파일 명시 없이 분석/요약 등 파일 작업 키워드만 있는 경우
+            # "분석해줘", "요약해줘", "정리해줘", "알려줘" 등 단독 요청 → 업로드 파일 우선
+            file_action_keywords = r'(분석|요약|정리|설명|내용|읽어|확인|살펴|검토|리뷰|비교|통계|데이터)'
+            if re.search(file_action_keywords, message, re.IGNORECASE):
+                print(f"[INTENT] Quick: has_files + file action keyword → USER_FILES")
+                return Intent.USER_FILES
+
         # 명시적 메일 액션 ("메일 확인해줘", "메일 요약해줘" 등)
         # 단, 게시글/게시판 키워드가 함께 있으면 Step 3에서 multi-intent로 처리
         mail_enabled = os.environ.get("MAIL_WORKER_ENABLED", "true").lower() == "true"
@@ -255,6 +278,20 @@ class IntentClassifier:
             outline_keywords = r'(위키|wiki|outline|아웃라인|위키\s?문서|위키에서)'
             if re.search(outline_keywords, message, re.IGNORECASE):
                 matched_intents.append(Intent.OUTLINE)
+
+        # Reservation keywords
+        reservation_enabled = os.environ.get("RESERVATION_WORKER_ENABLED", "true").lower() == "true"
+        if reservation_enabled:
+            reservation_keywords = r'(회의실|회의\s?룸|C/?R\d|예약\s?(현황|등록|취소|조회|목록|내역)|빈\s?회의실|내\s?예약|예약\s?잡아|예약\s?해줘)'
+            if re.search(reservation_keywords, message, re.IGNORECASE):
+                matched_intents.append(Intent.RESERVATION)
+
+        # Calendar keywords
+        calendar_enabled = os.environ.get("CALENDAR_WORKER_ENABLED", "true").lower() == "true"
+        if calendar_enabled:
+            calendar_keywords = r'(캘린더|일정\s?(조회|등록|삭제|추가|확인)|내\s?일정|오늘\s?일정|이번\s?주\s?일정|다음\s?주\s?일정|빈\s?시간|스케줄|일정\s?잡아|일정\s?만들|일정\s?넣어|일정\s?잡아줘)'
+            if re.search(calendar_keywords, message, re.IGNORECASE):
+                matched_intents.append(Intent.CALENDAR)
 
         # XLSX keywords (두 가지 패턴)
         xlsx_enabled = os.environ.get("XLSX_WORKER_ENABLED", "true").lower() == "true"
@@ -350,6 +387,15 @@ class IntentClassifier:
         if quick_result:
             print(f"[INTENT] Quick classified: {quick_result.value}")
             return (quick_result, None)
+
+        # 1.5. Follow-up 규칙: quick_classify 미매칭 + previous_intent → 이전 인텐트 유지
+        # quick_classify가 새 도메인 키워드를 잡지 못했다면, 명확한 주제 전환이 아님
+        # → 이전 대화의 follow-up으로 간주하고 이전 인텐트 유지 (LLM 분류 생략)
+        if previous_intent and previous_intent != "direct":
+            prev = self._parse_intent(previous_intent)
+            if prev:
+                print(f"[INTENT] Follow-up: no new domain keyword + previous={previous_intent} → {prev.value}")
+                return (prev, None)
 
         # 2. LLM 기반 분류
         try:
