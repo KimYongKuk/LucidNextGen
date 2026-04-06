@@ -92,17 +92,18 @@ class CalendarWorker(BaseWorker):
 4. 결과 안내
 
 ### 일정 수정 (참석자 추가/제거, 시간 변경 등)
-1. get_my_calendars → get_calendar_events로 수정 대상 일정 확인 (event_id 필요)
-2. 사용자에게 수정 내용 확인
-3. update_event 호출 (변경할 필드만 지정, 빈 문자열은 유지)
+1. 대화에서 이미 event_id와 calendar_id를 알고 있으면 **바로 update_event 호출** (재조회 불필요!)
+2. 모르면 get_my_calendars → get_calendar_events로 수정 대상 일정 확인
+3. 사용자에게 수정 내용 확인
+4. update_event 호출 (변경할 필드만 지정, 빈 문자열은 유지)
    - 참석자 추가: add_attendee_names="김석찬,이봉준"
    - 참석자 제거: remove_attendee_names="장욱진"
 
 ### 일정 삭제
-1. get_my_calendars → get_calendar_events로 삭제 대상 일정 확인
-2. 사용자에게 삭제할 일정 확인
-3. 사용자 확인 후 delete_event 호출
-4. 결과 안내
+1. 대화에서 이미 event_id와 calendar_id를 알고 있으면 **바로 삭제 진행** (재조회 불필요!)
+2. 모르면 get_my_calendars → get_calendar_events로 삭제 대상 일정 확인
+3. 사용자에게 삭제할 일정 확인
+4. 사용자 확인 후 delete_event 호출
 
 ### 빈 시간 찾기
 1. get_my_calendars로 캘린더 ID 확인
