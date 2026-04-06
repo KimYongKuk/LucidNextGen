@@ -902,6 +902,148 @@ async def create_event(
 
 
 @mcp.tool()
+async def update_event(
+    employee_number: str,
+    calendar_id: int,
+    event_id: str,
+    summary: str = "",
+    start_time: str = "",
+    end_time: str = "",
+    is_allday: bool = False,
+    location: str = "",
+    description: str = "",
+    visibility: str = "",
+    add_attendee_names: str = "",
+    remove_attendee_names: str = "",
+) -> str:
+    """기존 일정을 수정합니다.
+    변경할 필드만 지정하세요. 빈 문자열은 변경하지 않음을 의미합니다.
+    반드시 사용자에게 수정 내용을 확인받은 후 호출하세요.
+
+    Args:
+        employee_number: 사번 (자동 주입됨)
+        calendar_id: 캘린더 ID
+        event_id: 수정할 일정 ID (get_calendar_events에서 확인)
+        summary: 변경할 제목 (빈 문자열이면 유지)
+        start_time: 변경할 시작 시간 (ISO 형식, 빈 문자열이면 유지)
+        end_time: 변경할 종료 시간 (ISO 형식, 빈 문자열이면 유지)
+        is_allday: 종일 일정 여부
+        location: 변경할 장소 (빈 문자열이면 유지)
+        description: 변경할 설명 (빈 문자열이면 유지)
+        visibility: 변경할 공개 설정 (빈 문자열이면 유지)
+        add_attendee_names: 추가할 참석자 이름 (콤마 구분)
+        remove_attendee_names: 제거할 참석자 이름 (콤마 구분)
+
+    Returns:
+        수정 결과
+    """
+    user_info = await _get_go_user_info(employee_number)
+    if not user_info:
+        return f"오류: 사번 '{employee_number}'에 대한 사용자 정보를 찾을 수 없습니다."
+
+    go_user_id = user_info["go_user_id"]
+
+    # 소유권 검증
+    is_own = False
+    user_cal_result = await _api_request("GET", f"/api/calendar/user/{go_user_id}/calendar")
+    if user_cal_result:
+        user_cals = user_cal_result if isinstance(user_cal_result, list) else user_cal_result.get("data", [])
+        if isinstance(user_cals, list):
+            is_own = any(c.get("id") == calendar_id for c in user_cals)
+
+    if not is_own:
+        return "오류: 본인 캘린더의 일정만 수정할 수 있습니다."
+
+    # 기존 일정 조회
+    detail = await _api_request("GET", f"/api/calendar/{calendar_id}/event/{event_id}")
+    if not detail:
+        return "오류: 일정 정보를 가져올 수 없습니다."
+
+    event_data = detail if isinstance(detail, dict) and "id" in detail else detail.get("data", detail)
+
+    # creator 검증
+    creator_id = event_data.get("creator", {}).get("id")
+    if str(creator_id) != str(go_user_id):
+        return "오류: 본인이 등록한 일정만 수정할 수 있습니다."
+
+    # 기존 데이터 기반으로 변경 필드만 덮어쓰기
+    updated = {**event_data}
+    if summary:
+        updated["summary"] = summary
+    if start_time:
+        updated["startTime"] = start_time
+    if end_time:
+        updated["endTime"] = end_time
+    if location:
+        updated["location"] = location
+    if description:
+        updated["description"] = description
+    if visibility:
+        updated["visibility"] = visibility
+
+    # timeType 처리
+    if start_time or end_time:
+        updated["timeType"] = "allday" if is_allday else "timed"
+
+    # 참석자 추가
+    not_found_names = []
+    attendees = list(updated.get("attendees", []))
+    if add_attendee_names:
+        for name in add_attendee_names.split(","):
+            name = name.strip()
+            if not name:
+                continue
+            # 이미 참석자인지 확인
+            existing_names = [a.get("name", "") for a in attendees]
+            if name in existing_names:
+                continue
+            results = await _search_users_by_name(name, limit=3)
+            if results:
+                u = results[0]
+                attendees.append({
+                    "id": str(u["go_user_id"]),
+                    "name": u["name"],
+                    "email": u.get("email", ""),
+                    "position": "",
+                })
+                print(f"[Calendar MCP] 참석자 추가: {name} → GO#{u['go_user_id']}", file=sys.stderr)
+            else:
+                not_found_names.append(name)
+
+    # 참석자 제거
+    if remove_attendee_names:
+        remove_set = {n.strip() for n in remove_attendee_names.split(",") if n.strip()}
+        attendees = [a for a in attendees if a.get("name", "") not in remove_set]
+
+    updated["attendees"] = attendees
+
+    print(f"[Calendar MCP] 일정 수정: cal={calendar_id}, event={event_id}, "
+          f"user=GO#{go_user_id}", file=sys.stderr)
+
+    result = await _api_request("PUT", f"/api/calendar/{calendar_id}/event/{event_id}",
+                                json=updated)
+    if not result:
+        return "오류: 일정 수정에 실패했습니다."
+
+    if isinstance(result, dict) and result.get("code") and str(result["code"]) != "200":
+        msg = result.get("message", "알 수 없는 오류")
+        return f"오류: 일정 수정 실패 — {msg}"
+
+    lines = [f"✅ 일정이 수정되었습니다!\n"]
+    lines.append(f"- **제목**: {updated.get('summary', '')}")
+    st = updated.get("startTime", "")
+    et = updated.get("endTime", "")
+    lines.append(f"- **시간**: {_format_time_range(st, et, updated.get('timeType', ''))}")
+    attendee_names_list = [a.get("name", "") for a in attendees if a.get("name")]
+    if attendee_names_list:
+        lines.append(f"- **참석자**: {', '.join(attendee_names_list)}")
+    if not_found_names:
+        lines.append(f"\n⚠️ 다음 참석자는 검색되지 않아 추가하지 못했습니다: {', '.join(not_found_names)}")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
 async def delete_event(
     employee_number: str,
     calendar_id: int,

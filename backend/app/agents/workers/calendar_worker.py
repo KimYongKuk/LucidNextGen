@@ -25,6 +25,7 @@ class CalendarWorker(BaseWorker):
             "get_calendar_events",
             "get_event_detail",
             "create_event",
+            "update_event",
             "delete_event",
             "execute_org_chart_query",  # 팀원 조회용 (빈 시간 분석 시 필요)
             "find_available_rooms",     # 일정+회의실 동시 등록
@@ -65,6 +66,7 @@ class CalendarWorker(BaseWorker):
 - get_calendar_events: 기간별 일정 조회 (캘린더 ID + 날짜 범위)
 - get_event_detail: 일정 상세 조회 (캘린더 ID + 일정 ID)
 - create_event: 일정 등록 (내 캘린더만, 사용자 확인 후!) — attendee_names에 사내 참석자 이름을 넣으면 자동 검색하여 GO 계정 연결
+- update_event: 일정 수정 (제목, 시간, 참석자 추가/제거 등) — add_attendee_names/remove_attendee_names로 참석자 변경
 - delete_event: 일정 삭제 (내 일정만, 사용자 확인 후!)
 - execute_org_chart_query: 조직도 SQL 조회 — 팀/파트 인원 파악 시 사용 (예: "DA파트 인원 찾기")
 - find_available_rooms: 특정 시간대 빈 회의실 검색 (사업장ID + 날짜 + 시작/종료 시간)
@@ -88,6 +90,13 @@ class CalendarWorker(BaseWorker):
 2. 사용자에게 등록 내용 확인 요청 (제목, 시간, 장소 등)
 3. 사용자 확인 후 create_event 호출
 4. 결과 안내
+
+### 일정 수정 (참석자 추가/제거, 시간 변경 등)
+1. get_my_calendars → get_calendar_events로 수정 대상 일정 확인 (event_id 필요)
+2. 사용자에게 수정 내용 확인
+3. update_event 호출 (변경할 필드만 지정, 빈 문자열은 유지)
+   - 참석자 추가: add_attendee_names="김석찬,이봉준"
+   - 참석자 제거: remove_attendee_names="장욱진"
 
 ### 일정 삭제
 1. get_my_calendars → get_calendar_events로 삭제 대상 일정 확인
@@ -136,7 +145,7 @@ class CalendarWorker(BaseWorker):
         secured_tools = {
             "get_my_calendars", "get_user_public_calendars",
             "get_calendar_events", "get_event_detail",
-            "create_event", "delete_event",
+            "create_event", "update_event", "delete_event",
             "create_reservation",  # 회의실 예약 시 사번 주입
         }
 
