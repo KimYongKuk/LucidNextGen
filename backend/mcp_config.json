@@ -144,6 +144,30 @@
       "description": "Excel(XLSX) 파일 생성/읽기/수정/서식/차트/피벗테이블",
       "enabled": true
     },
+    "calendar_server": {
+      "command": "python",
+      "args": [
+        "app/mcp_servers/calendar_mcp_server.py"
+      ],
+      "env": {
+        "TIMS_DATABASE_URL": "${TIMS_DATABASE_URL}"
+      },
+      "transport": "stdio",
+      "description": "캘린더 일정 조회/등록/삭제, 빈 시간 검색, 타인 공개 캘린더 조회",
+      "enabled": true
+    },
+    "reservation_server": {
+      "command": "python",
+      "args": [
+        "app/mcp_servers/reservation_mcp_server.py"
+      ],
+      "env": {
+        "TIMS_DATABASE_URL": "${TIMS_DATABASE_URL}"
+      },
+      "transport": "stdio",
+      "description": "회의실/자산 예약 조회, 빈 회의실 검색, 예약 등록/취소",
+      "enabled": true
+    },
     "board_server": {
       "command": "python",
       "args": [
@@ -151,6 +175,15 @@
       ],
       "transport": "stdio",
       "description": "사내 게시판 검색 (전사/회사별 공지사항, 게시글 조회)",
+      "enabled": true
+    },
+    "nas_server": {
+      "command": "python",
+      "args": [
+        "app/mcp_servers/nas_mcp_server.py"
+      ],
+      "transport": "stdio",
+      "description": "회사 NAS(Synology) 파일 탐색 및 다운로드 (부서간공유 등 공유 폴더)",
       "enabled": true
     },
     "outline_server": {
@@ -163,7 +196,7 @@
         "OUTLINE_API_KEY": "${OUTLINE_API_KEY}"
       },
       "transport": "stdio",
-      "description": "Outline Wiki 문서 검색/조회 (키워드 검색, 최근 문서, 컬렉션 탐색)",
+      "description": "L&F Wiki 문서 검색/조회/생성/수정 (키워드 검색, 최근 문서, 컬렉션 탐색, 텍스트 직접 게시)",
       "enabled": true
     }
   }

@@ -5,7 +5,33 @@
 
 ---
 
+## [2026-04-06]
+- **수정** [CalendarWorker/ReservationWorker] 테스트 버그 수정 및 기능 보강 — find_available_rooms 도구 추가(LLM 시간대 분석 오류 방지), create_reservation 충돌 사전 검증, get_my_calendars user API 기반 변경, URL 인코딩/timeType 수정, attendee_names 사내 참석자 이름 검색, 일정+회의실 동시 등록, calendar+reservation 인텐트 우선 규칙 → [상세](docs/history/2026-04-06_캘린더-예약-Worker.md)
+- **추가** [NASWorker] NAS 파일 탐색 및 다운로드 — Synology NAS WebDAV 연동, 4개 읽기전용 MCP 도구(목록/검색/다운로드/정보), 경로 화이트리스트 + path traversal 차단, 감사 로깅 → [상세](docs/history/2026-04-06_NAS-Worker.md)
+- **추가** [OutlineWorker] 하이브리드 시멘틱 검색 — Outline 키워드 검색 + ChromaDB 시멘틱 검색(BGE-m3-ko) → RRF 병합, Haiku 문서 요약 → 임베딩 동기화, 30분 주기 증분 동기화, 수동 트리거 API → [상세](docs/history/2026-04-06_Outline-시멘틱-검색.md)
+- **추가** [OutlineWorker] 텍스트 직접 문서 생성/수정 도구 — create_document(마크다운→위키), update_document(기존 문서 수정), 파일 없이 위키 게시 가능, 쓰기 권한 검증 포함 → [상세](docs/history/2026-04-06_Outline-텍스트-문서-생성.md)
+- **수정** [BaseWorker] 핸드오프 타겟 프롬프트 추가 — is_handoff_target일 때 "할 수 있는 것만 수행, 못 하는 부분 무시" 지시로 핸드오프 루프 방지 → [상세](docs/history/2026-04-06_Outline-텍스트-문서-생성.md)
+
+## [2026-04-03]
+- **추가** [BaseWorker] 파일 컨텍스트 공유 — 모든 워커에서 업로드 파일 접근 가능, search_user_files/search_workspace_docs 자동 주입, 시스템 프롬프트에 파일 컨텍스트 자동 추가 → [상세](docs/history/2026-04-03_파일-컨텍스트-공유.md)
+- **수정** [VocWikiScheduler] 서버 시작 시 이벤트 루프 블로킹 해결 — boto3/MySQL 동기 호출 ThreadPoolExecutor 격리, misfire_grace_time 축소, since 1일 오버랩으로 누락 방지, 3/1~4/3 전량 447건 백필 완료 → [상세](docs/history/2026-04-03_VOC-위키-스케줄러-안정화.md)
+
+## [2026-04-01]
+- **추가** [CalendarWorker] 캘린더 일정 관리 Worker — LFON 캘린더 API 연동(6개 도구), 내 캘린더/관심 캘린더/공개 캘린더 조회, 일정 등록/삭제, 비공개 일정 필터링, SSO 서비스 계정 인증 → [상세](docs/history/2026-04-01_캘린더-Worker.md)
+- **수정** [XlsxWorker] create_workbook 반복 호출 → 빈 워크북만 생성되는 버그 수정: 워크플로우 프롬프트 추가, 에러 규칙 개선, 중복 호출 코드 가드 → [상세](docs/history/2026-04-01_XlsxWorker_create_loop_fix.md)
+
+## [2026-03-31]
+- **추가** [Auth] 자체 로그인 인증 시스템 — SSO 병행 ID/PW 로그인, JWT 인증, 이메일 기반 셀프 비밀번호 설정, 로그아웃, 사이드바 사용자 표시 → [상세](docs/history/2026-03-31_자체-로그인-인증.md)
+- **추가** [ReservationWorker] 회의실/자산 예약 Worker — LFON REST API 연동(6개 도구), 전 사업장 병렬 조회 내 예약 목록, 충돌 감지 후 대안 제시, 예약 등록/취소, SSO 서비스 계정 인증, v_user_info_mapping 재사용, CSRF Origin/Referer 헤더, 에러 메시지 상세 전달 → [상세](docs/history/2026-03-31_회의실-예약-Worker.md)
+- **수정** [A2AStreaming] 도구 상태 메시지 Context-Aware 개선 — 정적 메시지 → 실제 검색어/키워드 기반 동적 메시지 생성, 도구 완료 메시지 차별화, 메시지 기반 중복 억제 → [상세](docs/history/2026-03-31_Context-Aware-Tool-Status.md)
+- **추가** [ITSupportWorker] WORKS 서비스데스크 VOC 자동 등록 — IT 질문 답변 후 사용자 승인 시 SSO API로 앱릿 934에 VOC 등록 + 시스템별 담당 부서원 자동 배정 + 접수/담당자지정 상태 전환, OpenAPI 폴백 → [상세](docs/history/2026-03-31_WORKS-VOC-자동등록.md)
+- **수정** [IntentClassifier] Follow-up 인텐트 유지 규칙 — quick_classify 미매칭 + previous_intent 존재 시 이전 인텐트 유지 (멀티턴 대화에서 direct/clarify로 빠지는 문제 해결) → [상세](docs/history/2026-03-31_WORKS-VOC-자동등록.md)
+
+---
+
 ## [2026-03-30]
+- **추가** [VOC Wiki] IT VOC → L&F Wiki 자동 축적 시스템 — 매일 배치로 VOC 해결 사례를 LLM 분류·병합하여 시스템/주제별 위키 문서로 축적 → [상세](docs/history/2026-03-30_VOC-Wiki-자동축적.md)
+- **추가** [OpenAPI] OpenAI-호환 Chat Completions API — 별도 IAM, API Key 인증, 스트리밍/논스트리밍, Sonnet/Haiku 지원, 토큰 사용량 추적 → [상세](docs/history/2026-03-30_OpenAI-호환-API-엔드포인트.md)
 - **수정** [BaseWorker] 대화 요약 임계치 상향 + 프롬프트 강화 (6msg/5K→12msg/15K, 구조 보존 요약) — 옵션/선택지가 조기 요약으로 소실되는 문제 방지 → [상세](docs/history/2026-03-30_대화요약-임계치-상향.md)
 - **수정** [MCPAdapter] 캐시 리프레시 행(hang) — excel_server 영구실패→TTL 60초→대량 서브프로세스 스폰→행. 블랙리스트+타임아웃+절대경로 적용 → [상세](docs/history/2026-03-30_MCP-캐시-행-수정.md)
 - **수정** [Outline,Frontend] 임베드 채팅 userId anonymous 버그 — embed-chat.tsx에서 사번을 useSimpleChat에 미전달 → 로그 정상 기록 → [상세](docs/history/2026-03-30_Outline-embed-userId-버그수정.md)
@@ -22,7 +48,7 @@
 ---
 
 ## [2026-03-24]
-- **추가** [OutlineWorker,MCP] 파일→위키 문서 생성 기능 — PDF/PPTX/DOCX 업로드 파일에서 텍스트+이미지 추출하여 Outline Wiki 문서 자동 게시 → [상세](docs/history/2026-03-24_OutlineWiki-파일-문서생성.md)
+- **추가** [OutlineWorker,MCP] 파일→위키 문서 생성 기능 — PDF/PPTX/DOCX 업로드 파일에서 텍스트+이미지 추출하여 L&F Wiki 문서 자동 게시 → [상세](docs/history/2026-03-24_OutlineWiki-파일-문서생성.md)
 - **수정** [Orchestrator,IntentClassifier] HANDOFF 마커 감지 실패 + 파일 참조 인텐트 오분류 — `_extract_text` list content 처리 추가, 업로드 파일 명시 참조 시 USER_FILES 우선 → [상세](docs/history/2026-03-24_핸드오프-파일참조-인텐트-수정.md)
 - **수정** [IntentClassifier] 워크스페이스 인스트럭션 기반 인텐트 분류 — Classifier 프롬프트에 instructions 앞 500자 전달, 워크스페이스 목적에 맞는 전문 Worker 라우팅 → [상세](docs/history/2026-03-24_워크스페이스-인텐트-분류-개선.md)
 - **수정** [BaseWorker] 내부 DB 스키마 노출 방지 가드레일 추가 — 응답에 뷰 이름/컬럼명/SQL 쿼리 포함 금지 → [상세](docs/history/2026-03-24_워크스페이스-인텐트-분류-개선.md)
@@ -43,7 +69,7 @@
 ---
 
 ## [2026-03-19]
-- **추가** [OutlineWorker + Embed] Outline Wiki 연동 — MCP 서버 5개 도구, `/embed` iframe 채팅 페이지, outline_embed 모드 인텐트 격리, postMessage 링크 연동, HANDOFF 비활성화 → [상세](docs/history/2026-03-19_OutlineWikiWorker.md)
+- **추가** [OutlineWorker + Embed] L&F Wiki 연동 — MCP 서버 5개 도구, `/embed` iframe 채팅 페이지, outline_embed 모드 인텐트 격리, postMessage 링크 연동, HANDOFF 비활성화 → [상세](docs/history/2026-03-19_OutlineWikiWorker.md)
 - **추가** [PPTWorker] PPTX 생성 퀄리티 대폭 개선 — Shape 3종 추가(callout_box/kpi_card/divider), 차트 스타일(색상/라벨/범례), 레이아웃 패턴 10종, 디자인 규칙/차트 예시 프롬프트 → [상세](docs/history/2026-03-19_PPTXQualityEnhancement.md)
 - **수정** [OrgChart MCP] PostgreSQL 부서ID 컬럼 대소문자 fold 에러 수정 — 계층 조회 Step1 실패로 LLM 10회 삽질 방지 → [상세](docs/history/2026-03-19_OrgChartColumnQuoting.md)
 - **수정** [MailWorker] .eml 파서 스트리밍 방식 전환 — 5MB 파일 크기 제한 제거, 첨부파일 크기와 무관하게 메일 본문 추출 가능 → [상세](docs/history/2026-03-19_MailStreamingEmlParser.md)

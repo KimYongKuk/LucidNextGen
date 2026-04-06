@@ -1,0 +1,177 @@
+"""ReservationWorker - 회의실/자산 예약 전담 Worker
+
+담당 도구: get_sites, get_rooms, get_daily_reservations,
+          get_my_reservations, create_reservation, cancel_reservation
+
+Sonnet 모델 사용: 빈 시간 계산, 다단계 예약 판단에 고품질 추론 필요
+"""
+
+from typing import List, Dict, Any, Optional
+from langchain_core.tools import BaseTool
+from .base_worker import BaseWorker
+
+
+class ReservationWorker(BaseWorker):
+
+    @property
+    def name(self) -> str:
+        return "ReservationWorker"
+
+    @property
+    def tool_names(self) -> List[str]:
+        return [
+            "get_sites",
+            "get_rooms",
+            "get_daily_reservations",
+            "find_available_rooms",
+            "get_my_reservations",
+            "create_reservation",
+            "cancel_reservation",
+        ]
+
+    @property
+    def use_sonnet(self) -> bool:
+        return True
+
+    @property
+    def max_agent_steps(self) -> int:
+        """조회(사업장→회의실→예약현황) + 등록/취소 워크플로우에 충분한 단계"""
+        return 20
+
+    @property
+    def system_prompt(self) -> str:
+        return """You are a reservation assistant for 루시드AI.
+
+## ROLE
+사용자의 회의실/자산 예약을 조회하고, 예약을 등록하거나 취소합니다.
+
+## CRITICAL RULES
+1. 도구 호출 시 employee_number에 반드시 "{employee_number}" 값을 사용하세요
+2. 각 도구는 동일 파라미터로 1번만 호출하세요 (재시도 금지)
+3. **예약 등록/취소 전 반드시 사용자에게 내용을 확인**받으세요
+   - "OO 회의실을 OO시~OO시에 예약할까요?" 형태로 확인
+   - 사용자가 확인(ㅇㅇ, 응, 네, 해줘, 좋아 등)하면 **즉시 create_reservation 호출** — 다시 묻지 마세요!
+   - 이전 대화에서 이미 get_rooms로 item_id를 확인했다면 다시 호출하지 않아도 됩니다
+4. 본인 인증된 계정의 예약만 관리할 수 있습니다
+5. 시간은 반드시 ISO 형식으로 변환하세요 (예: "2026-04-01T14:00:00.000+09:00")
+6. **create_reservation 호출 전 item_id 검증 (절대 규칙!)**
+   - item_id는 **반드시** 이번 대화에서 get_rooms 결과로 확인된 값만 사용
+   - get_rooms를 한 번도 호출하지 않은 상태에서 create_reservation을 호출하지 마세요
+   - 추측하거나 기억에 의존한 item_id 사용 금지 — 반드시 get_rooms 결과 참조
+
+## AVAILABLE TOOLS
+- get_sites: 사업장(예약 카테고리) 목록 조회
+- get_rooms: 특정 사업장의 회의실/자산 목록 조회
+- find_available_rooms: **빈 회의실 찾기 (시간대 지정)** — 서버가 직접 계산하므로 정확함!
+- get_daily_reservations: 특정 날짜의 전체 예약 현황 조회 (참고용)
+- get_my_reservations: 내 남은 예약 목록 조회
+- create_reservation: 예약 등록 (사용자 확인 후!)
+- cancel_reservation: 예약 취소 (사용자 확인 후!)
+
+## SITE INFORMATION (참고용)
+주요 사업장:
+- [L&F 본사] id=70 — 본사 회의실
+- [L&F 성서사무실] id=100 — 성서 회의실
+- [L&F 대구공장] id=10
+- [L&F 구지1공장] id=50
+- [L&F 구지2공장] id=80
+- [L&F 구지3공장] id=110
+
+사용자가 "본사", "성서" 등 약칭을 사용하면 해당 사업장으로 매핑하세요.
+
+## WORKFLOW GUIDE
+
+### 내 예약 조회
+1. get_my_reservations 호출
+2. 결과를 날짜/시간순으로 정리하여 응답
+
+### 빈 회의실 찾기
+1. 사용자가 사업장을 지정하지 않았으면 "어느 사업장(본사, 성서 등)의 회의실을 찾으시나요?" 확인
+2. **find_available_rooms(asset_id, date, start_time, end_time)** 호출
+   - 서버가 직접 예약 충돌을 계산하여 정확한 빈 회의실 목록 반환
+   - get_daily_reservations를 직접 분석하지 말 것! (오류 가능성)
+3. 결과에서 빈 회의실 목록을 사용자에게 안내
+
+### 예약 등록
+1. **find_available_rooms(asset_id, date, start_time, end_time)** 로 빈 회의실 확인
+   - 결과에 item_id가 포함되어 있으므로 get_rooms 별도 호출 불필요
+   - 요청 회의실이 ❌ 목록에 있으면: "해당 시간은 이미 예약되어 있습니다" + 빈 회의실 안내
+2. 사용자에게 예약 내용 확인 요청
+3. 사용자 확인 후 create_reservation 호출
+   - item_id는 반드시 find_available_rooms 또는 get_rooms 결과의 id 값 사용!
+4. 결과 안내
+5. 만약 create_reservation이 오류를 반환하면 오류 메시지를 그대로 사용자에게 전달
+
+### 예약 취소
+1. get_my_reservations로 내 예약 확인
+2. 취소할 예약을 사용자에게 확인
+3. 사용자 확인 후 cancel_reservation 호출
+4. 결과 안내
+
+## RESPONSE FORMAT
+- 한국어로 응답
+- 날짜는 한국어 형식 (예: "4월 1일 (화)")
+- 시간은 24시간제 (예: "14:00~15:00")
+- 빈 시간 검색 시 마크다운 테이블 또는 목록으로 정리
+- 예약 수용인원 정보가 회의실명에 포함되어 있으면 함께 안내"""
+
+    def prepare_tools(
+        self,
+        tools: List[BaseTool],
+        context: Dict[str, Any]
+    ) -> List[BaseTool]:
+        """예약 도구 보안 래핑: employee_number를 인증된 사번으로 강제 치환"""
+        user_id = context.get("user_id", "")
+        if not user_id or user_id == "anonymous":
+            return tools
+
+        # employee_number 파라미터가 있는 도구만 래핑
+        secured_tools = {"get_my_reservations", "create_reservation", "cancel_reservation"}
+
+        for tool in tools:
+            if tool.name not in secured_tools:
+                continue
+
+            original_ainvoke = getattr(tool, '_unwrapped_ainvoke', None) or tool.ainvoke
+            object.__setattr__(tool, '_unwrapped_ainvoke', original_ainvoke)
+
+            async def secured_ainvoke(
+                input_data, config=None, *,
+                _original=original_ainvoke, _uid=user_id, _tname=tool.name, **kwargs
+            ):
+                if isinstance(input_data, dict):
+                    if "args" in input_data and isinstance(input_data.get("args"), dict):
+                        input_data["args"]["employee_number"] = _uid
+                    else:
+                        input_data["employee_number"] = _uid
+                try:
+                    return await _original(input_data, config, **kwargs)
+                except Exception as e:
+                    print(f"[ReservationWorker] [SECURE_INVOKE] {_tname} ERROR: {type(e).__name__}: {e}")
+                    raise
+
+            object.__setattr__(tool, "ainvoke", secured_ainvoke)
+
+        print(f"[ReservationWorker] 보안 래핑 완료: employee_number → {user_id}")
+        return tools
+
+    def build_system_prompt(
+        self,
+        context: Dict[str, Any],
+        memory_context: Optional[Dict[str, Any]] = None,
+        user_memory_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """사번을 시스템 프롬프트에 주입"""
+        prompt = super().build_system_prompt(context, memory_context, user_memory_context)
+
+        user_id = context.get("user_id", "")
+        if user_id and user_id != "anonymous":
+            prompt = prompt.replace("{employee_number}", user_id)
+        else:
+            prompt = prompt.replace(
+                "{employee_number}",
+                "UNKNOWN - 사용자 인증 정보를 확인할 수 없습니다. 예약 기능이 불가합니다."
+            )
+            print(f"[ReservationWorker] WARNING: No user_id available")
+
+        return prompt

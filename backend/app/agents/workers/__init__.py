@@ -14,6 +14,9 @@ from .approval_worker import ApprovalWorker
 from .xlsx_worker import XlsxWorker
 from .board_worker import BoardWorker
 from .outline_worker import OutlineWorker
+from .reservation_worker import ReservationWorker
+from .calendar_worker import CalendarWorker
+from .nas_worker import NASWorker
 from .direct_worker import DirectResponseWorker
 
 # Worker Registry
@@ -31,6 +34,9 @@ WORKER_REGISTRY = {
     "XlsxWorker": XlsxWorker,
     "BoardWorker": BoardWorker,
     "OutlineWorker": OutlineWorker,
+    "ReservationWorker": ReservationWorker,
+    "CalendarWorker": CalendarWorker,
+    "NASWorker": NASWorker,
     "DirectResponseWorker": DirectResponseWorker,
 }
 
@@ -57,6 +63,9 @@ __all__ = [
     "XlsxWorker",
     "BoardWorker",
     "OutlineWorker",
+    "ReservationWorker",
+    "CalendarWorker",
+    "NASWorker",
     "DirectResponseWorker",
     "WORKER_REGISTRY",
     "get_worker",

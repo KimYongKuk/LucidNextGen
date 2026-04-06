@@ -4,7 +4,7 @@ import asyncio
 import json
 import time
 import re
-from typing import Dict, AsyncIterator, List, Optional
+from typing import Callable, Dict, AsyncIterator, List, Optional
 
 from pathlib import Path
 
@@ -189,6 +189,112 @@ MULTI_STEP_TOOLS = {
 }
 
 
+# ============================================================================
+# Context-aware 도구 상태 메시지 생성
+# ============================================================================
+
+def _truncate(text: str, max_len: int = 20) -> str:
+    """표시용 텍스트 자르기 (초과 시 ... 추가)"""
+    if not text:
+        return ""
+    text = text.strip().replace("\n", " ")
+    return text[:max_len] + "..." if len(text) > max_len else text
+
+
+# 도구별 파라미터 기반 동적 메시지 생성기
+# 반환값이 None이면 TOOL_STATUS_MESSAGES 정적 메시지로 폴백
+TOOL_CONTEXT_GENERATORS: Dict[str, Callable[[Dict], Optional[str]]] = {
+    # 웹 검색
+    "tavily_search": lambda inp: (
+        f"🌌 '{_truncate(inp.get('query', ''))}' 에 대해 웹에서 검색하고 있습니다..."
+        if inp.get("query") else None
+    ),
+    # 사내 문서 RAG
+    "search_hr_docs": lambda inp: (
+        f"📋 '{_truncate(inp.get('query', ''))}' 관련 인사 문서를 찾아보고 있습니다..."
+        if inp.get("query") else None
+    ),
+    "search_ac_docs": lambda inp: (
+        f"💰 '{_truncate(inp.get('query', ''))}' 관련 재경 문서를 찾아보고 있습니다..."
+        if inp.get("query") else None
+    ),
+    "search_it_docs": lambda inp: (
+        f"💻 '{_truncate(inp.get('query', ''))}' 관련 IT 문서를 찾아보고 있습니다..."
+        if inp.get("query") else None
+    ),
+    "search_safety_docs": lambda inp: (
+        f"⚠️ '{_truncate(inp.get('query', ''))}' 관련 안전환경 문서를 찾아보고 있습니다..."
+        if inp.get("query") else None
+    ),
+    # 사용자 파일/워크스페이스
+    "search_user_files": lambda inp: (
+        f"📄 '{_truncate(inp.get('query', ''))}' 관련 파일을 검색하고 있습니다..."
+        if inp.get("query") else None
+    ),
+    "search_workspace_docs": lambda inp: (
+        f"📁 '{_truncate(inp.get('query', ''))}' 관련 워크스페이스 문서를 검색하고 있습니다..."
+        if inp.get("query") else None
+    ),
+    # IT VOC 검색
+    "search_it_voc": lambda inp: (
+        f"🔍 '{_truncate(inp.get('keyword', ''))}' 관련 IT 지원 사례를 찾아보고 있습니다..."
+        if inp.get("keyword") else None
+    ),
+    # 메일 검색
+    "search_mail": lambda inp: (
+        f"🔍 '{_truncate(inp.get('keyword', ''))}' 관련 메일을 검색하고 있습니다..."
+        if inp.get("keyword") else None
+    ),
+    # URL fetch
+    "fetch": lambda inp: (
+        "🌐 웹 페이지 내용을 가져오고 있습니다..."
+    ),
+}
+
+
+def get_tool_status_message(tool_name: str, tool_input: Dict) -> str:
+    """도구 파라미터 기반 context-aware 상태 메시지 생성
+
+    우선순위:
+    1. TOOL_CONTEXT_GENERATORS 동적 메시지 (파라미터 포함)
+    2. TOOL_STATUS_MESSAGES 정적 메시지
+    3. 제네릭 폴백
+    """
+    generator = TOOL_CONTEXT_GENERATORS.get(tool_name)
+    if generator:
+        try:
+            msg = generator(tool_input or {})
+            if msg:
+                return msg
+        except Exception:
+            pass
+    return TOOL_STATUS_MESSAGES.get(tool_name, f"🔧 작업을 수행하고 있습니다...")
+
+
+# 도구 완료 시 context-aware 메시지
+TOOL_COMPLETION_MESSAGES = {
+    "tavily_search": "🌌 웹 검색 결과를 정리하고 있습니다...",
+    "search_hr_docs": "📋 인사 문서 검색 결과를 정리하고 있습니다...",
+    "search_ac_docs": "💰 재경 문서 검색 결과를 정리하고 있습니다...",
+    "search_it_docs": "💻 IT 문서 검색 결과를 정리하고 있습니다...",
+    "search_safety_docs": "⚠️ 안전환경 문서 검색 결과를 정리하고 있습니다...",
+    "search_user_files": "📄 파일 검색 결과를 정리하고 있습니다...",
+    "search_workspace_docs": "📁 워크스페이스 문서 검색 결과를 정리하고 있습니다...",
+    "youtube_summarize": "📺 영상 분석 결과를 정리하고 있습니다...",
+    "search_it_voc": "🔍 IT 지원 사례 검색 결과를 정리하고 있습니다...",
+    "execute_it_voc_query": "🔍 IT 지원 사례 조회 결과를 정리하고 있습니다...",
+    "execute_org_chart_query": "🏢 조직도 결과를 정리하고 있습니다...",
+    "execute_acct_voc_query": "💰 회계 VOC 조회 결과를 정리하고 있습니다...",
+    "execute_approval_query": "📋 전자결재 조회 결과를 정리하고 있습니다...",
+    "search_mail": "🔍 메일 검색 결과를 정리하고 있습니다...",
+    "get_inbox_mail": "📬 받은편지함 조회 결과를 정리하고 있습니다...",
+    "get_sent_mail": "📤 보낸편지함 조회 결과를 정리하고 있습니다...",
+    "get_unread_mail": "📩 안 읽은 메일 조회 결과를 정리하고 있습니다...",
+    "get_mail_detail": "📧 메일 내용을 분석하고 있습니다...",
+    "fetch": "🌐 웹 페이지 내용을 분석하고 있습니다...",
+}
+
+
 async def stream_a2a_response(
     message: str,
     user_id: str,
@@ -217,17 +323,20 @@ async def stream_a2a_response(
     all_searched_corp_sources = []  # 검색된 모든 문서 (Tool 결과)
     chunk_count = 0
     first_chunk_time = None
-    tool_calls_made = []
+    tool_calls_made = []  # 호출된 도구 목록 (출처 수집 등에 사용)
+    tool_messages_sent: set = set()  # 이미 보낸 상태 메시지 (중복 억제용)
     tool_call_counts: Dict[str, int] = {}  # 도구별 호출 횟수 (루프 감지용)
     tool_end_time = None  # 도구 완료 시간 (지연 분석용)
     last_content_time = None  # 마지막 콘텐츠 청크 시간 (지연 분석용)
     needs_newline_after_tool = False  # 도구 완료 후 다음 텍스트 앞에 개행 삽입 필요 여부
     MAX_SAME_TOOL_CALLS = 50  # 같은 도구 최대 호출 횟수
 
-    # tool_call/tool_response 태그 필터링 상태
-    _inside_tool_tag = False  # <tool_call> 또는 <tool_response> 내부 여부
+    # tool_call/tool_response/HTML comment 태그 필터링 상태
+    _inside_tool_tag = False  # 태그 내부 여부
+    _inside_comment = False   # <!-- --> 코멘트 내부 여부 (FOLLOW_UP 캡처용)
     _tag_buffer = ""  # 부분 태그 감지용 버퍼
     _tag_filter_notified = False  # 필터링 시작 시 상태 메시지 전송 여부
+    _stripped_comments = []  # 스트리밍 중 제거된 HTML 코멘트 (FOLLOW_UP 후처리용)
 
     # 리포트용 수집 변수
     classified_intent = None
@@ -368,14 +477,24 @@ async def stream_a2a_response(
                 if tool_name in ("execute_it_voc_query", "execute_org_chart_query", "execute_acct_voc_query", "execute_approval_query") and tool_input:
                     sql_query = tool_input.get("sql_query", str(tool_input))
                     print(f"[SQL QUERY - {tool_name}] {sql_query}")
+                # 도구 호출 기록 (출처 수집 등에 사용)
                 if tool_name not in tool_calls_made:
                     tool_calls_made.append(tool_name)
-                    status_msg = TOOL_STATUS_MESSAGES.get(tool_name, f"🔧 {tool_name} 실행 중...")
+
+                # context-aware 상태 메시지 생성 (파라미터 기반)
+                print(f"[TOOL_STATUS_DEBUG] tool_name={tool_name}, tool_input={str(tool_input)[:200]}")
+                status_msg = get_tool_status_message(tool_name, tool_input)
+                print(f"[TOOL_STATUS_DEBUG] Generated message: {status_msg}")
+                if status_msg not in tool_messages_sent:
+                    tool_messages_sent.add(status_msg)
+                    print(f"[TOOL_STATUS] Sending: {status_msg}")
                     yield f"data: {json.dumps({'type': 'tool_status', 'tool': tool_name, 'message': status_msg})}\n\n"
-                elif tool_name in MULTI_STEP_TOOLS:
-                    # 다단계 도구: 반복 호출 시 진행 상태 표시
-                    step = tool_call_counts[tool_name]
-                    yield f"data: {json.dumps({'type': 'tool_status', 'tool': tool_name, 'message': f'📊 엑셀 작업 진행 중... (단계 {step})'})}\n\n"
+                else:
+                    print(f"[TOOL_STATUS_DEBUG] Skipped (already sent): {status_msg}")
+                    if tool_name in MULTI_STEP_TOOLS:
+                        # 다단계 도구: 반복 호출 시 진행 상태 표시
+                        step = tool_call_counts[tool_name]
+                        yield f"data: {json.dumps({'type': 'tool_status', 'tool': tool_name, 'message': f'📊 엑셀 작업 진행 중... (단계 {step})'})}\n\n"
 
                 # HEARTBEAT_TOOLS에 해당하면 하트비트 시작 (도구 실행 중 사용자 피드백)
                 if tool_name in HEARTBEAT_TOOLS and not heartbeat_active:
@@ -399,7 +518,11 @@ async def stream_a2a_response(
                 # 도구 결과 디버깅 로그
                 try:
                     output_str = tool_output.content if hasattr(tool_output, 'content') else str(tool_output)
-                    print(f"[TOOL_OUTPUT] {tool_name}: {output_str[:300]}")
+                    # 예약/캘린더 도구는 전문 로깅 (LLM 데이터 누락 디버깅)
+                    if tool_name in ("get_daily_reservations", "get_calendar_events"):
+                        print(f"[TOOL_OUTPUT] {tool_name}: (full, {len(output_str)} chars)\n{output_str}")
+                    else:
+                        print(f"[TOOL_OUTPUT] {tool_name}: {output_str[:300]}")
                 except Exception:
                     print(f"[TOOL_OUTPUT] {tool_name}: (cannot read output)")
 
@@ -417,7 +540,8 @@ async def stream_a2a_response(
 
                 # 응답 생성 중 상태 메시지 (다단계 도구는 중간 단계이므로 억제)
                 if tool_name not in MULTI_STEP_TOOLS:
-                    yield f"data: {json.dumps({'type': 'tool_status', 'tool': tool_name, 'message': '✨취합 완료! 응답 생성 중... 잠시만 기다려주세요.', 'status': 'generating'})}\n\n"
+                    completion_msg = TOOL_COMPLETION_MESSAGES.get(tool_name, '✨ 결과를 바탕으로 응답을 작성하고 있습니다...')
+                    yield f"data: {json.dumps({'type': 'tool_status', 'tool': tool_name, 'message': completion_msg, 'status': 'generating'})}\n\n"
 
                 # Corp 문서 출처 수집 (검색된 모든 문서 + 청크 텍스트)
                 if tool_name in CORP_RAG_TOOLS:
@@ -582,16 +706,13 @@ async def stream_a2a_response(
 
                         # <search> 태그 제거 (모델이 도구 대신 텍스트로 출력하는 경우 방지)
                         content = re.sub(r'<search>.*?</search>\s*', '', content)
-                        # 내부 마커 제거 (UI에 노출되지 않도록)
-                        content = re.sub(r'<!--HANDOFF:\w+-->\s*', '', content)
-                        content = re.sub(r'<!--NO_RESULTS-->\s*', '', content)
                         if not content:
                             continue
 
                         # 모델이 tool_use 대신 텍스트로 도구 호출을 출력하는 경우 필터링
-                        # 두 가지 형식 모두 처리: <tool_call>, <function_calls> 등
-                        _FILTER_OPEN_TAGS = ["<tool_call>", "<tool_response>", "<function_calls>", "<function_result>"]
-                        _FILTER_CLOSE_TAGS = ["</tool_call>", "</tool_response>", "</function_calls>", "</function_result>"]
+                        # HTML 코멘트(<!--...-->)도 필터링: HANDOFF, NO_RESULTS, FOLLOW_UP 마커 제거
+                        _FILTER_OPEN_TAGS = ["<tool_call>", "<tool_response>", "<function_calls>", "<function_result>", "<!--"]
+                        _FILTER_CLOSE_TAGS = ["</tool_call>", "</tool_response>", "</function_calls>", "</function_result>", "-->"]
                         _MAX_TAG_LEN = max(len(t) for t in _FILTER_OPEN_TAGS + _FILTER_CLOSE_TAGS)  # 18
 
                         filtered_content = ""
@@ -600,7 +721,11 @@ async def stream_a2a_response(
                             if _inside_tool_tag:
                                 # 종료 태그 감지
                                 if any(_tag_buffer.endswith(t) for t in _FILTER_CLOSE_TAGS):
+                                    # HTML 코멘트 캡처 (FOLLOW_UP 후처리용)
+                                    if _inside_comment and _tag_buffer.endswith("-->"):
+                                        _stripped_comments.append("<!--" + _tag_buffer)
                                     _inside_tool_tag = False
+                                    _inside_comment = False
                                     _tag_buffer = ""
                                 elif len(_tag_buffer) > 50000:
                                     # 안전장치: 종료 태그 없이 너무 길면 버림
@@ -616,8 +741,10 @@ async def stream_a2a_response(
                                     pre_tag = _tag_buffer[:-len(matched_tag)]
                                     filtered_content += pre_tag
                                     _inside_tool_tag = True
+                                    _inside_comment = (matched_tag == "<!--")
                                     _tag_buffer = ""
-                                    _tag_filter_notified = True
+                                    if not _inside_comment:
+                                        _tag_filter_notified = True
                                 elif len(_tag_buffer) > _MAX_TAG_LEN:
                                     filtered_content += _tag_buffer
                                     _tag_buffer = ""
@@ -722,8 +849,10 @@ async def stream_a2a_response(
                 source_map[key]["similarity"] = item["similarity"]
         yield f"data: {json.dumps({'type': 'corp_sources', 'sources': list(source_map.values())}, ensure_ascii=False)}\n\n"
 
-    # Follow-up suggestions 파싱 (LLM이 판단하여 마커 포함/생략)
-    follow_up_match = re.search(r'<!--FOLLOW_UP:\[(.+?)\]-->', collected_response)
+    # Follow-up suggestions 파싱
+    # 스트리밍 중 버퍼링으로 캡처된 코멘트에서 우선 검색, 없으면 collected_response 폴백
+    _follow_up_source = " ".join(_stripped_comments) if _stripped_comments else collected_response
+    follow_up_match = re.search(r'<!--FOLLOW_UP:\[(.+?)\]-->', _follow_up_source)
     if follow_up_match:
         try:
             collected_follow_ups = json.loads('[' + follow_up_match.group(1) + ']')

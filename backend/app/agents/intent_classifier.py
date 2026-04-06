@@ -49,7 +49,7 @@ INTENTS:
   Approval form names (양식명): WA전표품의, 품의서, 보고, 사전지출승인서, 예외처리 신청서, 인장 및 법인서류 요청서
 - board: Search company bulletin boards, notices, announcements, posts
   NOTE: Board posts/notices → "board". Company policies/regulations (not posts) → "corp_rag"
-- outline: Search or browse Outline Wiki documents, collections, recent wiki updates, OR publish uploaded files to wiki
+- outline: Search or browse L&F Wiki documents, collections, recent wiki updates, OR publish uploaded files to wiki
   Keywords: "위키", "wiki", "outline", "아웃라인", "위키 문서", "위키에서"
   Examples: "위키에서 보안 정책 찾아줘", "이 파일 위키에 올려줘", "PDF를 위키 문서로 만들어줘"
   NOTE: "위키" explicitly mentioned → "outline". General company docs without "위키" → "corp_rag"
@@ -60,7 +60,12 @@ INTENTS:
 - calendar: Calendar schedule management - view, create, delete events on groupware calendar
   Keywords: "일정", "캘린더", "스케줄", "빈 시간", "내 일정", "오늘 일정", "이번 주 일정"
   Examples: "오늘 일정 보여줘", "내일 오후에 미팅 잡아줘", "이번 주 일정 확인", "캘린더에 등록해줘", "일정 삭제해줘"
-  NOTE: "회의실 예약" → reservation (not calendar). "일정/캘린더/스케줄" → calendar
+  NOTE: "일정/캘린더/스케줄" → calendar. "회의실 예약"만 단독 → reservation.
+  IMPORTANT: 일정 + 회의실 예약이 함께 언급되면 → calendar (CalendarWorker가 회의실 예약도 처리 가능)
+- nas: Browse, search, download files from company NAS (shared storage)
+  Keywords: "NAS", "공유폴더", "부서간공유", "데이터서버", "파일서버", "공유드라이브"
+  Examples: "NAS에서 AI교육 자료 찾아줘", "부서간공유에 있는 파일 보여줘", "공유폴더에서 PDF 다운받아줘"
+  NOTE: "파일 업로드/분석" (user's uploaded files) → "user_files". NAS shared storage → "nas"
 - clarify: The query asks to FIND a specific item/document/record, but NONE of the above intents match
   ONLY use as last resort when: no domain keywords, not a knowledge question, not how-to — purely "find this thing" with no clue where
 - direct: General conversation, coding, translation, math, creative writing — no external info needed
@@ -147,6 +152,9 @@ EXAMPLES:
 - "이번 주 일정 확인해줘" → calendar
 - "내일 오후에 미팅 잡아줘" → calendar
 - "캘린더에서 일정 삭제해줘" → calendar
+- "NAS에서 교육 자료 찾아줘" → nas
+- "부서간공유에 있는 파일 보여줘" → nas
+- "공유폴더에서 PDF 다운받아줘" → nas
 - "OO 건 조회해줘" (no domain keyword at all) → clarify
 
 USER MESSAGE: {message}
@@ -272,7 +280,7 @@ class IntentClassifier:
             if re.search(board_keywords, message, re.IGNORECASE):
                 matched_intents.append(Intent.BOARD)
 
-        # Outline Wiki keywords
+        # L&F Wiki keywords
         outline_enabled = os.environ.get("OUTLINE_WORKER_ENABLED", "true").lower() == "true"
         if outline_enabled:
             outline_keywords = r'(위키|wiki|outline|아웃라인|위키\s?문서|위키에서)'
@@ -293,6 +301,13 @@ class IntentClassifier:
             if re.search(calendar_keywords, message, re.IGNORECASE):
                 matched_intents.append(Intent.CALENDAR)
 
+        # NAS keywords
+        nas_enabled = os.environ.get("NAS_WORKER_ENABLED", "true").lower() == "true"
+        if nas_enabled:
+            nas_keywords = r'(NAS|nas|공유\s?폴더|부서간\s?공유|데이터\s?서버|파일\s?서버|시놀로지|synology|공유\s?드라이브|NAS에서|NAS\s?파일)'
+            if re.search(nas_keywords, message, re.IGNORECASE):
+                matched_intents.append(Intent.NAS)
+
         # XLSX keywords (두 가지 패턴)
         xlsx_enabled = os.environ.get("XLSX_WORKER_ENABLED", "true").lower() == "true"
         if xlsx_enabled:
@@ -305,6 +320,12 @@ class IntentClassifier:
             # 오분류 위험이 높아 LLM 분류에 위임 (예: 이미지 첨부 + "채워줘" → xlsx로 오분류)
 
         # ========= Step 4: 판정 =========
+        # calendar + reservation 동시 매칭 → calendar 우선
+        # (CalendarWorker가 회의실 예약 도구도 보유하므로 통합 처리 가능)
+        if set(matched_intents) == {Intent.CALENDAR, Intent.RESERVATION}:
+            print(f"[INTENT] Quick: calendar+reservation both matched → calendar (can handle both)")
+            return Intent.CALENDAR
+
         if len(matched_intents) >= 2:
             print(f"[INTENT] Quick: multiple intents matched {[m.value for m in matched_intents]}, deferring to LLM")
             return None

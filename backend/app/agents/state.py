@@ -20,7 +20,10 @@ class Intent(str, Enum):
     APPROVAL = "approval"           # 전자결재 조회, 기안/결재/참조/부서문서
     XLSX = "xlsx"                   # Excel 파일 생성, 수정, 조작
     BOARD = "board"                 # 사내 게시판 검색, 공지사항 조회
-    OUTLINE = "outline"             # Outline Wiki 문서 검색/조회
+    OUTLINE = "outline"             # L&F Wiki 문서 검색/조회
+    RESERVATION = "reservation"     # 회의실/자산 예약 조회, 등록, 취소
+    CALENDAR = "calendar"           # 캘린더 일정 조회, 등록, 삭제
+    NAS = "nas"                     # NAS 공유 폴더 파일 탐색, 검색, 다운로드
     CLARIFY = "clarify"             # 어디서 조회해야 할지 모호한 요청 → 사용자에게 확인
     DIRECT = "direct"               # 일반 대화, 코딩, 번역 등
 
@@ -40,6 +43,9 @@ INTENT_TO_WORKER = {
     Intent.XLSX: "XlsxWorker",
     Intent.BOARD: "BoardWorker",
     Intent.OUTLINE: "OutlineWorker",
+    Intent.RESERVATION: "ReservationWorker",
+    Intent.CALENDAR: "CalendarWorker",
+    Intent.NAS: "NASWorker",
     Intent.CLARIFY: "DirectResponseWorker",
     Intent.DIRECT: "DirectResponseWorker",
 }
@@ -55,7 +61,10 @@ WORKER_CAPABILITIES = {
     Intent.IT_SUPPORT: "IT 지원 VOC 검색 (IT/보안 문의 사례)",
     Intent.ACCT_SUPPORT: "회계/재경 VOC 검색 (회계 문의 사례)",
     Intent.BOARD: "사내 게시판 검색 (공지사항, 게시글)",
-    Intent.OUTLINE: "Outline Wiki 문서 검색/조회 (위키 문서, 컬렉션 탐색)",
+    Intent.OUTLINE: "L&F Wiki 문서 검색/조회 (위키 문서, 컬렉션 탐색)",
+    Intent.RESERVATION: "회의실/자산 예약 조회, 빈 회의실 검색, 예약 등록/취소",
+    Intent.CALENDAR: "캘린더 일정 조회/등록/삭제, 빈 시간 검색, 타인 공개 캘린더 조회",
+    Intent.NAS: "NAS 공유 폴더 파일 탐색, 검색, 다운로드",
     Intent.XLSX: "엑셀 파일 생성/수정 (서식, 차트, 피벗테이블)",
     Intent.PPT_GENERATION: "PPT 프레젠테이션 생성",
     Intent.YOUTUBE: "YouTube 영상 요약",
