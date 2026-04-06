@@ -1,6 +1,7 @@
 """IT/보안 VOC Knowledge Base MCP 서버
 
-IT/보안 지원요청 해결 사례를 검색하는 MCP 서버입니다.
+IT/보안 지원요청 해결 사례를 검색하고,
+WORKS 서비스데스크(앱릿 934)에 VOC를 등록하는 MCP 서버입니다.
 v_works_app_934_data 뷰를 통해 과거 해결 사례를 조회합니다.
 
 참고: LFON은 사내 그룹웨어 시스템명입니다.
@@ -9,9 +10,13 @@ import sys
 import os
 import asyncpg
 import re
+import httpx
 from typing import Optional
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+
+from dotenv import load_dotenv
+load_dotenv()
 
 from fastmcp import FastMCP
 
@@ -20,8 +25,39 @@ mcp = FastMCP("IT VOC Knowledge Base Server v1")
 # PostgreSQL 연결 정보 (TIMS DB)
 DATABASE_URL = "postgres://ai_reader:Aitf1234$$@192.168.100.5:5432/tims"
 
+# LFON Works API 설정
+LFON_BASE_URL = os.getenv("LFON_BASE_URL", "https://lfon.landf.co.kr")
+LFON_WORKS_TOKEN = os.getenv("LFON_WORKS_TOKEN", "")
+LFON_SSO_USERNAME = os.getenv("LFON_SSO_USERNAME", "")
+LFON_SSO_PASSWORD = os.getenv("LFON_SSO_PASSWORD", "")
+WORKS_APPLET_ID = os.getenv("WORKS_APPLET_ID", "934")
+
+# 시스템명 → 시스템 코드 매핑 (앱릿 934 드롭박스 값)
+SYSTEM_NAME_TO_CODE = {
+    "SAP": "0", "LFON": "1", "DLP": "2", "DRM": "3",
+    "네트워크": "4", "SW": "5", "HW": "6", "기타": "7",
+    "HR": "8", "EHS": "9", "NAS": "13", "보안성 검토": "14",
+    "MDM": "15", "AD": "17", "MES": "18", "VPN": "19",
+}
+
+# 시스템 코드 → 담당 부서명 매핑
+SYSTEM_CODE_TO_DEPT = {
+    "0": "ERP파트",       "1": "DA파트",        "2": "보안기술팀",
+    "3": "보안기술팀",    "4": "IT인프라팀",    "5": "IT인프라팀",
+    "6": "IT인프라팀",    "8": "ERP파트",       "9": "DA파트",
+    "13": "IT인프라팀",   "14": "보안기술팀",   "15": "보안기술팀",
+    "17": "IT인프라팀",   "18": "DX파트",       "19": "보안기술팀",
+}
+
 # 전역 연결 풀
 _db_pool: Optional[asyncpg.Pool] = None
+
+# 사용자 정보 캐시 (프로세스 수명)
+# 사번 → {user_id, login_id, name, dept_id, dept_name, employee_number}
+_user_info_cache: dict = {}
+
+# SSO 쿠키 캐시
+_sso_cookies: Optional[dict] = None
 
 
 async def get_db_pool() -> asyncpg.Pool:
@@ -36,6 +72,147 @@ async def get_db_pool() -> asyncpg.Pool:
         )
         print("IT VOC DB 연결 풀 생성 완료", file=sys.stderr)
     return _db_pool
+
+
+async def _get_user_full_info(employee_number: str) -> Optional[dict]:
+    """사번으로 LFON 사용자 전체 정보 조회 (user_id, login_id, name, dept_id, dept_name)"""
+    if employee_number in _user_info_cache:
+        return _user_info_cache[employee_number]
+
+    try:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT user_id, login_id, name, dept_id, dept_name
+                FROM v_user_info_mapping
+                WHERE employee_number = $1
+                """,
+                employee_number,
+            )
+        if not row:
+            print(f"[IT VOC MCP] 사용자 미발견: {employee_number}", file=sys.stderr)
+            return None
+
+        info = {
+            "user_id": row["user_id"],
+            "login_id": row["login_id"],
+            "name": row["name"],
+            "dept_id": row["dept_id"],
+            "dept_name": row["dept_name"],
+            "employee_number": employee_number,
+        }
+        _user_info_cache[employee_number] = info
+        print(f"[IT VOC MCP] 사용자 조회: {employee_number} → {info['name']}({info['dept_name']})", file=sys.stderr)
+        return info
+    except Exception as e:
+        print(f"[IT VOC MCP] 사용자 조회 실패: {e}", file=sys.stderr)
+        return None
+
+
+async def _get_dept_members(dept_name: str) -> list[dict]:
+    """부서명으로 해당 부서의 모든 멤버 LFON 정보 조회"""
+    try:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT user_id, login_id, name, dept_id, dept_name, employee_number
+                FROM v_user_info_mapping
+                WHERE dept_name = $1
+                """,
+                dept_name,
+            )
+        members = [dict(r) for r in rows]
+        print(f"[IT VOC MCP] 부서 멤버 조회: {dept_name} → {len(members)}명", file=sys.stderr)
+        return members
+    except Exception as e:
+        print(f"[IT VOC MCP] 부서 멤버 조회 실패: {e}", file=sys.stderr)
+        return []
+
+
+async def _sso_login() -> Optional[dict]:
+    """LFON SSO 로그인하여 쿠키 확보 (캐싱)"""
+    global _sso_cookies
+    if _sso_cookies:
+        return _sso_cookies
+
+    if not LFON_SSO_USERNAME or not LFON_SSO_PASSWORD:
+        print("[IT VOC MCP] SSO 인증 정보 미설정", file=sys.stderr)
+        return None
+
+    try:
+        async with httpx.AsyncClient(
+            base_url=LFON_BASE_URL, timeout=30, verify=False, follow_redirects=True
+        ) as client:
+            resp = await client.post(
+                "/api/login",
+                json={
+                    "username": LFON_SSO_USERNAME,
+                    "password": LFON_SSO_PASSWORD,
+                    "captcha": "",
+                    "returnUrl": "",
+                },
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Requested-With": "XMLHttpRequest",
+                },
+            )
+            if resp.status_code == 200:
+                _sso_cookies = dict(resp.cookies)
+                print(f"[IT VOC MCP] SSO 로그인 성공: {LFON_SSO_USERNAME}", file=sys.stderr)
+                return _sso_cookies
+            else:
+                print(f"[IT VOC MCP] SSO 로그인 실패: status={resp.status_code}", file=sys.stderr)
+                return None
+    except Exception as e:
+        print(f"[IT VOC MCP] SSO 로그인 오류: {e}", file=sys.stderr)
+        return None
+
+
+def _build_assignee_obj(member: dict) -> dict:
+    """v_user_info_mapping 행을 LFON 담당자 객체로 변환"""
+    login_id = str(member["login_id"])
+    return {
+        "id": member["user_id"],
+        "name": member["name"],
+        "type": "MASTER",
+        "deptId": member["dept_id"],
+        "deptName": member["dept_name"],
+        "employeeNumber": member["employee_number"],
+        "loginId": login_id,
+        "email": f"{login_id}@landf.co.kr",
+        "originalEmail": f"{login_id}@landf.co.kr",
+        "companyName": "엘앤에프",
+    }
+
+
+# 앱릿 934 상태 전환 Action ID
+ACTION_ACCEPT = 2545       # 접수
+ACTION_ASSIGN = 2619       # 담당자지정
+
+
+async def _transition_status(doc_id: int, action_id: int, cookies: dict) -> bool:
+    """VOC 문서 상태 전환 (접수, 담당자지정 등)"""
+    try:
+        async with httpx.AsyncClient(
+            base_url=LFON_BASE_URL, timeout=15, verify=False, cookies=cookies,
+        ) as client:
+            resp = await client.put(
+                f"/api/works/applets/{WORKS_APPLET_ID}/docs/{doc_id}/actions/{action_id}",
+                json={},
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Requested-With": "XMLHttpRequest",
+                    "TimeZoneOffset": "540",
+                },
+            )
+            success = resp.status_code == 200
+            print(f"[IT VOC MCP] 상태전환 doc={doc_id} action={action_id}: {'성공' if success else f'실패({resp.status_code})'}", file=sys.stderr)
+            return success
+    except Exception as e:
+        print(f"[IT VOC MCP] 상태전환 오류 doc={doc_id} action={action_id}: {e}", file=sys.stderr)
+        return False
 
 
 @mcp.tool()
@@ -202,9 +379,239 @@ async def execute_it_voc_query(sql_query: str) -> str:
         return "\n".join(validation_steps) + f"\n\n쿼리 실행 실패: {str(e)}"
 
 
+@mcp.tool()
+async def register_works_voc(
+    title: str,
+    details: str,
+    system_name: str = "",
+    employee_number: str = "auto",
+) -> str:
+    """WORKS 서비스데스크(앱릿 934)에 IT 지원 요청(VOC)을 등록합니다.
+    사용자가 "등록해줘"라고 요청하면 이 도구를 호출하세요.
+    요청자 정보(사번, 이름, 부서)와 담당 부서원은 자동으로 처리됩니다.
+
+    title: 요청 요약 (1줄, 간결하게)
+    details: 요청 상세 내용
+    system_name: 관련 시스템명 (SAP, LFON, DLP, DRM, VPN, 네트워크, HW, SW, HR, EHS, MES, NAS, AD 등. 판단 불가 시 빈 문자열)
+    employee_number: 시스템이 자동 주입. 호출 시 생략하거나 아무 값이나 넣으세요.
+    """
+    from datetime import datetime, timezone, timedelta
+    KST = timezone(timedelta(hours=9))
+
+    print(f"\n[IT VOC MCP] WORKS VOC 등록 요청: employee={employee_number}, system={system_name}, title={title[:50]}", file=sys.stderr)
+
+    # 1. 요청자 정보 조회
+    requester = await _get_user_full_info(employee_number)
+    if not requester:
+        return f"오류: 사번 '{employee_number}'에 해당하는 사용자를 찾을 수 없습니다."
+
+    # 2. 시스템 코드 및 담당 부서 결정
+    system_code = SYSTEM_NAME_TO_CODE.get(system_name, "7")  # 기본: 기타
+    dept_name_for_assign = SYSTEM_CODE_TO_DEPT.get(system_code, "IT운영팀")
+    print(f"[IT VOC MCP] 시스템: {system_name} → 코드={system_code}, 담당부서={dept_name_for_assign}", file=sys.stderr)
+
+    # 3. 담당 부서원 조회
+    assignee_members = await _get_dept_members(dept_name_for_assign)
+    assignee_objs = [_build_assignee_obj(m) for m in assignee_members]
+    print(f"[IT VOC MCP] 담당자 {len(assignee_objs)}명: {[a['name'] for a in assignee_objs]}", file=sys.stderr)
+
+    # 4. 요청자/부서 객체 구성
+    requester_obj = {"id": requester["user_id"], "name": requester["name"]}
+    dept_obj = {"id": requester["dept_id"], "name": requester["dept_name"], "companyId": 10}
+
+    now_iso = datetime.now(KST).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+    # 5. SSO API 페이로드 구성 (앱릿 934)
+    values = {
+        "_awrf64ysv": "0",                  # 소속법인 (0=엘앤에프)
+        "_njwhedh92": [dept_obj],            # 요청자 부서
+        "_06n4tz3aa": [requester_obj],       # 요청자
+        "_33pws2fa7": "",                    # 연락처
+        "_7m22dqqax": "1",                   # 공개여부 (1=공개)
+        "_ywq5vff2f": [],                    # 긴급 (빈=일반)
+        "_x2j86b6hi": title,                 # 요약
+        "_7kcfuawt3": "",                    # 메뉴
+        "_qwczls8ll": details,               # 요청 상세
+        "_h8fx98gul": now_iso,               # 접수일
+        "_8uzx0pk1u": assignee_objs,         # 담당자
+        "_o9nnudfsi": system_code,           # 시스템 (코드 번호)
+        "_xfyfduuem": [],                    # 외근필요여부
+        "_0m979btld": None,                  # 외근 site
+        "_l56bfjohs": None,                  # LFON 하위분류
+        "_tw2ay456n": None,                  # NAS 하위분류
+        "_snapoud85": None,                  # 기타 하위분류
+        "_7gojr5dlx": None,                  # HW 하위분류
+        "_iya26h7j2": None,                  # SW 하위분류
+        "_yqof58gl7": None,                  # 네트워크 하위분류
+        "_bfycrfjyf": None,                  # SAP 하위분류
+        "_nv65dq0p6": None,                  # 보안성검토 하위분류
+        "_0rqgvi5po": "-999",                # 공수 계산 (미선택)
+        "_e2k5nsv8w": [0],                   # 작업내역 (0=기능문의)
+        "privateFlag": False,
+    }
+
+    payload = {
+        "appletId": WORKS_APPLET_ID,
+        "values": values,
+        # 상위 레벨 중복 필드 (LFON API 요구사항)
+        "_awrf64ysv": "0",
+        "_njwhedh92": [dept_obj],
+        "_06n4tz3aa": [requester_obj],
+        "_33pws2fa7": "",
+        "_7m22dqqax": "1",
+        "_ywq5vff2f": [],
+        "_qwczls8ll": details,
+        "_h8fx98gul": now_iso,
+        "_8uzx0pk1u": assignee_objs,
+        "_o9nnudfsi": system_code,
+        "_xfyfduuem": [],
+        "_0m979btld": None,
+        "_l56bfjohs": None,
+        "_tw2ay456n": None,
+        "_snapoud85": None,
+        "_7gojr5dlx": None,
+        "_iya26h7j2": None,
+        "_yqof58gl7": None,
+        "_bfycrfjyf": None,
+        "_nv65dq0p6": None,
+        "_0rqgvi5po": "-999",
+        "_e2k5nsv8w": [0],
+        "_x2j86b6hi": title,
+        "_7kcfuawt3": "",
+    }
+
+    # 6. SSO 로그인 → API 호출
+    cookies = await _sso_login()
+    if not cookies:
+        # SSO 실패 시 OpenAPI 폴백 (담당자 없이)
+        print("[IT VOC MCP] SSO 실패 → OpenAPI 폴백", file=sys.stderr)
+        return await _register_via_openapi(requester, title, details, system_name, system_code)
+
+    try:
+        async with httpx.AsyncClient(
+            base_url=LFON_BASE_URL, timeout=30, verify=False, follow_redirects=True,
+            cookies=cookies,
+        ) as client:
+            resp = await client.post(
+                f"/api/works/applets/{WORKS_APPLET_ID}/docs",
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Requested-With": "XMLHttpRequest",
+                },
+            )
+
+            # 세션 만료 시 재로그인 후 재시도
+            if resp.status_code in (401, 403):
+                global _sso_cookies
+                _sso_cookies = None
+                cookies = await _sso_login()
+                if cookies:
+                    resp = await client.post(
+                        f"/api/works/applets/{WORKS_APPLET_ID}/docs",
+                        json=payload,
+                        headers={
+                            "Content-Type": "application/json",
+                            "X-Requested-With": "XMLHttpRequest",
+                        },
+                    )
+
+            if resp.status_code == 200:
+                data = resp.json()
+                assignee_names = ", ".join(a["name"] for a in assignee_objs) if assignee_objs else "미지정"
+                print(f"[IT VOC MCP] VOC 등록 성공 (SSO): {requester['name']} - {title[:30]}, 담당: {assignee_names}", file=sys.stderr)
+                print(f"[IT VOC MCP] 응답 데이터: {str(data)[:500]}", file=sys.stderr)
+
+                # 7. 상태 전환: 접수 → 담당자지정
+                # 응답에서 doc_id 추출 (다양한 키 패턴 시도)
+                doc_id = (
+                    data.get("id") or data.get("docId") or data.get("doc_id")
+                    or data.get("documentId") or data.get("document_id")
+                )
+                # 중첩 구조 시도 (data.result.id 등)
+                if not doc_id and isinstance(data.get("result"), dict):
+                    doc_id = data["result"].get("id") or data["result"].get("docId")
+                if not doc_id and isinstance(data.get("data"), dict):
+                    doc_id = data["data"].get("id") or data["data"].get("docId")
+
+                # DEBUG: 응답 키를 도구 결과에 포함 (임시)
+                debug_keys = f"[DEBUG] response keys={list(data.keys())[:10]}, data={str(data)[:300]}"
+
+                if doc_id:
+                    print(f"[IT VOC MCP] 상태 전환 시작: doc_id={doc_id}", file=sys.stderr)
+                    # 접수
+                    await _transition_status(doc_id, ACTION_ACCEPT, cookies)
+                    # 담당자지정
+                    await _transition_status(doc_id, ACTION_ASSIGN, cookies)
+                else:
+                    print(f"[IT VOC MCP] doc_id를 응답에서 찾을 수 없음 (상태 전환 생략)", file=sys.stderr)
+
+                return (
+                    f"WORKS 서비스데스크에 등록이 완료되었습니다.\n"
+                    f"- 요청자: {requester['name']} ({requester['dept_name']})\n"
+                    f"- 제목: {title}\n"
+                    f"- 시스템: {system_name or '기타'}\n"
+                    f"- 담당부서: {dept_name_for_assign} ({len(assignee_objs)}명 배정)\n"
+                    f"LFON WORKS에서 진행 상황을 확인하실 수 있습니다.\n"
+                    f"\n{debug_keys}"
+                )
+            else:
+                print(f"[IT VOC MCP] VOC 등록 실패 (SSO): status={resp.status_code}, body={resp.text[:300]}", file=sys.stderr)
+                # SSO 실패 시 OpenAPI 폴백
+                return await _register_via_openapi(requester, title, details, system_name, system_code)
+
+    except Exception as e:
+        print(f"[IT VOC MCP] VOC 등록 오류 (SSO): {e}", file=sys.stderr)
+        return await _register_via_openapi(requester, title, details, system_name, system_code)
+
+
+async def _register_via_openapi(
+    requester: dict, title: str, details: str, system_name: str, system_code: str,
+) -> str:
+    """OpenAPI 폴백 (담당자 지정 불가, VOC 생성만)"""
+    params = {
+        "token": LFON_WORKS_TOKEN,
+        "username": requester["name"],
+        "dept": requester["dept_name"],
+        "_affiliation": "엘앤에프",
+        "_x2j86b6hi": title,
+        "_qwczls8ll": details,
+        "_7m22dqqax": "공개",
+        "_e2k5nsv8w": "기능문의",
+    }
+    if system_name:
+        params["_o9nnudfsi"] = system_name
+
+    try:
+        async with httpx.AsyncClient(timeout=30, verify=False) as client:
+            resp = await client.post(
+                f"{LFON_BASE_URL}/openapi/works/applets/doc",
+                params=params,
+            )
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("resultCode") == 0 or not data.get("resultCode"):
+                dept_name_for_assign = SYSTEM_CODE_TO_DEPT.get(system_code, "IT운영팀")
+                print(f"[IT VOC MCP] VOC 등록 성공 (OpenAPI 폴백)", file=sys.stderr)
+                return (
+                    f"WORKS 서비스데스크에 등록이 완료되었습니다.\n"
+                    f"- 요청자: {requester['name']} ({requester['dept_name']})\n"
+                    f"- 제목: {title}\n"
+                    f"- 시스템: {system_name or '기타'}\n"
+                    f"- 담당부서: {dept_name_for_assign} (자동 배정은 실패하여 수동 배정이 필요합니다)\n"
+                    f"LFON WORKS에서 진행 상황을 확인하실 수 있습니다."
+                )
+            else:
+                return f"WORKS 등록 실패: {data.get('resultMessage', '알 수 없는 오류')}"
+        else:
+            return f"WORKS 등록 실패: HTTP {resp.status_code}"
+    except Exception as e:
+        return f"WORKS 등록 중 오류 발생: {str(e)}"
+
+
 if __name__ == "__main__":
     print("IT VOC Knowledge Base MCP Server v1 시작...", file=sys.stderr)
-    print("이 서버는 IT/보안 지원요청 해결 사례를 검색합니다.", file=sys.stderr)
+    print("이 서버는 IT/보안 지원요청 해결 사례를 검색하고 WORKS VOC를 등록합니다.", file=sys.stderr)
     print("v_works_app_934_data 뷰를 통해 과거 VOC를 조회합니다.", file=sys.stderr)
     print("", file=sys.stderr)
 

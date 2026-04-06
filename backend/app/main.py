@@ -26,6 +26,8 @@ from app.utils.file_cleanup import file_cleanup_scheduler
 from app.utils.chromadb_cleanup import session_cleanup_scheduler
 from app.utils.report_email_scheduler import report_email_scheduler
 from app.utils.nightly_summary_scheduler import nightly_summary_scheduler
+from app.utils.voc_wiki_scheduler import voc_wiki_scheduler
+from app.utils.outline_sync_scheduler import outline_sync_scheduler
 
 load_dotenv()
 
@@ -153,6 +155,14 @@ async def lifespan(app: FastAPI):
     print("[STARTUP] Nightly Summary Scheduler starting...")
     nightly_summary_scheduler.start()
 
+    # IT VOC → 위키 자동 축적 스케줄러 시작
+    print("[STARTUP] VOC Wiki Sync Scheduler starting...")
+    voc_wiki_scheduler.start()
+
+    # Outline Wiki ↔ ChromaDB 시멘틱 검색 동기화 스케줄러 시작
+    print("[STARTUP] Outline Wiki Sync Scheduler starting...")
+    outline_sync_scheduler.start()
+
     startup_time = int((time.time() - startup_start) * 1000)
     print("="*70)
     print(f"[STARTUP] Server Ready! (Total time: {startup_time}ms)")
@@ -170,6 +180,8 @@ async def lifespan(app: FastAPI):
             session_cleanup_scheduler.stop()
             report_email_scheduler.stop()
             nightly_summary_scheduler.stop()
+            voc_wiki_scheduler.stop()
+            outline_sync_scheduler.stop()
             await close_mcp_adapter()
             # Notification service pool cleanup
             from app.services.notice_service import _notification_service
@@ -228,7 +240,7 @@ async def validation_exception_handler(request, exc: RequestValidationError):
         }
     )
 
-from app.api.routes import chat, upload, auth, workspace, chat_a2a, feedback, report, board
+from app.api.routes import chat, upload, auth, workspace, chat_a2a, feedback, report, board, openapi_compat, voc_wiki, outline_sync
 
 # 라우터 등록
 app.include_router(auth.router, prefix="/api", tags=["auth"])
@@ -239,6 +251,9 @@ app.include_router(workspace.router, prefix="/api", tags=["workspaces"])
 app.include_router(feedback.router, prefix="/api", tags=["feedback"])
 app.include_router(report.router, prefix="/api", tags=["report"])
 app.include_router(board.router, prefix="/api", tags=["notifications"])
+app.include_router(openapi_compat.router, tags=["OpenAI Compatible"])  # /v1/chat/completions (prefix 없음)
+app.include_router(voc_wiki.router, prefix="/api", tags=["voc-wiki"])
+app.include_router(outline_sync.router, prefix="/api", tags=["outline-sync"])
 
 @app.get("/")
 async def root():

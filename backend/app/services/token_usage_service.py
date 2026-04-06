@@ -38,6 +38,7 @@ class TokenUsageService:
         cache_write_tokens: int = 0,
         session_id: Optional[str] = None,
         user_id: Optional[str] = None,
+        api_key_name: Optional[str] = None,
     ):
         """토큰 사용량 버퍼에 추가. flush 스케줄링은 자동."""
         if input_tokens <= 0 and output_tokens <= 0:
@@ -46,6 +47,7 @@ class TokenUsageService:
         entry = {
             "session_id": session_id,
             "user_id": user_id,
+            "api_key_name": api_key_name,
             "caller": caller,
             "model_id": model_id,
             "model_type": self._detect_model_type(model_id),
@@ -85,9 +87,9 @@ class TokenUsageService:
             cursor = conn.cursor()
             cursor.executemany(
                 """INSERT INTO token_usage_log
-                   (session_id, user_id, caller, model_id, model_type,
+                   (session_id, user_id, api_key_name, caller, model_id, model_type,
                     input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
-                   VALUES (%(session_id)s, %(user_id)s, %(caller)s, %(model_id)s, %(model_type)s,
+                   VALUES (%(session_id)s, %(user_id)s, %(api_key_name)s, %(caller)s, %(model_id)s, %(model_type)s,
                            %(input_tokens)s, %(output_tokens)s, %(cache_read_tokens)s, %(cache_write_tokens)s)""",
                 batch,
             )

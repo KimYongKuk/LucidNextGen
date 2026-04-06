@@ -35,3 +35,5 @@ apscheduler==3.10.4
 matplotlib==3.9.0
 pandas==2.2.0
 excel-mcp-server==0.1.7
+PyJWT[crypto]>=2.10.1
+bcrypt==4.2.1

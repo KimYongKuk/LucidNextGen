@@ -1,6 +1,6 @@
-"""Outline Wiki MCP 서버
+"""L&F Wiki MCP 서버
 
-Outline Wiki REST API를 통해 문서를 검색/조회/생성합니다.
+L&F Wiki(Outline) REST API를 통해 문서를 검색/조회/생성합니다.
 - 문서 키워드 검색 (documents.search)
 - 최근 문서 목록 (documents.list)
 - 문서 상세 조회 (documents.info)
@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))  # file_extractor
 
 from fastmcp import FastMCP
 
-mcp = FastMCP("Outline Wiki Server")
+mcp = FastMCP("L&F Wiki Server")
 
 # ── 설정 ──────────────────────────────────────────────
 OUTLINE_API_URL = os.environ.get("OUTLINE_API_URL", "http://192.168.90.30:3003/api")
@@ -246,6 +246,45 @@ def _find_uploaded_file(user_id: str, filename: str) -> Optional[Path]:
     return None
 
 
+# ── 동의어 사전 (검색 확장) ────────────────────────────────────
+# 한글 구어체/약어 → 영문/정식 명칭 매핑
+# 쌍방향: 어느 쪽으로 검색해도 상대 키워드로 확장
+_SYNONYM_MAP: Dict[str, List[str]] = {
+    # 네트워크/무선
+    "와이파이": ["Wi-Fi", "WiFi", "무선"],
+    "wifi": ["Wi-Fi", "WiFi", "와이파이", "무선"],
+    "wi-fi": ["WiFi", "와이파이", "무선"],
+    "무선": ["Wi-Fi", "WiFi", "와이파이"],
+    # VPN
+    "vpn": ["VPN 접속", "원격접속", "SSL VPN"],
+    # 하드웨어
+    "노트북": ["PC", "랩탑", "laptop"],
+    "컴퓨터": ["PC", "데스크탑"],
+    # 소프트웨어
+    "오피스": ["Microsoft Office", "MS Office", "엑셀", "워드"],
+    "한글": ["HWP", "한컴오피스"],
+    # 인증/계정
+    "비번": ["비밀번호", "패스워드", "password"],
+    "비밀번호": ["패스워드", "password", "P/W"],
+    "otp": ["OTP", "이중인증", "2차인증"],
+}
+
+
+def _expand_synonyms(query: str) -> List[str]:
+    """쿼리에 동의어가 있으면 확장 키워드 목록 반환 (원본 제외)"""
+    query_lower = query.lower().strip()
+    expansions: List[str] = []
+
+    for key, synonyms in _SYNONYM_MAP.items():
+        if key in query_lower:
+            for syn in synonyms:
+                if syn.lower() not in query_lower:
+                    expansions.append(syn)
+            break  # 첫 매칭만 (중복 확장 방지)
+
+    return expansions
+
+
 # ── MCP 도구 (읽기) ──────────────────────────────────────────
 
 @mcp.tool()
@@ -255,7 +294,7 @@ async def search_documents(
     date_filter: str = "",
     limit: int = DEFAULT_SEARCH_LIMIT,
 ) -> str:
-    """Outline Wiki에서 키워드로 문서를 검색합니다.
+    """L&F Wiki에서 키워드로 문서를 검색합니다.
 
     Args:
         query: 검색 키워드
@@ -263,18 +302,34 @@ async def search_documents(
         date_filter: 기간 필터 - day, week, month, year (선택)
         limit: 최대 결과 수 (기본 10)
     """
-    payload: dict = {"query": query, "limit": min(limit, 25)}
-
+    base_payload: dict = {}
     if collection_id:
-        payload["collectionId"] = collection_id
+        base_payload["collectionId"] = collection_id
     if date_filter and date_filter in ("day", "week", "month", "year"):
-        payload["dateFilter"] = date_filter
+        base_payload["dateFilter"] = date_filter
 
+    # 1차: 원본 쿼리로 검색
+    payload = {**base_payload, "query": query, "limit": min(limit, 25)}
     result = await _outline_request("documents.search", payload)
     if "error" in result:
         return json.dumps(result, ensure_ascii=False)
 
     documents = result.get("data", [])
+
+    # 2차: 결과 부족 시 동의어 확장 검색
+    if len(documents) < 3:
+        synonyms = _expand_synonyms(query)
+        seen_ids = {item.get("document", {}).get("id") for item in documents}
+
+        for syn_query in synonyms[:2]:  # 최대 2개 동의어까지
+            syn_payload = {**base_payload, "query": syn_query, "limit": min(limit, 10)}
+            syn_result = await _outline_request("documents.search", syn_payload)
+            for item in syn_result.get("data", []):
+                doc_id = item.get("document", {}).get("id")
+                if doc_id and doc_id not in seen_ids:
+                    documents.append(item)
+                    seen_ids.add(doc_id)
+
     if not documents:
         return json.dumps({"message": f"'{query}' 검색 결과가 없습니다.", "count": 0}, ensure_ascii=False)
 
@@ -376,7 +431,7 @@ async def get_document(document_id: str) -> str:
 
 @mcp.tool()
 async def list_collections() -> str:
-    """Outline Wiki의 모든 컬렉션(카테고리) 목록을 조회합니다.
+    """L&F Wiki의 모든 컬렉션(카테고리) 목록을 조회합니다.
     각 컬렉션의 실제 문서 수를 포함합니다."""
     result = await _outline_request("collections.list", {"limit": 100})
     if "error" in result:
@@ -487,7 +542,7 @@ async def publish_file_to_wiki(
     parent_document_id: str = "",
     publish: bool = True,
 ) -> str:
-    """업로드한 파일(PDF/PPTX/DOCX)을 Outline Wiki에 원스텝으로 게시합니다.
+    """업로드한 파일(PDF/PPTX/DOCX)을 L&F Wiki에 원스텝으로 게시합니다.
 
     파일 파싱 → 이미지 병렬 업로드 → 마크다운 조립 → 문서 생성을 한 번에 수행합니다.
 
@@ -569,6 +624,105 @@ async def publish_file_to_wiki(
         "images_uploaded": img_ok,
         "images_failed": img_fail,
         "message": f"위키 문서 '{doc.get('title', '')}' 게시 완료 (이미지 {img_ok}개 포함)",
+    }, ensure_ascii=False, default=str)
+
+
+@mcp.tool()
+async def create_document(
+    title: str,
+    text: str,
+    collection_id: str,
+    parent_document_id: str = "",
+    publish: bool = True,
+) -> str:
+    """마크다운 텍스트로 L&F Wiki 문서를 직접 생성합니다.
+
+    파일 업로드 없이 텍스트만으로 위키 문서를 생성할 때 사용합니다.
+
+    Args:
+        title: 문서 제목
+        text: 마크다운 형식의 문서 본문
+        collection_id: 게시할 컬렉션 ID (list_collections 결과에서 선택)
+        parent_document_id: 상위 문서 ID (선택, 하위 문서로 생성 시)
+        publish: 즉시 게시 여부 (기본 True)
+    """
+    if not title or not title.strip():
+        return json.dumps({"error": "title은 필수입니다."}, ensure_ascii=False)
+    if not text or not text.strip():
+        return json.dumps({"error": "text는 필수입니다."}, ensure_ascii=False)
+    if not collection_id:
+        return json.dumps({"error": "collection_id는 필수입니다."}, ensure_ascii=False)
+
+    payload: dict = {
+        "title": title.strip(),
+        "text": text,
+        "collectionId": collection_id,
+        "publish": publish,
+    }
+    if parent_document_id:
+        payload["parentDocumentId"] = parent_document_id
+
+    result = await _outline_request("documents.create", payload)
+    if "error" in result:
+        return json.dumps(result, ensure_ascii=False)
+
+    doc = result.get("data", {})
+    if not doc:
+        return json.dumps({"error": "문서 생성 응답이 비어있습니다."}, ensure_ascii=False)
+
+    return json.dumps({
+        "id": doc.get("id", ""),
+        "title": doc.get("title", ""),
+        "url": doc.get("url", ""),
+        "collectionId": doc.get("collectionId", ""),
+        "createdAt": doc.get("createdAt", ""),
+        "message": f"위키 문서 '{doc.get('title', '')}' 생성 완료",
+    }, ensure_ascii=False, default=str)
+
+
+@mcp.tool()
+async def update_document(
+    document_id: str,
+    text: str,
+    title: str = "",
+    append: bool = False,
+) -> str:
+    """기존 L&F Wiki 문서의 내용을 수정합니다.
+
+    Args:
+        document_id: 수정할 문서 ID (UUID)
+        text: 새로운 마크다운 본문 (append=False면 전체 교체, True면 끝에 추가)
+        title: 문서 제목 변경 (선택, 빈 값이면 기존 제목 유지)
+        append: True면 기존 본문 끝에 추가, False면 전체 교체 (기본 False)
+    """
+    if not document_id:
+        return json.dumps({"error": "document_id는 필수입니다."}, ensure_ascii=False)
+    if not text or not text.strip():
+        return json.dumps({"error": "text는 필수입니다."}, ensure_ascii=False)
+
+    payload: dict = {
+        "id": document_id,
+        "text": text,
+        "append": append,
+    }
+    if title and title.strip():
+        payload["title"] = title.strip()
+
+    result = await _outline_request("documents.update", payload)
+    if "error" in result:
+        return json.dumps(result, ensure_ascii=False)
+
+    doc = result.get("data", {})
+    if not doc:
+        return json.dumps({"error": "문서 수정 응답이 비어있습니다."}, ensure_ascii=False)
+
+    return json.dumps({
+        "id": doc.get("id", ""),
+        "title": doc.get("title", ""),
+        "url": doc.get("url", ""),
+        "updatedAt": doc.get("updatedAt", ""),
+        "revision": doc.get("revision", 0),
+        "message": f"위키 문서 '{doc.get('title', '')}' 수정 완료",
     }, ensure_ascii=False, default=str)
 
 

@@ -1,16 +1,18 @@
-"""OutlineWorker - Outline Wiki 문서 검색/조회/생성 전담 Worker
+"""OutlineWorker - L&F Wiki 문서 검색/조회/생성 전담 Worker
 
 담당 도구:
   읽기: search_documents, list_recent_documents, get_document,
         list_collections, list_collection_documents
   쓰기: publish_file_to_wiki (파일 파싱→이미지 업로드→문서 생성 원스텝)
 
+하이브리드 검색: 키워드(Outline API) + 시멘틱(ChromaDB) → RRF 병합
 Sonnet 모델 사용: 문서 내용 요약 및 종합 응답 생성에 고품질 필요
 """
 
 import os
 import json
 import time
+import asyncio
 import logging
 from typing import List, Dict, Any, Optional, Set, Tuple
 
@@ -20,7 +22,12 @@ from .base_worker import BaseWorker
 
 logger = logging.getLogger(__name__)
 
-# Outline Wiki 베이스 URL (바로가기 링크 생성용)
+# 하이브리드 검색 활성화 여부
+HYBRID_SEARCH_ENABLED = os.environ.get("OUTLINE_HYBRID_SEARCH", "true").lower() == "true"
+# RRF(Reciprocal Rank Fusion) 상수 k (높을수록 하위 순위 영향 증가)
+RRF_K = 60
+
+# L&F Wiki 베이스 URL (바로가기 링크 생성용)
 OUTLINE_BASE_URL = os.environ.get("OUTLINE_API_URL", "http://192.168.90.30:3003/api").replace("/api", "")
 
 # 도구별 tool result 최대 길이
@@ -41,7 +48,8 @@ _ACCESS_CONTROLLED_READ_TOOLS = {
     "search_documents", "list_recent_documents", "get_document",
     "list_collections", "list_collection_documents",
 }
-_ACCESS_CONTROLLED_WRITE_TOOLS = {"publish_file_to_wiki"}
+# publish_file_to_wiki는 별도 if 분기에서 user_id 주입과 함께 처리
+_ACCESS_CONTROLLED_WRITE_TOOLS = {"create_document"}
 
 # 캐시: emp_code → (readable_ids, writable_ids, timestamp)
 _collection_access_cache: Dict[str, Tuple[Set[str], Set[str], float]] = {}
@@ -196,6 +204,67 @@ def _filter_result_by_access(
     return new_content
 
 
+def _rrf_merge(
+    keyword_results: List[dict],
+    semantic_results: List[dict],
+    k: int = RRF_K,
+) -> List[dict]:
+    """Reciprocal Rank Fusion으로 두 결과 리스트를 병합
+
+    RRF score = Σ 1/(k + rank_i)
+    양쪽에서 모두 발견된 문서가 상위로 올라감
+
+    Args:
+        keyword_results: 키워드 검색 결과 (id 필드 필요)
+        semantic_results: 시멘틱 검색 결과 (document_id 필드 필요)
+        k: RRF 상수
+
+    Returns:
+        RRF 스코어 순으로 정렬된 병합 결과
+    """
+    scores: Dict[str, float] = {}
+    doc_data: Dict[str, dict] = {}
+
+    # 키워드 결과 (Outline 형식: id 필드)
+    for rank, doc in enumerate(keyword_results):
+        doc_id = doc.get("id", "")
+        if not doc_id:
+            continue
+        scores[doc_id] = scores.get(doc_id, 0) + 1.0 / (k + rank + 1)
+        if doc_id not in doc_data:
+            doc_data[doc_id] = doc
+
+    # 시멘틱 결과 (ChromaDB 형식: document_id 필드)
+    for rank, hit in enumerate(semantic_results):
+        doc_id = hit.get("document_id", "")
+        if not doc_id:
+            continue
+        scores[doc_id] = scores.get(doc_id, 0) + 1.0 / (k + rank + 1)
+        if doc_id not in doc_data:
+            # 시멘틱 결과를 키워드 결과 형식으로 변환
+            doc_data[doc_id] = {
+                "id": doc_id,
+                "title": hit.get("title", ""),
+                "url": hit.get("url", ""),
+                "collectionId": hit.get("collection_id", ""),
+                "updatedAt": hit.get("updated_at", ""),
+                "snippet": hit.get("summary", ""),
+                "text_preview": hit.get("summary", ""),
+                "source": "semantic",
+            }
+
+    # RRF 스코어 순 정렬
+    sorted_ids = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
+
+    merged = []
+    for doc_id in sorted_ids:
+        entry = dict(doc_data[doc_id])
+        entry["rrf_score"] = round(scores[doc_id], 6)
+        merged.append(entry)
+
+    return merged
+
+
 class OutlineWorker(BaseWorker):
 
     @property
@@ -211,8 +280,10 @@ class OutlineWorker(BaseWorker):
             "get_document",
             "list_collections",
             "list_collection_documents",
-            # 쓰기 (원스텝 파이프라인)
+            # 쓰기
             "publish_file_to_wiki",
+            "create_document",
+            "update_document",
         ]
 
     @property
@@ -229,12 +300,19 @@ class OutlineWorker(BaseWorker):
         return """You are a wiki assistant for 루시드AI.
 
 ## ROLE
-사내 Outline Wiki의 문서를 검색·조회·요약하고, 사용자 파일을 위키 문서로 게시합니다.
+사내 L&F Wiki의 문서를 검색·조회·요약하고, 사용자 파일을 위키 문서로 게시합니다.
 
 ## CRITICAL RULES
 1. 먼저 한 문장으로 간단히 안내한 뒤, 사용자의 요청 의도에 맞는 도구를 호출하세요
 2. 각 도구는 동일 파라미터로 1번만 호출하세요 (재시도 금지)
 3. 문서 내용을 읽지 않고 추측하지 마세요 — 반드시 도구로 조회한 뒤 답변하세요
+4. **검색 키워드 최적화 (매우 중요)**:
+   - 사용자 입력을 그대로 검색하지 마세요. 핵심 명사/기술 용어만 추출하세요
+   - 구어체/불평("안돼", "안됨", "문제") 제거 → 기술 키워드만 사용
+   - 한글 키워드로 결과가 없으면, 영문/약어로 재검색하세요 (1회 허용)
+   - 예: "와이파이가 안돼" → query="Wi-Fi" 또는 "WiFi" (NOT "와이파이가 안돼")
+   - 예: "프린터 인쇄 안됨" → query="프린터" (NOT "프린터 인쇄 안됨")
+   - 예: "SAP 느려요" → query="SAP 성능" 또는 "SAP"
 
 ## AVAILABLE TOOLS (읽기)
 - search_documents: 키워드로 문서 검색 (query 필수, collection_id/date_filter 선택)
@@ -250,8 +328,18 @@ class OutlineWorker(BaseWorker):
   - collection_id: 게시할 컬렉션 ID (필수)
   - title: 문서 제목 (선택, 빈 값이면 파일명 사용)
   - parent_document_id: 상위 문서 ID (선택)
+- create_document: 마크다운 텍스트로 위키 문서 직접 생성 (파일 없이)
+  - title: 문서 제목 (필수)
+  - text: 마크다운 본문 (필수)
+  - collection_id: 게시할 컬렉션 ID (필수)
+  - parent_document_id: 상위 문서 ID (선택)
+- update_document: 기존 위키 문서 내용 수정
+  - document_id: 수정할 문서 ID (필수)
+  - text: 새 마크다운 본문 (필수)
+  - title: 제목 변경 (선택)
+  - append: True면 기존 본문 끝에 추가 (기본 False=전체 교체)
 
-## TOOL SELECTION GUIDE (읽기)
+## TOOL SELECTION GUIDE
 | 사용자 요청 | 도구 |
 |------------|------|
 | "OO 관련 문서 찾아줘" | search_documents |
@@ -261,6 +349,9 @@ class OutlineWorker(BaseWorker):
 | "인프라 컬렉션에 뭐가 있어?" | list_collection_documents |
 | "최근 일주일간 수정된 문서" | list_recent_documents(sort=updatedAt) |
 | "OO 문서 요약해줘" | search_documents → get_document → 요약 |
+| "이 내용을 위키에 올려줘" (파일 없음) | create_document |
+| "위키 문서 수정해줘" | get_document → update_document |
+| "이 파일을 위키에 올려줘" (파일 있음) | publish_file_to_wiki |
 
 ## MULTI-STEP WORKFLOWS (읽기)
 
@@ -275,28 +366,30 @@ class OutlineWorker(BaseWorker):
 2. list_collection_documents로 해당 컬렉션 문서 트리 조회
 3. 필요 시 get_document로 개별 문서 조회
 
-## DOCUMENT CREATION WORKFLOW (파일 → 위키 게시)
+## DOCUMENT CREATION WORKFLOW
 
+### A. 파일 → 위키 게시 (publish_file_to_wiki)
 사용자가 업로드한 파일을 위키에 올려달라고 요청하면:
+1. list_collections 호출 → 사용자에게 컬렉션 선택 요청 (자동 선택 금지)
+2. 사용자 선택 후 publish_file_to_wiki 호출 (user_id는 시스템 자동 주입)
+3. 결과 링크 안내
 
-### Step 1: 컬렉션 선택
-- list_collections 호출하여 컬렉션 목록을 가져옵니다
-- 사용자에게 번호 목록으로 보여주고 **반드시 선택을 요청**하세요 (자동 선택 금지)
-- "어떤 컬렉션에 올릴까요?" 라고 물어보세요
+### B. 텍스트 → 위키 직접 생성 (create_document)
+파일 없이 대화 내용이나 텍스트를 위키에 올려달라고 요청하면:
+1. list_collections 호출 → 사용자에게 컬렉션 선택 요청 (자동 선택 금지)
+2. 사용자 선택 후 create_document 호출 (title + 마크다운 text + collection_id)
+3. 결과 링크 안내
 
-### Step 2: 게시
-- 사용자가 컬렉션을 선택하면 publish_file_to_wiki 호출
-- 파일 파싱, 이미지 업로드, 문서 생성이 한 번에 처리됩니다
-- user_id는 시스템이 자동으로 주입합니다
-
-### Step 3: 결과 안내
-- 생성된 문서의 바로가기 링크를 안내합니다
-- "위키에 문서를 게시했습니다: [문서 제목](링크)"
-- 이미지 업로드 실패가 있으면 알려주세요
+### C. 기존 문서 수정 (update_document)
+위키 문서 내용을 수정해달라고 요청하면:
+1. search_documents 또는 get_document로 대상 문서 확인
+2. update_document 호출 (append=True면 끝에 추가, False면 전체 교체)
+3. 결과 안내
 
 ### 주의사항
-- 추출 실패 시 사용자에게 오류 내용을 알리고 다른 방법을 제안하세요
-- 파일명이 여러 개인 경우 사용자에게 어떤 파일을 올릴지 확인하세요
+- 추출/생성 실패 시 오류 내용을 알리고 다른 방법을 제안하세요
+- 파일명이 여러 개인 경우 어떤 파일을 올릴지 확인하세요
+- 컬렉션은 반드시 사용자가 선택하게 하세요
 
 ## RESPONSE FORMAT
 1. 한국어로 답변
@@ -380,8 +473,89 @@ class OutlineWorker(BaseWorker):
 
                 object.__setattr__(tool, "ainvoke", secured_ainvoke)
 
+            elif tool.name in _ACCESS_CONTROLLED_WRITE_TOOLS:
+                # 쓰기 도구 (create_document 등): 쓰기 권한 검증만 (user_id 주입 불필요)
+                async def secured_ainvoke(
+                    input_data, config=None, *,
+                    _original=original_ainvoke,
+                    _uid=user_id,
+                    _tname=tool.name, **kwargs
+                ):
+                    access = await _get_collection_access(_uid)
+                    if access is not None:
+                        _, writable = access
+                        args = (input_data.get("args", {})
+                                if isinstance(input_data, dict) and "args" in input_data
+                                else input_data if isinstance(input_data, dict) else {})
+                        coll_id = args.get("collection_id", "")
+                        if coll_id and coll_id not in writable:
+                            err = json.dumps(
+                                {"error": "해당 컬렉션에 대한 쓰기 권한이 없습니다."},
+                                ensure_ascii=False,
+                            )
+                            return ToolMessage(
+                                content=err,
+                                tool_call_id=input_data.get("id", ""),
+                                name=_tname,
+                            )
+
+                    result = await _original(input_data, config, **kwargs)
+                    return _truncate_outline_result(result, _tname)
+
+                object.__setattr__(tool, "ainvoke", secured_ainvoke)
+
+            elif tool.name == "search_documents":
+                # 하이브리드 검색: 키워드(MCP) + 시멘틱(ChromaDB) → RRF 병합
+                async def secured_ainvoke(
+                    input_data, config=None, *,
+                    _original=original_ainvoke,
+                    _emp=user_id,
+                    _tname=tool.name, **kwargs
+                ):
+                    access = await _get_collection_access(_emp)
+
+                    # Pre-check: collection_id 접근 권한 검증
+                    if access is not None:
+                        readable, _ = access
+                        args = (input_data.get("args", {})
+                                if isinstance(input_data, dict) and "args" in input_data
+                                else input_data if isinstance(input_data, dict) else {})
+                        coll_id = args.get("collection_id", "")
+                        if coll_id and coll_id not in readable:
+                            err = json.dumps(
+                                {"error": "해당 컬렉션에 대한 접근 권한이 없습니다."},
+                                ensure_ascii=False,
+                            )
+                            return ToolMessage(
+                                content=err,
+                                tool_call_id=input_data.get("id", ""),
+                                name=_tname,
+                            )
+
+                    # 키워드 검색 (MCP)
+                    result = await _original(input_data, config, **kwargs)
+                    result = _truncate_outline_result(result, _tname)
+
+                    # Post-filter: 접근 불가 항목 제거
+                    if access is not None:
+                        readable, writable = access
+                        result = _filter_result_by_access(
+                            result, readable, writable, _tname,
+                        )
+
+                    # 하이브리드 검색: 시멘틱 결과와 RRF 병합
+                    if HYBRID_SEARCH_ENABLED:
+                        result = await _hybrid_merge_search(
+                            result, input_data, _tname,
+                            readable_ids=access[0] if access else None,
+                        )
+
+                    return result
+
+                object.__setattr__(tool, "ainvoke", secured_ainvoke)
+
             elif tool.name in _ACCESS_CONTROLLED_READ_TOOLS:
-                # 읽기 도구: pre-check (collection_id 입력 검증) + post-filter (결과 필터링)
+                # 읽기 도구 (search_documents 제외): pre-check + post-filter
                 async def secured_ainvoke(
                     input_data, config=None, *,
                     _original=original_ainvoke,
@@ -392,7 +566,7 @@ class OutlineWorker(BaseWorker):
 
                     # Pre-check: collection_id 입력이 있는 도구는 사전 차단
                     if access is not None and _tname in (
-                        "list_collection_documents", "search_documents",
+                        "list_collection_documents",
                         "list_recent_documents",
                     ):
                         readable, _ = access
@@ -438,6 +612,92 @@ class OutlineWorker(BaseWorker):
                 object.__setattr__(tool, "ainvoke", secured_ainvoke)
 
         return tools
+
+
+async def _hybrid_merge_search(
+    keyword_result,
+    input_data: dict,
+    tool_name: str,
+    readable_ids: Optional[Set[str]] = None,
+):
+    """키워드 검색 결과에 시멘틱 검색 결과를 RRF 병합
+
+    Args:
+        keyword_result: MCP search_documents 결과 (ToolMessage 또는 str)
+        input_data: 원본 tool call input (query 추출용)
+        tool_name: 도구명
+        readable_ids: 접근 가능 컬렉션 ID 집합
+
+    Returns:
+        RRF 병합된 결과 (ToolMessage 또는 str)
+    """
+    try:
+        from app.services.outline_sync_service import get_outline_sync_service
+        sync_service = get_outline_sync_service()
+
+        # 쿼리 추출
+        args = (input_data.get("args", {})
+                if isinstance(input_data, dict) and "args" in input_data
+                else input_data if isinstance(input_data, dict) else {})
+        query = args.get("query", "")
+        if not query:
+            return keyword_result
+
+        # 시멘틱 검색 (ChromaDB, 접근 가능 컬렉션만)
+        collection_ids = list(readable_ids) if readable_ids else None
+        semantic_hits = await sync_service.semantic_search(
+            query=query,
+            n_results=10,
+            collection_ids=collection_ids,
+        )
+
+        if not semantic_hits:
+            return keyword_result
+
+        # 키워드 결과 파싱
+        content = (keyword_result.content
+                   if isinstance(keyword_result, ToolMessage)
+                   else keyword_result if isinstance(keyword_result, str)
+                   else str(keyword_result))
+        try:
+            kw_data = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            return keyword_result
+
+        if "error" in kw_data:
+            # 키워드 검색 실패 → 시멘틱 결과만 반환
+            output = []
+            for hit in semantic_hits[:10]:
+                output.append({
+                    "id": hit["document_id"],
+                    "title": hit.get("title", ""),
+                    "url": hit.get("url", ""),
+                    "collectionId": hit.get("collection_id", ""),
+                    "updatedAt": hit.get("updated_at", ""),
+                    "snippet": hit.get("summary", ""),
+                    "text_preview": hit.get("summary", ""),
+                    "search_type": "semantic",
+                })
+            merged_data = {"count": len(output), "results": output}
+        else:
+            kw_results = kw_data.get("results", [])
+            merged = _rrf_merge(kw_results, semantic_hits)
+            merged_data = {"count": len(merged), "results": merged[:15]}
+
+        merged_json = json.dumps(merged_data, ensure_ascii=False, default=str)
+
+        if isinstance(keyword_result, ToolMessage):
+            return ToolMessage(
+                content=merged_json,
+                tool_call_id=keyword_result.tool_call_id,
+                name=getattr(keyword_result, "name", None) or tool_name,
+            )
+        return merged_json
+
+    except Exception as e:
+        # 시멘틱 검색 실패 시 키워드 결과 그대로 반환 (graceful degradation)
+        logger.warning(f"[OutlineWorker] 하이브리드 검색 실패, 키워드 결과만 반환: {e}")
+        return keyword_result
 
 
 def _truncate_outline_result(result, tool_name: str):
