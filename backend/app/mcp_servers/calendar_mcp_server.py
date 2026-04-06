@@ -596,7 +596,9 @@ async def get_calendar_events(
             location = event.get("location", "")
             attendees = event.get("attendees", [])
 
-            line = f"  - {time_str} **{summary}**"
+            event_id = event.get("id", "")
+            cal_id_display = event.get("calendarId", "")
+            line = f"  - {time_str} **{summary}** (eventId={event_id}, calendarId={cal_id_display})"
             if location:
                 line += f" | 📍{location}"
             if attendees:
@@ -727,6 +729,7 @@ async def create_event(
     recurrence: str = "",
     attendee_emails: str = "",
     attendee_names: str = "",
+    reminder_minutes: str = "30",
 ) -> str:
     """내 캘린더에 일정을 등록합니다.
     반드시 사용자에게 등록 내용을 확인받은 후 호출하세요.
@@ -745,6 +748,7 @@ async def create_event(
         recurrence: 반복 설정 (RFC5545, 예: "FREQ=WEEKLY;UNTIL=20260601", 빈 값이면 반복 없음)
         attendee_emails: 외부 참석자 이메일 (콤마 구분, 선택)
         attendee_names: 사내 참석자 이름 (콤마 구분, 예: "장욱진,김민지"). 이름으로 자동 검색하여 GO 계정 연결
+        reminder_minutes: 알림 시간 (분 단위, 콤마 구분으로 복수 가능, 예: "10,30". 기본: "30". "0"이면 알림 없음)
 
     Returns:
         등록 결과 (성공 시 일정 상세, 실패 시 오류)
@@ -847,7 +851,7 @@ async def create_event(
             "position": "",
         },
         "attendees": attendees,
-        "reminders": [{"time": 30, "type": "minute", "method": "notification"}],
+        "reminders": _parse_reminders(reminder_minutes),
         "timeZoneOffset": "+09:00",
         "pushNoti": True,
         "mailNoti": True,
@@ -915,6 +919,8 @@ async def update_event(
     visibility: str = "",
     add_attendee_names: str = "",
     remove_attendee_names: str = "",
+    recurrence: str = "",
+    reminder_minutes: str = "",
 ) -> str:
     """기존 일정을 수정합니다.
     변경할 필드만 지정하세요. 빈 문자열은 변경하지 않음을 의미합니다.
@@ -927,11 +933,13 @@ async def update_event(
         summary: 변경할 제목 (빈 문자열이면 유지)
         start_time: 변경할 시작 시간 (ISO 형식, 빈 문자열이면 유지)
         end_time: 변경할 종료 시간 (ISO 형식, 빈 문자열이면 유지)
-        is_allday: 종일 일정 여부
+        is_allday: 종일 일정으로 변경 (True 시 timeType="allday"로 변경)
         location: 변경할 장소 (빈 문자열이면 유지)
         description: 변경할 설명 (빈 문자열이면 유지)
         visibility: 변경할 공개 설정 (빈 문자열이면 유지)
         add_attendee_names: 추가할 참석자 이름 (콤마 구분)
+        recurrence: 반복 설정 변경 (RFC5545, 예: "FREQ=WEEKLY;UNTIL=20260601". "NONE"이면 반복 해제)
+        reminder_minutes: 알림 변경 (분 단위, 콤마 구분, 예: "10,30". "0"이면 알림 제거)
         remove_attendee_names: 제거할 참석자 이름 (콤마 구분)
 
     Returns:
@@ -981,9 +989,27 @@ async def update_event(
     if visibility:
         updated["visibility"] = visibility
 
-    # timeType 처리
-    if start_time or end_time:
-        updated["timeType"] = "allday" if is_allday else "timed"
+    # timeType 처리: 종일 ↔ 시간 지정 전환 또는 시간 변경 시
+    if is_allday:
+        updated["timeType"] = "allday"
+        # 종일로 변경 시 시간도 맞춤
+        if start_time and "T" not in start_time:
+            updated["startTime"] = f"{start_time}T00:00:00.000+09:00"
+        if end_time and "T" not in end_time:
+            updated["endTime"] = f"{end_time}T23:59:59.999+09:00"
+    elif start_time or end_time:
+        updated["timeType"] = "timed"
+
+    # 반복 설정 변경
+    if recurrence:
+        if recurrence.upper() == "NONE":
+            updated.pop("recurrence", None)  # 반복 해제
+        else:
+            updated["recurrence"] = recurrence
+
+    # 알림 변경
+    if reminder_minutes:
+        updated["reminders"] = _parse_reminders(reminder_minutes)
 
     # 참석자 추가
     not_found_names = []
@@ -1114,6 +1140,24 @@ async def delete_event(
 
 
 # ── 포맷 헬퍼 ─────────────────────────────────────────
+
+def _parse_reminders(reminder_minutes: str) -> list:
+    """알림 시간 문자열을 API 포맷으로 변환
+
+    Args:
+        reminder_minutes: "10,30" 또는 "30" 또는 "0" (알림 없음)
+    Returns:
+        [{"time": 10, "type": "minute", "method": "notification"}, ...]
+    """
+    if not reminder_minutes or reminder_minutes.strip() == "0":
+        return []
+    reminders = []
+    for m in reminder_minutes.split(","):
+        m = m.strip()
+        if m.isdigit() and int(m) > 0:
+            reminders.append({"time": int(m), "type": "minute", "method": "notification"})
+    return reminders
+
 
 def _format_time_range(start_time: str, end_time: str, time_type: str = "") -> str:
     """시간 범위를 읽기 좋은 형태로 포맷"""
