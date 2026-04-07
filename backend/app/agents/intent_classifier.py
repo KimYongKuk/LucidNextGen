@@ -375,12 +375,9 @@ class IntentClassifier:
                 print(f"[INTENT] Override: user_files -> direct (no session files, workspace_has_files={workspace_has_files})")
                 return Intent.DIRECT
 
-        # 워크스페이스에 파일이 있는데 direct로 분류되면 → user_files로 오버라이드
-        # (워크스페이스에 문서가 있으면 문서 기반 응답이 우선)
-        workspace_has_files = context.get("workspace_has_files", False)
-        if workspace_has_files and intent == Intent.DIRECT:
-            print(f"[INTENT] Override: direct -> user_files (workspace has files, ensure document-grounded response)")
-            return Intent.USER_FILES
+        # 워크스페이스 컨텍스트(파일, instructions)는 BaseWorker.build_system_prompt에서
+        # 모든 워커에 자동 주입됨. 인텐트를 강제 변경할 필요 없음.
+        # (이전: workspace_has_files and direct → user_files 강제 오버라이드 — 시각화 등 비검색 요청 깨짐)
 
         # NOTE: corp_rag/it_support/acct_support 등 전문 인텐트는 더 이상 user_files로
         # 강제 오버라이드하지 않음. orchestrator에서 workspace 모드일 때

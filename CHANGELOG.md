@@ -6,6 +6,8 @@
 ---
 
 ## [2026-04-07]
+- **수정** [IntentClassifier/DirectWorker] 워크스페이스 인텐트 오버라이드 제거 — `direct→user_files` 강제 전환 제거, DirectResponseWorker에 `search_workspace_docs` 공유 도구 추가, 워크스페이스 컨텍스트는 BaseWorker에서 모든 워커에 자동 주입 → [상세](docs/history/2026-04-07_워크스페이스-인텐트-오버라이드-제거.md)
+- **추가** [설계] 화학물질 구매 검토 프로세스 자동화 — 전자결재 감지→MSDS 파싱→Outline 위키 자동 등록→검토→결재 기안 API 자동 상신, DB INSERT 0건/공식 API only → [상세](docs/화학물질_구매검토_자동화_설계.md)
 - **추가** [UserFilesWorker] 파일 전문 전달 기능(Fulltext) — 업로드 시 전체 텍스트 디스크 보관(`data/fulltext/`), `get_uploaded_file_content` MCP 도구(50,000자 제한), 요약/번역은 전문 전달·검색은 기존 ChromaDB 유지 → [상세](docs/history/2026-04-07_Fulltext-전문전달.md)
 
 ## [2026-04-06]
