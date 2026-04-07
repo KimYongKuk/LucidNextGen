@@ -180,12 +180,17 @@ export async function POST(request: Request) {
             }
           }
         } catch (error) {
-          console.error("[ROUTE] Stream processing error:", error);
-          writer.write({
-            type: "text-delta",
-            delta: `Stream error: ${String(error)}`,
-            id: generateUUID(),
-          });
+          // AbortError는 사용자가 중단한 것이므로 에러 표시하지 않음
+          if (error instanceof Error && (error.name === 'AbortError' || error.message.includes('aborted'))) {
+            console.log("[ROUTE] Stream aborted by client");
+          } else {
+            console.error("[ROUTE] Stream processing error:", error);
+            writer.write({
+              type: "text-delta",
+              delta: `Stream error: ${String(error)}`,
+              id: generateUUID(),
+            });
+          }
         }
 
         console.log("[ROUTE] Execute completed");

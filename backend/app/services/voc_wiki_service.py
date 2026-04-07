@@ -497,6 +497,17 @@ class VocWikiService:
                 return node["id"]
         return None
 
+    async def _get_document_updated_at(self, doc_id: str) -> str:
+        """문서의 updatedAt 날짜(YYYY-MM-DD) 조회"""
+        result = await self._outline_request("documents.info", {"id": doc_id})
+        if "error" in result:
+            return "-"
+        updated_at = result.get("data", {}).get("updatedAt", "")
+        if updated_at:
+            # ISO 8601 "2026-04-07T08:15:35.000Z" → "2026-04-07"
+            return updated_at[:10]
+        return "-"
+
     async def _update_system_toc(self, system_doc_id: str, collection_id: str,
                                  system_name: str) -> None:
         """시스템 부모 문서의 목차 갱신"""
@@ -507,13 +518,18 @@ class VocWikiService:
         if not children:
             return
 
+        # 각 자식 문서의 updatedAt 병렬 조회
+        update_dates = await asyncio.gather(
+            *[self._get_document_updated_at(child["id"]) for child in children]
+        )
+
         rows = ""
-        for child in children:
+        for child, updated_date in zip(children, update_dates):
             topic_title = child["title"]
             if " - " in topic_title:
                 topic_title = topic_title.split(" - ", 1)[1]
             doc_url = child.get("url", "")
-            rows += f"| [{topic_title}]({doc_url}) | - |\n"
+            rows += f"| [{topic_title}]({doc_url}) | {updated_date} |\n"
 
         today_str = date.today().strftime("%Y-%m-%d")
         toc_md = TOC_TEMPLATE.format(

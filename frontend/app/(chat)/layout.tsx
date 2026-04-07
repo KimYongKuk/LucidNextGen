@@ -25,10 +25,17 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 async function SidebarWrapper({ children }: { children: React.ReactNode }) {
   const cookieStore = await cookies();
   const isCollapsed = cookieStore.get("sidebar_state")?.value !== "true";
+  const empno = cookieStore.get("empno")?.value;
+  const userName = cookieStore.get("user_name")?.value;
+  const loginId = cookieStore.get("login_id")?.value;
+
+  const user = empno
+    ? { id: empno, email: loginId || empno, name: userName || empno }
+    : undefined;
 
   return (
     <SidebarProvider defaultOpen={!isCollapsed}>
-      <AppSidebar user={undefined} />
+      <AppSidebar user={user} />
       <SidebarInset>{children}</SidebarInset>
     </SidebarProvider>
   );

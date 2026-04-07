@@ -27,9 +27,9 @@ async function ChatPage({ params }: { params: Promise<{ id: string }> }) {
     // Use relative URL for server-side fetch to Next.js API routes
     const apiUrl = `http://localhost:3000/api/messages?session_id=${id}&user_id=${userId}`;
 
-    // Forward cookies to the API route
+    // Forward only necessary cookies (avoid non-ASCII values that break HTTP headers)
     const cookieHeader = cookieStore.getAll()
-      .map(c => `${c.name}=${c.value}`)
+      .map(c => `${c.name}=${encodeURIComponent(c.value)}`)
       .join("; ");
 
     const res = await fetch(apiUrl, {

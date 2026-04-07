@@ -16,7 +16,8 @@
 
 ## 상세 내용
 
-### MCP 도구 (읽기 전용)
+### MCP 도구
+#### 읽기
 | 도구 | 설명 |
 |------|------|
 | `list_nas_directory` | 폴더 내 파일/하위폴더 목록 조회 |
@@ -24,10 +25,18 @@
 | `download_nas_file` | 파일 다운로드 → `data/nas_download/{date}/{uuid}_{filename}` |
 | `get_nas_file_info` | 파일/폴더 존재 여부 및 메타정보 (크기, 수정일) |
 
+#### 쓰기
+| 도구 | 설명 |
+|------|------|
+| `upload_to_nas` | AI 산출물을 NAS에 업로드 (pdf_output, ppt_output 등 허용 디렉토리만) |
+| `create_nas_directory` | NAS에 새 폴더 생성 (업로드 전 대상 폴더 준비용) |
+
 ### 보안 설계 (이중 방어)
 1. **MCP 서버 레벨**: `_validate_path()` — `..` 차단, `NAS_ALLOWED_PATHS` 화이트리스트
-2. **Worker 레벨**: `prepare_tools()` — ainvoke 래핑으로 모든 경로 인자 재검증 + 감사 로그
-3. **감사 로깅**: 모든 NAS 작업을 stderr에 기록 (`[NAS AUDIT]` / `[NAS]` 태그)
+2. **MCP 서버 레벨**: `_validate_local_path()` — 업로드 시 로컬 파일이 AI 산출물 디렉토리에 있는지 검증
+3. **Worker 레벨**: `prepare_tools()` — ainvoke 래핑으로 모든 경로 인자 재검증 + 감사 로그
+4. **NAS 서버 레벨**: 서비스 계정의 폴더별 읽기/쓰기 권한을 NAS 자체가 강제 (403 반환)
+5. **감사 로깅**: 모든 NAS 작업을 stderr에 기록 (`[NAS AUDIT]` / `[NAS]` 태그)
 
 ### 환경변수
 | 변수 | 기본값 | 설명 |

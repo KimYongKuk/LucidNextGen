@@ -1,7 +1,8 @@
-"""NASWorker - NAS 파일 탐색 및 다운로드 전담 Worker
+"""NASWorker - NAS 파일 탐색, 다운로드, AI 산출물 업로드 전담 Worker
 
-회사 Synology NAS의 공유 폴더를 자연어로 탐색하고 파일을 다운로드합니다.
-1단계: 읽기 전용 (list, search, download, info)
+회사 Synology NAS의 공유 폴더를 자연어로 탐색하고 파일을 다운로드/업로드합니다.
+- 읽기: 폴더 탐색, 파일 검색, 다운로드, 메타정보
+- 쓰기: AI 산출물 업로드, 폴더 생성 (AI 산출물 디렉토리만 허용)
 
 보안:
 - prepare_tools()에서 모든 경로 인자를 _validate_nas_path()로 검증
@@ -20,12 +21,14 @@ from .base_worker import BaseWorker
 _raw_allowed = os.getenv("NAS_ALLOWED_PATHS", "/Landf/부서간공유")
 NAS_ALLOWED_PATHS: List[str] = [p.strip().rstrip("/") for p in _raw_allowed.split(",") if p.strip()]
 
-# 경로에 인자를 갖는 도구 목록
-_PATH_ARG_TOOLS = {
+# NAS 경로 인자를 갖는 도구 (Worker 레벨 경로 검증 대상)
+_NAS_PATH_ARG_TOOLS = {
     "list_nas_directory": "path",
     "search_nas_files": "path",
     "download_nas_file": "remote_path",
     "get_nas_file_info": "path",
+    "upload_to_nas": "remote_path",
+    "create_nas_directory": "path",
 }
 
 
@@ -51,10 +54,10 @@ def _validate_nas_path(path: str) -> str:
 
 class NASWorker(BaseWorker):
     """
-    NAS 파일 탐색 Worker (Sonnet - 탐색 전략 수립 + 결과 정리)
+    NAS 파일 탐색/업로드 Worker (Sonnet)
 
-    담당 도구: list_nas_directory, search_nas_files, download_nas_file, get_nas_file_info
-    용도: NAS 공유 폴더 탐색, 파일 검색, 다운로드
+    담당 도구: list/search/download/info + upload_to_nas, create_nas_directory
+    용도: NAS 공유 폴더 탐색, 파일 검색, 다운로드, AI 산출물 업로드
     """
 
     @property
@@ -68,6 +71,8 @@ class NASWorker(BaseWorker):
             "search_nas_files",
             "download_nas_file",
             "get_nas_file_info",
+            "upload_to_nas",
+            "create_nas_directory",
         ]
 
     @property
@@ -85,7 +90,7 @@ class NASWorker(BaseWorker):
         current_date = today.strftime("%Y-%m-%d")
         allowed_paths = ", ".join(NAS_ALLOWED_PATHS)
 
-        return f"""당신은 회사 NAS(공유 스토리지)에서 파일을 탐색하고 다운로드하는 전문가입니다.
+        return f"""당신은 회사 NAS(공유 스토리지)에서 파일을 탐색/다운로드하고, AI가 생성한 산출물을 NAS에 업로드하는 전문가입니다.
 
 오늘 날짜: {current_date}
 
@@ -94,48 +99,66 @@ class NASWorker(BaseWorker):
 
 ## 보안 규칙
 - 위에 명시된 허용 경로 내에서만 작업합니다.
-- 파일 삭제, 이동, 이름 변경은 할 수 없습니다 (읽기 전용).
+- 파일 삭제, 이동, 이름 변경은 할 수 없습니다.
+- 업로드는 AI가 생성한 산출물(PDF, PPT, XLSX, DOCX, 차트 등)만 가능합니다.
 - 암호화된 파일은 다운로드는 가능하나 내용 열람은 불가능합니다.
-- 사용자에게 NAS 서버 주소, 인증 정보, 내부 경로 구조를 노출하지 마세요.
+- 사용자에게 NAS 서버 주소, 인증 정보를 노출하지 마세요.
 
 ## 사용 가능한 도구
+### 읽기
 - list_nas_directory: 폴더 내 파일/하위폴더 목록 조회
 - search_nas_files: 파일명 키워드로 재귀 검색 (대소문자 무관)
 - download_nas_file: 파일 다운로드 (로컬 저장)
 - get_nas_file_info: 파일/폴더 존재 여부 및 메타정보 확인
 
+### 쓰기
+- upload_to_nas: AI 산출물을 NAS에 업로드 (로컬 경로 + NAS 경로 지정)
+- create_nas_directory: NAS에 새 폴더 생성
+
 ## 작업 흐름
 1. 도구를 호출하기 전에, 1줄짜리 짧은 안내 텍스트를 먼저 출력하세요.
    예: "부서간공유 폴더에서 파일을 검색하겠습니다." → 도구 호출
    단, 2문장 이상 길게 쓰지 마세요.
+
+### 탐색/다운로드
 2. 사용자 요청에서 대상 경로나 파일명 키워드를 파악합니다.
 3. 경로를 아는 경우 → list_nas_directory로 폴더 탐색
    키워드만 아는 경우 → search_nas_files로 검색
 4. 결과에서 파일 목록을 깔끔하게 정리하여 안내합니다 (이름, 크기, 수정일).
 5. 사용자가 다운로드를 요청하면 download_nas_file을 실행합니다.
 
+### 업로드
+6. 사용자가 "NAS에 올려줘", "공유폴더에 저장해줘" 등을 요청하면:
+   a. 업로드할 파일의 로컬 경로를 확인합니다 (이전 대화에서 생성된 산출물 경로).
+   b. NAS 저장 경로를 사용자에게 확인하거나, 적절한 경로를 제안합니다.
+   c. 필요시 create_nas_directory로 대상 폴더를 먼저 생성합니다.
+   d. upload_to_nas로 파일을 업로드합니다.
+
 ## 결과 표시 규칙
 - 파일 목록은 폴더와 파일을 구분하여 표시하세요.
 - 파일이 많은 경우 주요 파일을 먼저 안내하고, 전체 개수를 알려주세요.
 - 다운로드 완료 시 파일명과 크기를 안내하세요.
+- 업로드 완료 시 NAS 경로를 안내하세요.
 
 ## 암호화 파일
+- 사내 PC에서 생성한 파일은 DRM 암호화가 걸려있어 AI가 내용을 읽을 수 없습니다.
+- AI가 생성한 파일이나 외부에서 받은 파일은 암호화가 없어 정상 처리 가능합니다.
 - 다운로드 후 파싱 실패 시: "이 파일은 암호화되어 있어 내용을 직접 읽을 수 없습니다. 다운로드된 파일을 직접 열어주세요."
 
 ## 주의사항
 - 한 번에 하나의 도구만 호출하세요 (병렬 호출 금지).
 - 도구 호출 결과를 받은 후 즉시 응답하세요. 불필요한 재시도는 하지 마세요.
-- 사용자가 요청하지 않은 파일을 임의로 다운로드하지 마세요."""
+- 사용자가 요청하지 않은 파일을 임의로 다운로드/업로드하지 마세요."""
 
     def prepare_tools(self, tools: List[BaseTool], context: Dict[str, Any]) -> List[BaseTool]:
         """모든 NAS 도구의 경로 인자를 검증하고 감사 로그에 user_id 주입"""
         user_id = context.get("user_id", "anonymous")
 
         for tool in tools:
-            if tool.name not in _PATH_ARG_TOOLS:
+            if tool.name not in _NAS_PATH_ARG_TOOLS:
                 continue
 
-            path_arg_name = _PATH_ARG_TOOLS[tool.name]
+            path_arg_name = _NAS_PATH_ARG_TOOLS[tool.name]
 
             # 이미 래핑된 경우 스킵
             if hasattr(tool, "_nas_wrapped"):

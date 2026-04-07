@@ -8,8 +8,13 @@
  * - 개발: 환경변수로 직접 포트 지정
  */
 export const getApiUrl = (): string => {
-  // 브라우저: nginx same-origin 경유
   if (typeof window !== 'undefined') {
+    // 개발 모드: 백엔드 직접 호출 (Next.js rewrites SSE 버퍼링 우회)
+    const devBackend = process.env.NEXT_PUBLIC_BACKEND_URL;
+    if (devBackend) {
+      return devBackend;
+    }
+    // 운영: nginx same-origin 경유
     return `${window.location.protocol}//${window.location.host}`;
   }
   // SSR: 환경변수 → 폴백

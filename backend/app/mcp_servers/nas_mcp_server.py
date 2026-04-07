@@ -483,6 +483,154 @@ async def get_nas_file_info(path: str) -> str:
         return f"정보 조회 중 오류 발생: {e}"
 
 
+# ─── AI 산출물 업로드 허용 디렉토리 (로컬 경로 샌드박스) ───
+_OUTPUT_DIRS = [
+    os.path.join(_BASE_DIR, d) for d in [
+        "data/pdf_output", "data/ppt_output", "data/xlsx_output",
+        "data/docx_output", "data/chart_output", "data/report_output",
+        "data/image_output", "data/nas_download",
+    ]
+]
+
+
+def _validate_local_path(local_path: str) -> str:
+    """
+    업로드할 로컬 파일 경로 검증 (AI 산출물 디렉토리만 허용)
+
+    Returns:
+        정규화된 절대 경로
+    """
+    if ".." in local_path:
+        raise ValueError(f"잘못된 로컬 경로: path traversal 감지 ({local_path})")
+
+    # 절대 경로로 변환
+    if not os.path.isabs(local_path):
+        resolved = os.path.abspath(os.path.join(_BASE_DIR, local_path))
+    else:
+        resolved = os.path.abspath(local_path)
+
+    resolved_normalized = resolved.replace("\\", "/").lower()
+
+    for allowed_dir in _OUTPUT_DIRS:
+        allowed_normalized = os.path.abspath(allowed_dir).replace("\\", "/").lower()
+        if resolved_normalized.startswith(allowed_normalized):
+            if not os.path.isfile(resolved):
+                raise ValueError(f"파일이 존재하지 않습니다: {resolved}")
+            return resolved
+
+    raise ValueError(
+        f"업로드가 허용되지 않은 로컬 경로입니다: {local_path}\n"
+        f"AI 산출물 디렉토리(pdf_output, ppt_output 등)의 파일만 업로드할 수 있습니다."
+    )
+
+
+@mcp.tool()
+async def upload_to_nas(local_path: str, remote_path: str) -> str:
+    """AI가 생성한 파일(PDF, PPT, XLSX, DOCX 등)을 NAS에 업로드합니다.
+
+    업로드 가능한 파일: AI가 생성한 산출물 (pdf_output, ppt_output, xlsx_output, docx_output 등)
+    사용자 PC의 임의 파일은 업로드할 수 없습니다.
+
+    Args:
+        local_path: 업로드할 로컬 파일 경로 (예: data/ppt_output/보고서.pptx, 절대경로도 가능)
+        remote_path: NAS 저장 경로 (예: /Landf/부서간공유/AI 혁신/2026/보고서.pptx)
+
+    Returns:
+        업로드 결과 (파일명, 크기, NAS 경로)
+    """
+    try:
+        # 1. 로컬 파일 경로 검증 (AI 산출물만 허용)
+        validated_local = _validate_local_path(local_path)
+
+        # 2. NAS 원격 경로 검증 (화이트리스트)
+        validated_remote = _validate_path(remote_path)
+
+        filename = os.path.basename(validated_local)
+        file_size = os.path.getsize(validated_local)
+        _audit("upload_file", validated_remote, f"local={validated_local}, size={_format_size(file_size)}")
+
+        # 3. WebDAV PUT 업로드
+        url = _to_webdav_url(validated_remote)
+        with open(validated_local, "rb") as f:
+            response = requests.put(url, data=f, auth=_get_auth(), timeout=NAS_TIMEOUT * 3)
+
+        if response.status_code in [200, 201, 204]:
+            _audit("upload_complete", validated_remote, f"size={_format_size(file_size)}")
+            return (
+                f"업로드 완료!\n"
+                f"  파일명: {filename}\n"
+                f"  크기: {_format_size(file_size)}\n"
+                f"  NAS 경로: {validated_remote}\n"
+                f"  팀원들이 NAS에서 바로 접근할 수 있습니다."
+            )
+        elif response.status_code == 403:
+            return f"업로드 권한이 없습니다: {validated_remote}\n이 폴더에 쓰기 권한이 필요합니다."
+        elif response.status_code == 409:
+            return f"상위 폴더가 존재하지 않습니다: {validated_remote}\n먼저 폴더를 생성해주세요."
+        else:
+            return f"업로드 실패: HTTP {response.status_code}"
+
+    except ValueError as e:
+        return f"경로 오류: {e}"
+    except requests.exceptions.Timeout:
+        return f"업로드 시간 초과 ({NAS_TIMEOUT * 3}초). 파일 크기가 너무 크거나 네트워크가 느립니다."
+    except requests.exceptions.ConnectionError:
+        return "NAS 서버에 연결할 수 없습니다."
+    except Exception as e:
+        _audit("upload_error", remote_path, str(e))
+        return f"파일 업로드 중 오류 발생: {e}"
+
+
+@mcp.tool()
+async def create_nas_directory(path: str) -> str:
+    """NAS에 새 폴더를 생성합니다.
+
+    AI 산출물을 정리할 폴더를 미리 만들 때 사용합니다.
+
+    Args:
+        path: 생성할 NAS 폴더 경로 (예: /Landf/부서간공유/AI 혁신/2026/주간리포트)
+
+    Returns:
+        폴더 생성 결과
+    """
+    try:
+        validated = _validate_path(path)
+        _audit("create_directory", validated)
+
+        # 이미 존재하는지 확인
+        check_url = _to_webdav_url(validated)
+        check_resp = requests.request(
+            "PROPFIND", check_url,
+            auth=_get_auth(),
+            headers={"Depth": "0"},
+            timeout=NAS_TIMEOUT,
+        )
+        if check_resp.status_code == 207:
+            return f"폴더가 이미 존재합니다: {validated}"
+
+        # MKCOL로 폴더 생성
+        url = _to_webdav_url(validated)
+        response = requests.request("MKCOL", url, auth=_get_auth(), timeout=NAS_TIMEOUT)
+
+        if response.status_code in [200, 201]:
+            _audit("create_directory_complete", validated)
+            return f"폴더 생성 완료: {validated}"
+        elif response.status_code == 403:
+            return f"폴더 생성 권한이 없습니다: {validated}"
+        elif response.status_code == 409:
+            return f"상위 폴더가 존재하지 않습니다: {validated}\n상위 폴더를 먼저 생성해주세요."
+        elif response.status_code == 405:
+            return f"폴더가 이미 존재합니다: {validated}"
+        else:
+            return f"폴더 생성 실패: HTTP {response.status_code}"
+
+    except ValueError as e:
+        return f"경로 오류: {e}"
+    except Exception as e:
+        _audit("create_directory_error", path, str(e))
+        return f"폴더 생성 중 오류 발생: {e}"
+
+
 # ─── 서버 시작 ───────────────────────────────────────
 if __name__ == "__main__":
     print(f"[NAS MCP] Starting NAS File Explorer Server", file=sys.stderr)

@@ -263,6 +263,79 @@ async def search_workspace_docs(
         return f"워크스페이스 문서 검색 중 오류 발생: {str(e)}"
 
 
+# ================================
+# 파일 전문 조회 도구 (fulltext)
+# ================================
+
+FULLTEXT_MAX_CHARS = 50000  # 5만자 제한
+
+
+@mcp.tool()
+async def get_uploaded_file_content(
+    session_id: str,
+    filename: str,
+    user_id: str = "anonymous",
+) -> str:
+    """업로드한 파일의 전체 내용을 반환합니다. 파일 요약, 번역, 전체 분석 시 사용합니다.
+
+    search_user_files와 달리 파일 전문을 반환합니다 (최대 50,000자).
+    "요약해줘", "번역해줘", "전체 분석" 같은 전문 처리 요청에 사용하세요.
+
+    Args:
+        session_id: 세션 ID (필수)
+        filename: 파일명 (정확한 파일명, 예: 보고서.pdf)
+        user_id: 사용자 ID
+    """
+    try:
+        start_time = time.time()
+
+        # 1. ChromaDB 메타데이터에서 filename → file_id 조회
+        file_id = chromadb_service_user.get_file_id_by_filename(
+            filename=filename,
+            user_id=user_id,
+            session_id=session_id,
+        )
+
+        if not file_id:
+            return f"'{filename}' 파일을 찾을 수 없습니다. 정확한 파일명을 확인해주세요."
+
+        # 2. fulltext 파일 읽기
+        fulltext = chromadb_service_user.get_fulltext(file_id)
+
+        if fulltext is None:
+            return (
+                f"'{filename}' 파일의 전체 텍스트가 저장되어 있지 않습니다.\n"
+                f"이 파일은 전문 조회 기능 추가 이전에 업로드되었을 수 있습니다.\n"
+                f"search_user_files 도구로 부분 검색은 가능합니다."
+            )
+
+        elapsed = int((time.time() - start_time) * 1000)
+        total_chars = len(fulltext)
+
+        # 3. 트렁케이트
+        if total_chars > FULLTEXT_MAX_CHARS:
+            fulltext = fulltext[:FULLTEXT_MAX_CHARS]
+            header = (
+                f"[파일: {filename} | 전체 {total_chars:,}자 중 앞 {FULLTEXT_MAX_CHARS:,}자 표시]\n"
+                f"※ 전체 내용이 너무 길어 앞부분만 표시합니다. "
+                f"특정 부분을 찾으시려면 search_user_files를 사용해주세요.\n\n"
+            )
+        else:
+            header = f"[파일: {filename} | 전체 내용 ({total_chars:,}자)]\n\n"
+
+        print(
+            f"[RAG_TIMING] get_uploaded_file_content: {elapsed}ms "
+            f"(file={filename}, file_id={file_id[:8]}..., chars={total_chars}, "
+            f"truncated={total_chars > FULLTEXT_MAX_CHARS})",
+            file=sys.stderr,
+        )
+
+        return header + fulltext
+
+    except Exception as e:
+        return f"파일 전문 조회 중 오류 발생: {str(e)}"
+
+
 if __name__ == "__main__":
     # stdio 모드로 MCP 서버 실행
     mcp.run(transport="stdio")

@@ -267,6 +267,42 @@ class ChromaDBService:
                 continue
         return "\n".join(parts)
 
+    # ── Fulltext 저장/조회 ──────────────────────────────────
+    FULLTEXT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "fulltext")
+
+    def _save_fulltext(self, file_id: str, text: str) -> None:
+        """추출된 전체 텍스트를 디스크에 저장 (전문 요약/번역용)"""
+        os.makedirs(self.FULLTEXT_DIR, exist_ok=True)
+        path = os.path.join(self.FULLTEXT_DIR, f"{file_id}.txt")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        print(f"[UPLOAD] Fulltext saved: {path} ({len(text)} chars)", file=sys.stderr)
+
+    def get_fulltext(self, file_id: str) -> Optional[str]:
+        """file_id로 저장된 전체 텍스트 조회"""
+        path = os.path.join(self.FULLTEXT_DIR, f"{file_id}.txt")
+        if not os.path.isfile(path):
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    def get_file_id_by_filename(
+        self, filename: str, user_id: str, session_id: Optional[str] = None, collection: Optional[str] = None
+    ) -> Optional[str]:
+        """ChromaDB 메타데이터에서 filename → file_id 조회"""
+        try:
+            collection_obj = self.get_collection(user_id, session_id, collection=collection)
+            results = collection_obj.get(
+                where={"filename": filename},
+                limit=1,
+                include=["metadatas"],
+            )
+            if results and results["metadatas"] and len(results["metadatas"]) > 0:
+                return results["metadatas"][0].get("file_id")
+        except Exception as e:
+            print(f"[FULLTEXT] file_id lookup failed for '{filename}': {e}", file=sys.stderr)
+        return None
+
     def _extract_excel_sheets(self, file_path: str) -> List[Dict]:
         """엑셀 파일에서 시트별 구조화된 데이터 추출
 
@@ -526,6 +562,10 @@ class ChromaDBService:
                 # 컬렉션이 없으면 무시
                 pass
 
+        # file_id 미리 생성 (fulltext 저장에 필요)
+        if not file_id:
+            file_id = str(uuid.uuid4())
+
         # 임시 파일 저장
         t0 = time.time()
         # 임시 파일명에 원본 파일명을 포함하면 한글/괄호/공백 등으로 경로 문제 발생
@@ -561,11 +601,24 @@ class ChromaDBService:
                 chunks = [c["text"] for c in excel_chunks]
                 sheet_names = [c["sheet_name"] for c in excel_chunks]
                 _log_timing("Excel chunking (row-based)", t0, f"{len(chunks)} chunks")
+
+                # ── Fulltext 저장 (전문 요약/번역용) ──
+                try:
+                    excel_fulltext = "\n".join(c["text"] for c in excel_chunks)
+                    self._save_fulltext(file_id, excel_fulltext)
+                except Exception as e:
+                    print(f"[UPLOAD] Excel fulltext save failed: {e}", file=sys.stderr)
             else:
                 # ── 기존 방식: 텍스트 추출 → RecursiveCharacterTextSplitter ──
                 t0 = time.time()
                 text = await self.extract_text(temp_path, filename)
                 _log_timing("Text extraction (total)", t0, f"{len(text)} chars")
+
+                # ── Fulltext 저장 (전문 요약/번역용) ──
+                try:
+                    self._save_fulltext(file_id, text)
+                except Exception as e:
+                    print(f"[UPLOAD] Fulltext save failed: {e}", file=sys.stderr)
 
                 t0 = time.time()
                 # Email HTML: row-based chunking to prevent splitting email entries
@@ -602,9 +655,6 @@ class ChromaDBService:
             t0 = time.time()
             collection_obj = self.get_collection(user_id, session_id, collection=collection)
             _log_timing("Get collection", t0)
-
-            if not file_id:
-                file_id = str(uuid.uuid4())
 
             # 업로드 시간 기록 (ISO format)
             from datetime import datetime, timezone

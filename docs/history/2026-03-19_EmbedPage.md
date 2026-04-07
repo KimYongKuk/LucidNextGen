@@ -1,7 +1,7 @@
-# 2026-03-19 Embed 페이지 (Outline Wiki 임베딩용)
+# 2026-03-19 Embed 페이지 (L&F Wiki 임베딩용)
 
 ## 개요
-Outline Wiki에 iframe으로 임베딩할 수 있는 경량 채팅 페이지(`/embed`)를 추가했다. 사이드바/헤더/모달 없이 채팅만 노출하며, `chat_mode=outline_embed`로 인텐트를 OUTLINE+DIRECT로 제한한다.
+L&F Wiki에 iframe으로 임베딩할 수 있는 경량 채팅 페이지(`/embed`)를 추가했다. 사이드바/헤더/모달 없이 채팅만 노출하며, `chat_mode=outline_embed`로 인텐트를 OUTLINE+DIRECT로 제한한다.
 
 ## 변경 파일 요약
 | 파일 | 변경 유형 | 설명 |
@@ -47,7 +47,7 @@ Outline Wiki에 iframe으로 임베딩할 수 있는 경량 채팅 페이지(`/e
 - embed 경로에서 인증 실패 시 `/unauthorized` 리다이렉트 대신 401 응답 (iframe 깨짐 방지)
 
 ## 결정 사항 및 주의점
-- Outline Wiki에서 `empCode` 사번을 별도 저장하고 있음 → 같은 인증 체계
+- L&F Wiki에서 `empCode` 사번을 별도 저장하고 있음 → 같은 인증 체계
 - 위키 접속 자체가 인증된 상태이므로, 추후 인증 없이 접근 가능하도록 변경 검토 가능
 - iframe 삽입 시 CSP 헤더 확인 필요 (Outline 측)
 - 향후 floating widget JS는 Wiki 에이전트 측에서 구현

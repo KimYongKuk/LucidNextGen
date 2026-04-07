@@ -1,13 +1,13 @@
-# 2026-03-19 Outline Wiki 연동 (OutlineWorker + Embed 페이지)
+# 2026-03-19 L&F Wiki 연동 (OutlineWorker + Embed 페이지)
 
 ## 개요
-Outline Wiki REST API를 연동하여 사내 위키 문서를 자연어로 검색/조회할 수 있는 OutlineWorker를 추가하고, Outline Wiki에 iframe으로 임베딩할 수 있는 `/embed` 채팅 페이지를 구현했다.
+L&F Wiki REST API를 연동하여 사내 위키 문서를 자연어로 검색/조회할 수 있는 OutlineWorker를 추가하고, L&F Wiki에 iframe으로 임베딩할 수 있는 `/embed` 채팅 페이지를 구현했다.
 
 ## 아키텍처
 
 ```
 ┌─────────────────────────────────────────────────┐
-│  Outline Wiki (192.168.90.30:3003)              │
+│  L&F Wiki (192.168.90.30:3003)              │
 │  ┌─────────────────────────────────────────┐    │
 │  │  Floating Widget (JS)                    │    │
 │  │  ┌─────────────────────────────────┐     │    │
@@ -124,7 +124,7 @@ if chat_mode == "outline_embed":
 
 ### 4. Embed 프론트엔드 (/embed)
 
-Outline Wiki에 iframe으로 임베딩되는 경량 채팅 페이지.
+L&F Wiki에 iframe으로 임베딩되는 경량 채팅 페이지.
 
 #### 기존 채팅 대비 제거 항목
 

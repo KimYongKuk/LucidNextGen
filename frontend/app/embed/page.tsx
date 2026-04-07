@@ -12,7 +12,7 @@ export default function EmbedPage() {
     return searchParams.get("empno") || getUserId() || "anonymous";
   }, [searchParams]);
 
-  // embed 내 링크 클릭 시 부모 프레임(Outline Wiki)으로 postMessage 전송
+  // embed 내 링크 클릭 시 부모 프레임(L&F Wiki)으로 postMessage 전송
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
       const anchor = (e.target as HTMLElement).closest("a");

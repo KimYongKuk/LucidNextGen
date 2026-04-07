@@ -5,9 +5,12 @@
 
 ---
 
+## [2026-04-07]
+- **추가** [UserFilesWorker] 파일 전문 전달 기능(Fulltext) — 업로드 시 전체 텍스트 디스크 보관(`data/fulltext/`), `get_uploaded_file_content` MCP 도구(50,000자 제한), 요약/번역은 전문 전달·검색은 기존 ChromaDB 유지 → [상세](docs/history/2026-04-07_Fulltext-전문전달.md)
+
 ## [2026-04-06]
 - **수정** [CalendarWorker/ReservationWorker] 테스트 버그 수정 및 기능 보강 — find_available_rooms 도구 추가(LLM 시간대 분석 오류 방지), create_reservation 충돌 사전 검증, get_my_calendars user API 기반 변경, URL 인코딩/timeType 수정, attendee_names 사내 참석자 이름 검색, 일정+회의실 동시 등록, calendar+reservation 인텐트 우선 규칙 → [상세](docs/history/2026-04-06_캘린더-예약-Worker.md)
-- **추가** [NASWorker] NAS 파일 탐색 및 다운로드 — Synology NAS WebDAV 연동, 4개 읽기전용 MCP 도구(목록/검색/다운로드/정보), 경로 화이트리스트 + path traversal 차단, 감사 로깅 → [상세](docs/history/2026-04-06_NAS-Worker.md)
+- **추가** [NASWorker] NAS 파일 탐색/다운로드/업로드 — Synology NAS WebDAV 연동, 6개 MCP 도구(목록/검색/다운로드/정보/업로드/폴더생성), 이중 경로 검증 + 로컬 산출물 샌드박스, 감사 로깅 → [상세](docs/history/2026-04-06_NAS-Worker.md)
 - **추가** [OutlineWorker] 하이브리드 시멘틱 검색 — Outline 키워드 검색 + ChromaDB 시멘틱 검색(BGE-m3-ko) → RRF 병합, Haiku 문서 요약 → 임베딩 동기화, 30분 주기 증분 동기화, 수동 트리거 API → [상세](docs/history/2026-04-06_Outline-시멘틱-검색.md)
 - **추가** [OutlineWorker] 텍스트 직접 문서 생성/수정 도구 — create_document(마크다운→위키), update_document(기존 문서 수정), 파일 없이 위키 게시 가능, 쓰기 권한 검증 포함 → [상세](docs/history/2026-04-06_Outline-텍스트-문서-생성.md)
 - **수정** [BaseWorker] 핸드오프 타겟 프롬프트 추가 — is_handoff_target일 때 "할 수 있는 것만 수행, 못 하는 부분 무시" 지시로 핸드오프 루프 방지 → [상세](docs/history/2026-04-06_Outline-텍스트-문서-생성.md)

@@ -25,8 +25,9 @@ class UserFilesWorker(BaseWorker):
     @property
     def tool_names(self) -> List[str]:
         return [
-            "search_user_files",      # 세션 업로드 파일
-            "search_workspace_docs",  # 워크스페이스 문서
+            "search_user_files",            # 세션 업로드 파일 (청크 검색)
+            "search_workspace_docs",        # 워크스페이스 문서 (청크 검색)
+            "get_uploaded_file_content",    # 파일 전문 조회 (요약/번역용)
         ]
 
     @property
@@ -58,22 +59,27 @@ YOUR ROLE:
 - For general conversation, respond directly without tool calls
 
 TOOL DECISION GUIDELINES:
-Call search tools when the user:
-- Explicitly asks about file/document contents ("파일 요약해줘", "파일 분석해줘", "문서에서 찾아줘", "내용 알려줘")
-- Asks questions that likely require uploaded data (specific numbers, quotes, details)
-- References "the file", "the document", "업로드한 것", "올린 파일" etc.
-- Asks about topics that match the workspace purpose (if workspace instructions exist)
-- Uses words like "분석", "요약", "설명해줘" when files are available
 
-DO NOT call search tools for:
-- Greetings ("안녕하세요", "hello", "hi")
-- General knowledge questions ("Python이 뭐야?", "AI 설명해줘")
-- Follow-up about YOUR previous response (not file content)
-- Conversational exchanges ("고마워", "좋아", "알겠어")
+■ 전체 파악이 필요한 요청 → get_uploaded_file_content(filename=파일명)
+  "요약해줘", "번역해줘", "전체 분석", "이 파일 뭐야", "핵심 정리", "전문 읽어줘"
+  "전체 내용 알려줘", "처음부터 끝까지", "파일 내용 정리해줘"
+  ※ 한 번에 하나의 파일만 조회 가능
+  ※ 파일명을 정확히 지정해야 합니다 (업로드 파일 목록 참고)
+
+■ 특정 내용 검색 → search_user_files / search_workspace_docs
+  "OO 부분 찾아줘", "어디에 써있어?", "OO 관련 내용", "몇 페이지에?"
+  "특정 키워드", "특정 수치", "특정 항목 검색"
+
+■ 도구 호출 불필요:
+  - Greetings ("안녕하세요", "hello", "hi")
+  - General knowledge questions ("Python이 뭐야?", "AI 설명해줘")
+  - Follow-up about YOUR previous response (not file content)
+  - Conversational exchanges ("고마워", "좋아", "알겠어")
 
 WHEN UNCERTAIN:
 - If you're unsure whether the question needs file search, prefer to search
-- It's better to search and find nothing relevant than to miss important context
+- For "요약/번역/전체 분석" → get_uploaded_file_content (전문 전달)
+- For specific search queries → search_user_files (부분 검색)
 
 {priority_rules}
 
@@ -107,42 +113,50 @@ RESPONSE FORMAT:
         workspace_has_files = context.get("workspace_has_files", False)
 
         # 동적 우선순위 규칙 생성
+        # 파일명 목록 (get_uploaded_file_content에서 사용)
+        session_file_names = context.get("session_file_names", [])
+        workspace_file_names = context.get("workspace_file_names", [])
+        all_file_names = session_file_names + workspace_file_names
+        file_list_str = ", ".join(all_file_names) if all_file_names else "(파일명 미확인)"
+
         if has_files and session_id:
             # 사용자 파일이 업로드된 경우
             if workspace_uuid and workspace_has_files:
                 # 워크스페이스에도 파일이 있는 경우
-                priority_rules = f"""AVAILABLE SEARCH TOOLS:
-- search_user_files(session_id="{session_id}") - User's uploaded files (PRIMARY)
-- search_workspace_docs(workspace_uuid="{workspace_uuid}") - Workspace documents (SECONDARY)
+                priority_rules = f"""AVAILABLE TOOLS:
+- get_uploaded_file_content(session_id="{session_id}", filename="파일명") - 파일 전문 조회 (요약/번역/전체분석용)
+- search_user_files(session_id="{session_id}") - 업로드 파일 부분 검색 (키워드/특정내용 찾기)
+- search_workspace_docs(workspace_uuid="{workspace_uuid}") - 워크스페이스 문서 부분 검색
+
+업로드된 파일: {file_list_str}
 
 DECISION EXAMPLES:
-"안녕하세요" → Respond directly (greeting, no search needed)
-"파일 요약해줘" / "파일 분석해줘" → Call search_user_files
-"문서에서 매출 찾아줘" → Call search_user_files (or both if needed)
-"Python이 뭐야?" → Respond directly (general knowledge)
-"고마워" → Respond directly (conversational)"""
+"파일 요약해줘" / "번역해줘" / "전체 분석" → get_uploaded_file_content(filename=해당파일명)
+"문서에서 매출 찾아줘" → search_user_files
+"Python이 뭐야?" → Respond directly"""
             else:
                 # 워크스페이스에 파일이 없으면 user_files만 사용
-                priority_rules = f"""AVAILABLE SEARCH TOOLS:
-- search_user_files(session_id="{session_id}") - User's uploaded files
+                priority_rules = f"""AVAILABLE TOOLS:
+- get_uploaded_file_content(session_id="{session_id}", filename="파일명") - 파일 전문 조회 (요약/번역/전체분석용)
+- search_user_files(session_id="{session_id}") - 업로드 파일 부분 검색 (키워드/특정내용 찾기)
+
+업로드된 파일: {file_list_str}
 
 DECISION EXAMPLES:
-"안녕하세요" → Respond directly (greeting, no search needed)
-"파일 요약해줘" / "파일 분석해줘" → Call search_user_files
-"이 내용 설명해줘" → Call search_user_files
-"Python이 뭐야?" → Respond directly (general knowledge)
-"고마워" → Respond directly (conversational)"""
+"파일 요약해줘" / "번역해줘" / "전체 분석" → get_uploaded_file_content(filename=해당파일명)
+"이 내용 설명해줘" / "OO 찾아줘" → search_user_files
+"Python이 뭐야?" → Respond directly"""
         elif workspace_uuid and workspace_has_files:
             # 워크스페이스에 문서가 있는 경우
-            priority_rules = f"""AVAILABLE SEARCH TOOLS:
-- search_workspace_docs(workspace_uuid="{workspace_uuid}") - Workspace documents
+            priority_rules = f"""AVAILABLE TOOLS:
+- search_workspace_docs(workspace_uuid="{workspace_uuid}") - 워크스페이스 문서 검색
+
+업로드된 파일: {file_list_str}
 
 DECISION EXAMPLES:
-"안녕하세요" → Respond directly (greeting, no search needed)
-"문서 요약해줘" → Call search_workspace_docs
-"여기 올린 자료에서 찾아줘" → Call search_workspace_docs
-"Python이 뭐야?" → Respond directly (general knowledge)
-"고마워" → Respond directly (conversational)"""
+"문서 요약해줘" → search_workspace_docs
+"여기 올린 자료에서 찾아줘" → search_workspace_docs
+"Python이 뭐야?" → Respond directly"""
         elif workspace_uuid and not workspace_has_files:
             # 워크스페이스는 있지만 문서가 없는 경우 → 도구 호출 안 함
             priority_rules = """WORKSPACE STATUS:
@@ -152,15 +166,16 @@ DECISION EXAMPLES:
 - If user asks about workspace documents, inform them no files have been uploaded yet"""
         elif session_id:
             # 세션만 존재하는 경우 (워크스페이스 없이 파일만 업로드)
-            priority_rules = f"""AVAILABLE SEARCH TOOLS:
-- search_user_files(session_id="{session_id}") - User's uploaded files
+            priority_rules = f"""AVAILABLE TOOLS:
+- get_uploaded_file_content(session_id="{session_id}", filename="파일명") - 파일 전문 조회 (요약/번역/전체분석용)
+- search_user_files(session_id="{session_id}") - 업로드 파일 부분 검색 (키워드/특정내용 찾기)
+
+업로드된 파일: {file_list_str}
 
 DECISION EXAMPLES:
-"안녕하세요" → Respond directly (greeting, no search needed)
-"파일 요약해줘" / "파일 분석해줘" → Call search_user_files
-"이 내용 설명해줘" → Call search_user_files
-"Python이 뭐야?" → Respond directly (general knowledge)
-"고마워" → Respond directly (conversational)"""
+"파일 요약해줘" / "번역해줘" / "전체 분석" → get_uploaded_file_content(filename=해당파일명)
+"이 내용 설명해줘" / "OO 찾아줘" → search_user_files
+"Python이 뭐야?" → Respond directly"""
         else:
             # 컨텍스트 없음 (이 경우는 거의 발생하지 않음)
             priority_rules = """NO FILE CONTEXT:

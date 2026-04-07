@@ -61,12 +61,13 @@ export function SidebarUserNav({ user }: { user: any }) {
             <DropdownMenuItem asChild data-testid="user-nav-item-auth">
               <button
                 className="w-full cursor-pointer"
-                onClick={() => {
-                  window.location.reload();
+                onClick={async () => {
+                  await fetch("/api/auth/logout", { method: "POST" });
+                  window.location.href = "/login";
                 }}
                 type="button"
               >
-                Sign out
+                로그아웃
               </button>
             </DropdownMenuItem>
           </DropdownMenuContent>

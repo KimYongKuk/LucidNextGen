@@ -1,7 +1,7 @@
 # 2026-03-30 Outline 임베드 userId anonymous 버그 수정
 
 ## 개요
-Outline Wiki 임베드 채팅에서 사용자 로그가 "anonymous"로 기록되는 버그를 수정. `embed-chat.tsx`에서 URL 파라미터로 추출한 사번(`empno`)을 `useSimpleChat` 훅에 전달하지 않아 발생.
+L&F Wiki 임베드 채팅에서 사용자 로그가 "anonymous"로 기록되는 버그를 수정. `embed-chat.tsx`에서 URL 파라미터로 추출한 사번(`empno`)을 `useSimpleChat` 훅에 전달하지 않아 발생.
 
 ## 변경 파일 요약
 | 파일 | 변경 유형 | 설명 |

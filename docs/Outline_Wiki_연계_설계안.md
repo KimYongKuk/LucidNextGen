@@ -1,4 +1,4 @@
-# Outline Wiki - LucidAI 연계 설계안
+# L&F Wiki - LucidAI 연계 설계안
 
 > 작성일: 2026-03-17
 > 상태: 계획 단계
@@ -6,7 +6,7 @@
 ## 1. 배경 및 목적
 
 ### 현황
-- **Outline Wiki**: 전 임직원 대상 사내 지식관리 서비스 (설계 중)
+- **L&F Wiki**: 전 임직원 대상 사내 지식관리 서비스 (설계 중)
 - **LucidAI 챗봇**: 사내 AI 챗봇 (운영 중) — 사내문서 RAG, VOC, 메일, 웹검색 등 통합
 - 두 서비스 모두 사내 전용, 외부 반출 없음
 
@@ -22,7 +22,7 @@
 ```
 ┌─────────────────┐                    ┌─────────────────┐
 │                 │   ① OutlineWorker  │                 │
-│    LucidAI      │ ◀──── MCP ──────── │   Outline Wiki  │
+│    LucidAI      │ ◀──── MCP ──────── │   L&F Wiki  │
 │    (채팅)       │                    │   (지식관리)     │
 │                 │ ──── Float Chat ──▶│                 │
 │                 │   ② iframe 임베딩   │                 │
@@ -67,7 +67,7 @@
 @server.tool()
 async def search_wiki(query: str, collection_id: str = None, limit: int = 10) -> str:
     """
-    Outline 위키에서 문서를 검색합니다.
+    L&F Wiki에서 문서를 검색합니다.
     - query: 검색어 (자연어 가능)
     - collection_id: 특정 컬렉션으로 범위 제한 (선택)
     - limit: 최대 결과 수
@@ -110,7 +110,7 @@ class OutlineWorker(BaseWorker):
 
     @property
     def system_prompt(self) -> str:
-        return """Outline 위키 검색 전문 에이전트입니다.
+        return """L&F Wiki 검색 전문 에이전트입니다.
         - search_wiki로 먼저 검색하고, 필요하면 get_wiki_document로 상세 조회
         - 검색 결과를 요약하여 출처(문서 제목)와 함께 답변
         - 문서가 없으면 솔직히 "위키에 관련 문서가 없습니다" 안내

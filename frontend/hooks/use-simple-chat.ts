@@ -396,23 +396,29 @@ export function useSimpleChat({
       }
 
     } catch (error) {
-      console.error('Chat error:', error);
+      // AbortError는 사용자가 중단한 것이므로 에러 표시하지 않음
+      const isAbort = error instanceof DOMException && error.name === 'AbortError';
+      if (isAbort) {
+        console.log('Chat stream aborted by user');
+      } else {
+        console.error('Chat error:', error);
 
-      // 오류 메시지로 업데이트
-      setMessages(prev => prev.map(msg =>
-        msg.id === assistantMessageId
-          ? {
-            ...msg,
-            parts: [{
-              type: 'text',
-              text: `오류가 발생했습니다: ${error instanceof Error ? error.message : '알 수 없는 오류'}`
-            }]
-          }
-          : msg
-      ));
+        // 오류 메시지로 업데이트
+        setMessages(prev => prev.map(msg =>
+          msg.id === assistantMessageId
+            ? {
+              ...msg,
+              parts: [{
+                type: 'text',
+                text: `오류가 발생했습니다: ${error instanceof Error ? error.message : '알 수 없는 오류'}`
+              }]
+            }
+            : msg
+        ));
 
-      if (onError && error instanceof Error) {
-        onError(error);
+        if (onError && error instanceof Error) {
+          onError(error);
+        }
       }
     } finally {
       setStatus('ready');
