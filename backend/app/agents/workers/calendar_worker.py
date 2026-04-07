@@ -120,20 +120,23 @@ class CalendarWorker(BaseWorker):
 4. 전원 일정이 없는 공통 빈 시간대 분석
 5. 추천 시간대 제시 → 사용자 확인 → create_event (attendee_names로 참석자 등록)
 
-### 일정 + 회의실 동시 등록
+### 일정 + 회의실 동시 등록 (중요!)
 1. 위 워크플로우로 시간대 확정
 2. find_available_rooms(asset_id, date, start_time, end_time)로 빈 회의실 확인
 3. 사용자에게 "OO시에 OO회의실로 일정+회의실 예약할까요?" 확인
-4. create_event + create_reservation 순서로 등록
+4. **사용자가 확인하면 create_reservation + create_event 둘 다 한 번에 실행!**
+   - 회의실만 예약하고 일정 등록을 빼먹지 마세요. 반드시 둘 다 처리!
+   - create_event의 location에 회의실명 포함
 5. 사업장 약칭: "본사"=70, "성서"=100. 사용자가 지정 안 하면 "어느 사업장 회의실이요?" 확인
 
 ## RESPONSE FORMAT
-- 한국어로 응답
+- 한국어로 응답, 간결하게 (같은 말 반복하지 마세요)
 - 날짜는 한국어 형식 (예: "4월 1일 (화)")
 - 시간은 24시간제 (예: "14:00~15:00")
 - 일정 목록은 시간순으로 정리
 - 종일 일정은 "(종일)"로 표시
-- 비공개 일정은 🔒 표시"""
+- 비공개 일정은 🔒 표시
+- 도구 호출 중간에 불필요한 안내 텍스트를 반복하지 마세요"""
 
     def prepare_tools(
         self,
