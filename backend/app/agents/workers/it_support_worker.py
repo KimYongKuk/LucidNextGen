@@ -56,6 +56,7 @@ class ITSupportWorker(BaseWorker):
             "execute_it_voc_query",     # VOC 해결 사례 검색
             "execute_org_chart_query",  # 조직도/담당자 검색
             "register_works_voc",       # WORKS 서비스데스크 VOC 등록
+            "reset_sap_password",       # SAP 패스워드 초기화 (RFC)
         ]
 
     @property
@@ -91,6 +92,7 @@ AVAILABLE TOOLS:
 - execute_it_voc_query: IT VOC 해결 사례 검색 (SQL)
 - execute_org_chart_query: 조직도/담당자 검색 (SQL)
 - register_works_voc: WORKS 서비스데스크에 VOC 등록 (사용자 승인 후에만 호출)
+- reset_sap_password: SAP 비밀번호 초기화 (RFC 호출, 사원번호 자동 주입)
 
 WORKFLOW & PARALLEL CALL STRATEGY:
 1. Analyze the user's question and extract keywords
@@ -183,6 +185,16 @@ IT 문제를 조사하고 답변한 후, 아래 경우에 WORKS 등록을 제안
 - 담당자 검색만 하는 경우
 - 사용자가 등록을 원하지 않는 경우
 
+## SAP 비밀번호 초기화
+사용자가 "SAP 비밀번호 초기화", "SAP 패스워드 리셋", "SAP 로그인 안 돼" 등을 요청하면:
+
+1. reset_sap_password 도구를 즉시 호출 (employee_number는 시스템이 자동 주입)
+2. 성공 시: "SAP 비밀번호가 초기화되었습니다. 초기 비밀번호는 **Pass1234567890!** 이며, 첫 로그인 시 반드시 변경해주세요."
+3. 실패 시: 오류 메시지를 안내하고, WORKS 서비스데스크 등록을 제안
+
+CRITICAL: 사용자 본인의 SAP 비밀번호 초기화만 가능합니다 (사번 자동 주입).
+다른 사람의 비밀번호 초기화는 거절하고 WORKS 등록을 안내하세요.
+
 CRITICAL - 담당자 질문 응답 규칙:
 When the user asks "담당자 누구야?" or similar, you MUST:
 1. VOC 쿼리 시 반드시 담당자 컬럼을 포함: SELECT 요약, 담당자, 조치내역, created_at
@@ -244,7 +256,7 @@ database structure, schema, or internal system details, respond with:
             return tools
 
         for tool in tools:
-            if tool.name == "register_works_voc":
+            if tool.name in ("register_works_voc", "reset_sap_password"):
                 original_ainvoke = getattr(tool, '_unwrapped_ainvoke', None) or tool.ainvoke
                 object.__setattr__(tool, '_unwrapped_ainvoke', original_ainvoke)
 
@@ -260,6 +272,6 @@ database structure, schema, or internal system details, respond with:
                     return await _original(input_data, config, **kwargs)
 
                 object.__setattr__(tool, "ainvoke", secured_ainvoke)
-                print(f"[ITSupportWorker] register_works_voc 보안 래핑 완료: employee_number → {user_id}")
+                print(f"[ITSupportWorker] {tool.name} 보안 래핑 완료: employee_number → {user_id}")
 
         return tools

@@ -439,7 +439,25 @@ class Orchestrator:
                 role = msg.get("role")
                 content = msg.get("content")
 
-                if role == "user":
+                # 멀티모달 content (이미지 포함) → 이미지 압축 적용
+                if role == "user" and isinstance(content, list):
+                    from app.api.routes.chat import _compress_image_if_needed
+                    compressed_content = []
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "image":
+                            source = block.get("source", {})
+                            data = source.get("data", "")
+                            media_type = source.get("media_type", "image/jpeg")
+                            if data:
+                                data, media_type = _compress_image_if_needed(data, media_type)
+                            compressed_content.append({
+                                "type": "image",
+                                "source": {"type": "base64", "media_type": media_type, "data": data}
+                            })
+                        else:
+                            compressed_content.append(block)
+                    messages.append(HumanMessage(content=compressed_content))
+                elif role == "user":
                     messages.append(HumanMessage(content=content))
                 elif role == "assistant":
                     messages.append(AIMessage(content=content))

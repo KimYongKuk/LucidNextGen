@@ -110,6 +110,38 @@ export function useSimpleChat({
           .map((part: any) => part.text)
           .join('\n') || '';
 
+        // user 메시지에 이미지가 포함된 경우 멀티모달 content 구성
+        const imageParts = msg.role === 'user' ? msg.parts
+          ?.filter((part: any) => part.type === 'file' && part.mediaType?.startsWith('image/'))
+          .map((part: any) => {
+            if (part.url?.startsWith('data:')) {
+              const matches = part.url.match(/^data:(.*?);base64,(.+)$/);
+              if (matches) {
+                return {
+                  type: 'image',
+                  source: {
+                    type: 'base64',
+                    media_type: matches[1],
+                    data: matches[2],
+                  },
+                };
+              }
+            }
+            return null;
+          })
+          .filter(Boolean) || [] : [];
+
+        if (imageParts.length > 0) {
+          console.log(`[HISTORY] Including ${imageParts.length} image(s) in history message`);
+          return {
+            role: msg.role,
+            content: [
+              ...imageParts,
+              { type: 'text', text: textContent },
+            ],
+          };
+        }
+
         return {
           role: msg.role,
           content: textContent,

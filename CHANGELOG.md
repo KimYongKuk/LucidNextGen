@@ -5,6 +5,12 @@
 
 ---
 
+## [2026-04-10]
+- **수정** [Frontend+Backend] 이미지 공유 후 맥락 유실 수정 — message_history에 `[이미지 첨부됨]` 힌트 태그 추가 + 시스템 프롬프트에 이미지 맥락 유지 규칙 추가, AI가 이전 분석 결과를 활용하도록 유도 → [상세](docs/history/2026-04-10_이미지-맥락-유지-수정.md)
+
+## [2026-04-08]
+- **추가** [ITSupportWorker/RFC] SAP RFC Bridge + 패스워드 초기화 — Python 3.12 별도 마이크로서비스(sap-rfc-bridge)로 pyrfc 호환, Z02CMF_PASSWORD_INIT RFC 호출, login_id→사번 자동 변환, 사번 보안 주입 → [상세](docs/history/2026-04-08_SAP-RFC-Bridge-패스워드초기화.md)
+
 ## [2026-04-07]
 - **수정** [IntentClassifier/DirectWorker] 워크스페이스 인텐트 오버라이드 제거 — `direct→user_files` 강제 전환 제거, DirectResponseWorker에 `search_workspace_docs` 공유 도구 추가, 워크스페이스 컨텍스트는 BaseWorker에서 모든 워커에 자동 주입 → [상세](docs/history/2026-04-07_워크스페이스-인텐트-오버라이드-제거.md)
 - **추가** [설계] 화학물질 구매 검토 프로세스 자동화 — 전자결재 감지→MSDS 파싱→Outline 위키 자동 등록→검토→결재 기안 API 자동 상신, DB INSERT 0건/공식 API only → [상세](docs/화학물질_구매검토_자동화_설계.md)
