@@ -84,11 +84,18 @@ CONVERSATION HISTORY (last few messages for context):
 {conversation_context}
 
 RULES:
-1. PPT/PowerPoint/presentation → ALWAYS "ppt_generation"
-2. Charts/graphs/PDF/DOCX requests → "direct" (shared tools handle visualization)
-3. xlsx: CREATE/MODIFY/FORMAT Excel → "xlsx". Analyzing content → "user_files"
-   If has_session_xlsx=True AND modification request (수정, 편집, 서식, 추가, 삭제, 정리, 값 입력 등) → "xlsx"
+1. PPT/PowerPoint/presentation: ONLY "ppt_generation" when user explicitly requests CREATING/MAKING a PPT.
+   "PPT 만들어줘", "발표자료 작성해줘" → "ppt_generation"
+   "PPT에 대해 알려줘", "PPT 내용 분석해줘", "발표 준비 어떻게 해?" → "direct" (NOT ppt_generation)
+   KEY: The user must express intent to CREATE a file. Mentioning PPT alone is NOT enough.
+2. Charts/graphs/PDF/DOCX/Word requests → "direct" (shared tools handle visualization)
+   IMPORTANT: "워드로 만들어줘", "PDF로 정리해줘" → "direct" (DirectWorker has shared doc tools)
+   Do NOT route to specialized workers for PDF/DOCX/chart creation.
+3. xlsx: ONLY "xlsx" when user explicitly requests CREATING or MODIFYING an Excel file.
+   "엑셀로 만들어줘", "엑셀 파일 생성해줘" → "xlsx"
+   If has_session_xlsx=True AND modification request (수정, 편집, 서식, 추가, 삭제, 값 입력 등) → "xlsx"
    But: "파일 내용 요약/분석" + has_session_xlsx=True → "user_files" (READ request)
+   "엑셀로 정리해줘" without has_session_xlsx → "direct" (just text formatting, not file creation)
 4. DISAMBIGUATION: When multiple intent keywords co-occur, the ACTION verb/target determines intent:
    - "전자결재 관련 게시글 찾아줘" → "board" (action=게시글 검색, 전자결재는 검색 주제)
    - "'전자결재 수정 확인 요청' 메일 확인해줘" → "mail" (action=메일 확인, 전자결재는 메일 제목)
@@ -120,11 +127,16 @@ WORKSPACE RULES (when has_workspace=True):
     - Instructions: "번역 전문가" + Message: "이 문장 번역해줘" → direct (no external tool needed)
 
 EXAMPLES:
-- "분기 실적 PPT 만들어줘" → ppt_generation
-- "발표자료 슬라이드로 정리해줘" → ppt_generation
+- "분기 실적 PPT 만들어줘" → ppt_generation (explicit creation request)
+- "발표자료 슬라이드로 정리해줘" → ppt_generation (explicit creation request)
+- "PPT 잘 만드는 법 알려줘" → direct (knowledge question, NOT creation)
+- "발표 준비 어떻게 해?" → direct (advice, NOT creation)
+- "PPT 내용 검토해줘" → user_files (if has_files=True, analyzing uploaded PPT)
 - "매출 막대 그래프로 보여줘" → direct
 - "이 데이터로 차트 그려줘" → direct
 - "이거 워드로 만들어줘" → direct
+- "엑셀로 정리해줘" → direct (text formatting, NOT file creation)
+- "엑셀 파일 하나 만들어줘" → xlsx (explicit creation)
 - "프로세스 플로우차트로 보여줘" → direct
 - "이번달 2차전지 산업 동향 정리" → web_search
 - "반도체 산업 전망 정리해줘" → web_search
@@ -251,10 +263,17 @@ class IntentClassifier:
         # ========= Step 2: 생성/산출물 인텐트 (PPT 등) =========
         # visualization 인텐트 제거: 차트/PDF/DOCX는 공유 도구로 어떤 에이전트든 직접 생성 가능
         # SVG 인포그래픽/다이어그램은 모든 에이전트가 인라인 SVG로 생성 가능
-        ppt_pattern = r'(PPT|ppt|파워포인트|프레젠테이션|발표\s?자료|슬라이드로|PT\s?자료)'
-        if re.search(ppt_pattern, message, re.IGNORECASE):
-            print(f"[INTENT] Quick: PPT keyword → PPT_GENERATION")
-            return Intent.PPT_GENERATION
+        # PPT: 키워드 + 생성 동사가 함께 있어야만 PPT_GENERATION
+        # "PPT 내용 정리해줘" → direct, "PPT 만들어줘" → ppt_generation
+        ppt_keyword = r'(PPT|ppt|파워포인트|프레젠테이션|발표\s?자료|슬라이드로|PT\s?자료)'
+        ppt_create_verb = r'(만들|생성|작성|제작|구성|정리해\s?줘|뽑아|변환)'
+        if re.search(ppt_keyword, message, re.IGNORECASE):
+            if re.search(ppt_create_verb, message, re.IGNORECASE):
+                print(f"[INTENT] Quick: PPT keyword + create verb → PPT_GENERATION")
+                return Intent.PPT_GENERATION
+            else:
+                print(f"[INTENT] Quick: PPT keyword without create verb → defer to LLM")
+                # 생성 동사 없이 PPT 언급만 → LLM에 위임 (분석/질문일 수 있음)
 
         # ========= Step 3: 도메인 인텐트 키워드 스캔 =========
         workspace_has_files = context.get("workspace_has_files", False)
