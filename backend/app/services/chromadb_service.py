@@ -8,6 +8,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Optional
 import chromadb
+from app.services.hybrid_search_service import get_bm25_cache, reciprocal_rank_fusion
 
 # ============================================================================
 # PyTorch 2.6+/2.7+ 호환성: meta tensor 비활성화 (모델 import 전에 설정)
@@ -680,6 +681,9 @@ class ChromaDBService:
             )
             _log_timing("ChromaDB add (embedding + write)", t0, f"{len(chunks)} chunks")
 
+            # BM25 캐시 무효화 (새 문서 추가됨)
+            get_bm25_cache().invalidate(collection_obj.name)
+
             print(f"\n{'='*60}", file=sys.stderr)
             _log_timing("UPLOAD TOTAL", upload_start)
             print(f"{'='*60}\n", file=sys.stderr)
@@ -703,6 +707,7 @@ class ChromaDBService:
         query: str,
         limit: int,
         min_relevance: float = 0.0,
+        search_mode: str = "hybrid",
     ) -> List[Dict]:
         """ChromaDB 동기 검색 작업 (스레드 풀에서 실행)
 
@@ -711,37 +716,77 @@ class ChromaDBService:
             query: 검색 쿼리
             limit: 최대 결과 수
             min_relevance: 최소 유사도 임계값 (0.0~1.0, 기본값 0.0 = 필터링 없음)
-                          ChromaDB 코사인 거리는 0~2 범위이므로 내부적으로 변환
+            search_mode: "hybrid" (기본), "semantic", "bm25"
         """
-        if collection_obj.count() == 0:
+        count = collection_obj.count()
+        if count == 0:
             return []
 
-        results = collection_obj.query(
-            query_texts=[query],
-            n_results=limit,
-            include=["documents", "metadatas", "distances"]  # 거리 정보 포함
+        # ── 시멘틱 검색 (hybrid, semantic 모드) ──
+        semantic_docs = []
+        if search_mode in ("hybrid", "semantic"):
+            fetch_limit = min(limit * 3, count) if search_mode == "hybrid" else min(limit, count)
+            results = collection_obj.query(
+                query_texts=[query],
+                n_results=fetch_limit,
+                include=["documents", "metadatas", "distances"]
+            )
+
+            if results['documents'] and results['documents'][0]:
+                for i, doc in enumerate(results['documents'][0]):
+                    distance = results['distances'][0][i] if results.get('distances') else 0
+                    similarity = 1 - (distance / 2)
+                    semantic_docs.append({
+                        "text": doc,
+                        "metadata": results['metadatas'][0][i] if results['metadatas'] else {},
+                        "similarity": round(similarity, 3),
+                    })
+
+        # ── 순수 시멘틱 모드: 기존 로직 그대로 ──
+        if search_mode == "semantic":
+            if min_relevance > 0:
+                filtered = []
+                for d in semantic_docs:
+                    if d["similarity"] < min_relevance:
+                        print(f"[FILTER] Skipped (similarity={d['similarity']:.3f} < {min_relevance}): {d['text'][:50]}...", file=sys.stderr)
+                        continue
+                    filtered.append(d)
+                return filtered[:limit]
+            return semantic_docs[:limit]
+
+        # ── BM25 컴포넌트 (hybrid, bm25 모드) ──
+        all_data = collection_obj.get(include=["documents", "metadatas"])
+        all_docs = all_data["documents"] or []
+        all_metas = all_data["metadatas"] or []
+
+        bm25_cache = get_bm25_cache()
+        bm25_index = bm25_cache.get_or_build(
+            collection_name=collection_obj.name,
+            collection_count=count,
+            documents=all_docs,
         )
+        bm25_results = bm25_index.search(query, top_k=limit * 3)
 
-        docs = []
-        if results['documents'] and results['documents'][0]:
-            for i, doc in enumerate(results['documents'][0]):
-                # 코사인 거리 → 유사도 변환 (distance: 0~2, similarity: 1~-1)
-                # similarity = 1 - (distance / 2) 로 0~1 범위로 정규화
-                distance = results['distances'][0][i] if results.get('distances') else 0
-                similarity = 1 - (distance / 2)  # 0~1 범위
-
-                # 유사도 임계값 필터링
-                if min_relevance > 0 and similarity < min_relevance:
-                    print(f"[FILTER] Skipped (similarity={similarity:.3f} < {min_relevance}): {doc[:50]}...", file=sys.stderr)
-                    continue
-
-                docs.append({
-                    "text": doc,
-                    "metadata": results['metadatas'][0][i] if results['metadatas'] else {},
-                    "similarity": round(similarity, 3)  # 유사도 점수 포함
+        # ── 순수 BM25 모드 ──
+        if search_mode == "bm25":
+            results = []
+            for doc_idx, score in bm25_results[:limit]:
+                results.append({
+                    "text": all_docs[doc_idx],
+                    "metadata": all_metas[doc_idx] if doc_idx < len(all_metas) else {},
+                    "similarity": 0.0,
                 })
+            return results
 
-        return docs
+        # ── 하이브리드 모드: RRF 합산 ──
+        return reciprocal_rank_fusion(
+            semantic_results=semantic_docs,
+            bm25_results=bm25_results,
+            all_documents=all_docs,
+            all_metadatas=all_metas,
+            limit=limit,
+            min_relevance=min_relevance,
+        )
 
     async def search(
         self,
@@ -751,6 +796,7 @@ class ChromaDBService:
         limit: int = 5,
         collection: Optional[str] = None,
         min_relevance: float = 0.0,
+        search_mode: str = "hybrid",
     ) -> List[Dict]:
         """파일 검색 (세션별 또는 user별) - 비동기 실행
 
@@ -761,18 +807,18 @@ class ChromaDBService:
             limit: 최대 결과 수
             collection: 명시적 컬렉션 이름
             min_relevance: 최소 유사도 임계값 (0.0~1.0)
+            search_mode: "hybrid" (기본), "semantic", "bm25"
         """
         collection_obj = self.get_collection(user_id, session_id, collection=collection)
 
-        # ✅ ChromaDB 검색을 별도 스레드에서 실행 (다른 요청 차단 안함)
-        # functools.partial 사용하여 키워드 인자 전달
         import functools
         search_func = functools.partial(
             self._sync_search_collection,
             collection_obj,
             query,
             limit,
-            min_relevance
+            min_relevance,
+            search_mode,
         )
         docs = await asyncio.get_event_loop().run_in_executor(
             _executor,
@@ -805,6 +851,7 @@ class ChromaDBService:
     async def delete_session_files(self, session_id: str) -> Dict:
         """세션 파일 전체 삭제"""
         try:
+            get_bm25_cache().invalidate(f"session_{session_id}")
             self.client.delete_collection(f"session_{session_id}")
             return {
                 "success": True,

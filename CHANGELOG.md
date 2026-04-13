@@ -5,6 +5,11 @@
 
 ---
 
+## [2026-04-13]
+- **추가** [ChromaDB] BM25+시멘틱 하이브리드 검색 도입 — Lot 번호/코드 검색 실패 해결, RRF 합산, BM25 캐시, 환경변수 가중치 조절 → [상세](docs/history/2026-04-13_하이브리드-검색-BM25-RRF.md)
+- **수정** [OutlineSync] Webhook+청크 기반 동기화로 전면 개편 — 30분 폴링→Webhook 실시간, Haiku 요약→청크 분할(본문 전체 검색), asyncio.Queue 순차 처리(GPU OOM 해결), 4시간 폴백 delta sync → [상세](docs/history/2026-04-13_Outline-Webhook-청크-동기화.md)
+- **수정** [IntentClassifier/BaseWorker] 시각화 과다 사용 억제 + PPT/XLSX 인텐트 오분류 방지 — 시각화 가이드 텍스트/마크다운 우선 원칙, PPT quick_classify 생성동사 필수화, LLM 프롬프트 문서생성 규칙 강화, 빈 파일 거짓 응답 방지 → [상세](docs/history/2026-04-13_시각화-인텐트-과다분류-수정.md)
+
 ## [2026-04-10]
 - **수정** [Frontend+Backend] 이미지 공유 후 맥락 유실 수정 — message_history에 `[이미지 첨부됨]` 힌트 태그 추가 + 시스템 프롬프트에 이미지 맥락 유지 규칙 추가, AI가 이전 분석 결과를 활용하도록 유도 → [상세](docs/history/2026-04-10_이미지-맥락-유지-수정.md)
 
