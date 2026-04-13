@@ -143,35 +143,45 @@ class CalendarWorker(BaseWorker):
         tools: List[BaseTool],
         context: Dict[str, Any]
     ) -> List[BaseTool]:
-        """캘린더 도구 보안 래핑: employee_number를 인증된 사번으로 강제 치환"""
+        """캘린더 도구 보안 래핑: employee_number + gosso_cookie를 강제 주입"""
         user_id = context.get("user_id", "")
+        gosso_cookie = context.get("gosso_cookie") or ""
         if not user_id or user_id == "anonymous":
             return tools
 
-        # employee_number 파라미터가 있는 모든 도구 래핑
+        # employee_number + gosso_cookie 주입 대상 도구
         secured_tools = {
             "get_my_calendars", "get_user_public_calendars",
             "get_calendar_events", "get_event_detail",
             "create_event", "update_event", "delete_event",
-            "create_reservation",  # 회의실 예약 시 사번 주입
         }
+        # employee_number만 주입 (gosso_cookie 불필요)
+        empno_only_tools = {"create_reservation"}
 
         for tool in tools:
-            if tool.name not in secured_tools:
+            if tool.name not in secured_tools and tool.name not in empno_only_tools:
                 continue
 
             original_ainvoke = getattr(tool, '_unwrapped_ainvoke', None) or tool.ainvoke
             object.__setattr__(tool, '_unwrapped_ainvoke', original_ainvoke)
 
+            inject_gosso = tool.name in secured_tools
+
             async def secured_ainvoke(
                 input_data, config=None, *,
-                _original=original_ainvoke, _uid=user_id, _tname=tool.name, **kwargs
+                _original=original_ainvoke, _uid=user_id,
+                _gosso=gosso_cookie, _inject_gosso=inject_gosso,
+                _tname=tool.name, **kwargs
             ):
                 if isinstance(input_data, dict):
                     if "args" in input_data and isinstance(input_data.get("args"), dict):
                         input_data["args"]["employee_number"] = _uid
+                        if _inject_gosso and _gosso:
+                            input_data["args"]["gosso_cookie"] = _gosso
                     else:
                         input_data["employee_number"] = _uid
+                        if _inject_gosso and _gosso:
+                            input_data["gosso_cookie"] = _gosso
                 try:
                     return await _original(input_data, config, **kwargs)
                 except Exception as e:
@@ -180,7 +190,8 @@ class CalendarWorker(BaseWorker):
 
             object.__setattr__(tool, "ainvoke", secured_ainvoke)
 
-        print(f"[CalendarWorker] 보안 래핑 완료: employee_number → {user_id}")
+        print(f"[CalendarWorker] 보안 래핑 완료: employee_number → {user_id}, "
+              f"gosso_cookie={'있음' if gosso_cookie else '없음'}")
         return tools
 
     def build_system_prompt(

@@ -28,6 +28,7 @@ export default async function proxy(request: NextRequest) {
     : { searchParams: new URLSearchParams(), pathname: new URL(request.url).pathname }
 
   const encryptedEmpno = searchParams.get('empno')
+  const encryptedGosso = searchParams.get('gosso')
 
   // 1. SSO: URL 파라미터에 empno가 있으면 복호화 후 쿠키에 저장
   if (encryptedEmpno) {
@@ -55,6 +56,29 @@ export default async function proxy(request: NextRequest) {
         path: '/',
         maxAge: 60 * 60 * 24 // 24시간
       })
+
+      // gosso 파라미터가 있으면 복호화하여 쿠키에 저장 (캘린더 사용자 인증용)
+      if (encryptedGosso) {
+        try {
+          const gossoResponse = await fetch(`${BACKEND_URL}/api/auth/decrypt`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ encrypted_empno: encryptedGosso })
+          })
+          if (gossoResponse.ok) {
+            const { decrypted_empno: decryptedGosso } = await gossoResponse.json()
+            redirectResponse.cookies.set('gosso', decryptedGosso, {
+              httpOnly: false,
+              secure: false,
+              sameSite: 'lax',
+              path: '/',
+              maxAge: 60 * 60 * 24 // empno와 동일 24시간 (실제 만료는 LFON 세션에 의존)
+            })
+          }
+        } catch {
+          // gosso 복호화 실패는 무시 — 서비스 계정 폴백
+        }
+      }
 
       return redirectResponse
     } catch (error) {

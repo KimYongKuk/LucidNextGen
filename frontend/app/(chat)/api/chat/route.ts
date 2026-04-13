@@ -23,6 +23,15 @@ const getUserId = (request: Request): string | null => {
   return empnoCookie?.split("=")[1] || null;
 };
 
+const getGossoCookie = (request: Request): string | null => {
+  const cookieHeader = request.headers.get("cookie") || "";
+  const gossoCookie = cookieHeader
+    .split(";")
+    .map((c) => c.trim())
+    .find((c) => c.startsWith("gosso="));
+  return gossoCookie?.split("=")[1] || null;
+};
+
 export async function POST(request: Request) {
   let requestBody: PostRequestBody;
 
@@ -34,6 +43,7 @@ export async function POST(request: Request) {
   }
 
   const userId = getUserId(request);
+  const gossoCookie = getGossoCookie(request);
   if (!userId) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), {
       status: 401,
@@ -101,6 +111,7 @@ export async function POST(request: Request) {
                 user_id: userId,
                 session_id: sessionId,
                 chat_mode: "normal",
+                ...(gossoCookie && { gosso_cookie: gossoCookie }),
               }),
             }
           );

@@ -3,7 +3,7 @@
 그룹웨어(LFON) 캘린더 REST API를 통해
 일정 조회, 등록, 삭제를 수행하는 MCP 서버입니다.
 
-인증: 서비스 계정 SSO 쿠키 (자동 로그인 + 캐싱)
+인증: 사용자 GOSSOcookie 우선 → 서비스 계정 SSO 폴백
 사용자 매핑: v_user_info_mapping VIEW (사번 → GO user.id)
 
 권한 모델:
@@ -156,9 +156,13 @@ async def _sso_login() -> Optional[dict]:
         return None
 
 
-async def _api_request(method: str, path: str, **kwargs) -> Optional[Any]:
-    """LFON API 호출 (SSO 쿠키 자동 관리, 401 시 재로그인)"""
-    cookies = await _sso_login()
+async def _api_request_with_cookies(
+    method: str, path: str,
+    cookies: Optional[dict],
+    retry_on_auth_fail: bool = False,
+    **kwargs,
+) -> Optional[Any]:
+    """지정된 쿠키로 LFON API 호출"""
     if not cookies:
         return None
 
@@ -173,7 +177,8 @@ async def _api_request(method: str, path: str, **kwargs) -> Optional[Any]:
         headers["Origin"] = LFON_BASE_URL
         headers["Referer"] = f"{LFON_BASE_URL}/app/calendar"
 
-    for attempt in range(2):
+    max_attempts = 2 if retry_on_auth_fail else 1
+    for attempt in range(max_attempts):
         try:
             async with httpx.AsyncClient(
                 base_url=LFON_BASE_URL, timeout=30, verify=False,
@@ -183,13 +188,15 @@ async def _api_request(method: str, path: str, **kwargs) -> Optional[Any]:
                     method, path, headers=headers, cookies=cookies, **kwargs
                 )
 
-                if resp.status_code in (401, 403) and attempt == 0:
-                    global _sso_cookies
-                    _sso_cookies = None
-                    cookies = await _sso_login()
-                    if not cookies:
-                        return None
-                    continue
+                if resp.status_code in (401, 403):
+                    if retry_on_auth_fail and attempt == 0:
+                        global _sso_cookies
+                        _sso_cookies = None
+                        cookies = await _sso_login()
+                        if not cookies:
+                            return None
+                        continue
+                    return None  # 사용자 쿠키는 재시도 없이 None 반환
 
                 if resp.status_code == 200:
                     return resp.json()
@@ -209,9 +216,33 @@ async def _api_request(method: str, path: str, **kwargs) -> Optional[Any]:
     return None
 
 
+async def _api_request(method: str, path: str, gosso_cookie: str = "", **kwargs) -> Optional[Any]:
+    """LFON API 호출 (사용자 GOSSOcookie 우선, 서비스 계정 폴백)"""
+    # 1) 사용자 GOSSOcookie가 있으면 우선 사용
+    if gosso_cookie:
+        result = await _api_request_with_cookies(
+            method, path,
+            cookies={"GOSSOcookie": gosso_cookie},
+            retry_on_auth_fail=False,
+            **kwargs,
+        )
+        if result is not None:
+            return result
+        print(f"[Calendar MCP] 사용자 GOSSOcookie 만료/실패 → 서비스 계정 폴백: {method} {path}",
+              file=sys.stderr)
+
+    # 2) 서비스 계정 폴백 (기존 동작)
+    return await _api_request_with_cookies(
+        method, path,
+        cookies=await _sso_login(),
+        retry_on_auth_fail=True,
+        **kwargs,
+    )
+
+
 # ── 내부 헬퍼 ─────────────────────────────────────────
 
-async def _get_user_feed(go_user_id: int) -> dict:
+async def _get_user_feed(go_user_id: int, gosso_cookie: str = "") -> dict:
     """사용자의 피드(내 캘린더 + 관심 캘린더) 조회 및 캐싱
 
     Returns:
@@ -228,7 +259,7 @@ async def _get_user_feed(go_user_id: int) -> dict:
         if cached_ts and (now - cached_ts).total_seconds() < FEED_CACHE_TTL:
             return _user_feed_cache[go_user_id]
 
-    result = await _api_request("GET", "/api/calendar/feed", params={"sort": "sequence asc"})
+    result = await _api_request("GET", "/api/calendar/feed", gosso_cookie=gosso_cookie, params={"sort": "sequence asc"})
     if not result:
         return _user_feed_cache.get(go_user_id, {})
 
@@ -328,12 +359,13 @@ def _filter_private_events(
 # ── MCP 도구 ──────────────────────────────────────────
 
 @mcp.tool()
-async def get_my_calendars(employee_number: str) -> str:
+async def get_my_calendars(employee_number: str, gosso_cookie: str = "") -> str:
     """내 캘린더 및 관심 캘린더 목록을 조회합니다.
     캘린더 ID를 확인하여 일정 조회, 등록, 삭제에 사용합니다.
 
     Args:
         employee_number: 사번 (자동 주입됨)
+        gosso_cookie: 사용자 GOSSOcookie (자동 주입됨, 직접 지정 금지)
 
     Returns:
         내 캘린더 + 관심 캘린더 목록 (id, 이름, 소유자, 공개설정)
@@ -347,7 +379,7 @@ async def get_my_calendars(employee_number: str) -> str:
     # 내 캘린더: /api/calendar/user/{id}/calendar (사용자별 조회)
     # feed API는 서비스 계정 세션 기준이라 사용자 본인 캘린더를 반환하지 않음
     my_cals = []
-    result = await _api_request("GET", f"/api/calendar/user/{go_user_id}/calendar")
+    result = await _api_request("GET", f"/api/calendar/user/{go_user_id}/calendar", gosso_cookie=gosso_cookie)
     if result:
         calendars = result if isinstance(result, list) else result.get("data", [])
         if isinstance(calendars, list):
@@ -364,7 +396,7 @@ async def get_my_calendars(employee_number: str) -> str:
 
     # 관심 캘린더: feed API (서비스 계정 기준 — 사용자별 관심 캘린더는 제한적)
     interest_cals = []
-    feed_map = await _get_user_feed(go_user_id)
+    feed_map = await _get_user_feed(go_user_id, gosso_cookie=gosso_cookie)
     if feed_map:
         my_cal_ids = {c["calendar_id"] for c in my_cals}
         for cal in feed_map.values():
@@ -401,13 +433,14 @@ async def get_my_calendars(employee_number: str) -> str:
 
 
 @mcp.tool()
-async def get_user_public_calendars(target_employee_number: str, employee_number: str) -> str:
+async def get_user_public_calendars(target_employee_number: str, employee_number: str, gosso_cookie: str = "") -> str:
     """특정 사용자의 공개 캘린더 목록을 조회합니다.
     관심 캘린더에 등록하지 않은 사용자의 공개 일정을 확인할 때 사용합니다.
 
     Args:
         target_employee_number: 조회 대상 사번
         employee_number: 요청자 사번 (자동 주입됨)
+        gosso_cookie: 사용자 GOSSOcookie (자동 주입됨, 직접 지정 금지)
 
     Returns:
         대상 사용자의 공개 캘린더 목록
@@ -417,7 +450,7 @@ async def get_user_public_calendars(target_employee_number: str, employee_number
         return f"오류: 사번 '{target_employee_number}'에 대한 사용자 정보를 찾을 수 없습니다."
 
     target_go_id = target_info["go_user_id"]
-    result = await _api_request("GET", f"/api/calendar/user/{target_go_id}/calendar")
+    result = await _api_request("GET", f"/api/calendar/user/{target_go_id}/calendar", gosso_cookie=gosso_cookie)
 
     if not result:
         return f"오류: {target_info['user_name']}님의 캘린더를 가져올 수 없습니다."
@@ -448,6 +481,7 @@ async def get_calendar_events(
     calendar_ids: str,
     start_date: str,
     end_date: str,
+    gosso_cookie: str = "",
 ) -> str:
     """지정한 캘린더의 일정을 기간별로 조회합니다.
     접근 권한이 있는 캘린더만 조회 가능합니다.
@@ -457,6 +491,7 @@ async def get_calendar_events(
         calendar_ids: 캘린더 ID 목록 (콤마 구분, 예: "2677,11")
         start_date: 시작 날짜 (YYYY-MM-DD)
         end_date: 종료 날짜 (YYYY-MM-DD)
+        gosso_cookie: 사용자 GOSSOcookie (자동 주입됨, 직접 지정 금지)
 
     Returns:
         일정 목록 (제목, 시간, 장소, 참석자)
@@ -466,11 +501,11 @@ async def get_calendar_events(
         return f"오류: 사번 '{employee_number}'에 대한 사용자 정보를 찾을 수 없습니다."
 
     go_user_id = user_info["go_user_id"]
-    feed_map = await _get_user_feed(go_user_id)
+    feed_map = await _get_user_feed(go_user_id, gosso_cookie=gosso_cookie)
 
     # 사용자 본인 캘린더 ID 조회 (feed에 없을 수 있으므로)
     own_cal_ids = set()
-    user_cal_result = await _api_request("GET", f"/api/calendar/user/{go_user_id}/calendar")
+    user_cal_result = await _api_request("GET", f"/api/calendar/user/{go_user_id}/calendar", gosso_cookie=gosso_cookie)
     if user_cal_result:
         user_cals = user_cal_result if isinstance(user_cal_result, list) else user_cal_result.get("data", [])
         if isinstance(user_cals, list):
@@ -529,7 +564,7 @@ async def get_calendar_events(
           f"{start_date}~{end_date}", file=sys.stderr)
     print(f"[Calendar MCP] API path: {path[:200]}", file=sys.stderr)
 
-    result = await _api_request("GET", path)
+    result = await _api_request("GET", path, gosso_cookie=gosso_cookie)
     if not result:
         return "오류: 일정을 가져올 수 없습니다."
 
@@ -619,6 +654,7 @@ async def get_event_detail(
     employee_number: str,
     calendar_id: int,
     event_id: str,
+    gosso_cookie: str = "",
 ) -> str:
     """일정의 상세 정보를 조회합니다.
 
@@ -626,6 +662,7 @@ async def get_event_detail(
         employee_number: 사번 (자동 주입됨)
         calendar_id: 캘린더 ID
         event_id: 일정 ID (반복 일정의 경우 "eventId_timestamp" 형식)
+        gosso_cookie: 사용자 GOSSOcookie (자동 주입됨, 직접 지정 금지)
 
     Returns:
         일정 상세 (제목, 시간, 장소, 설명, 참석자, 반복 설정 등)
@@ -635,19 +672,19 @@ async def get_event_detail(
         return f"오류: 사번 '{employee_number}'에 대한 사용자 정보를 찾을 수 없습니다."
 
     go_user_id = user_info["go_user_id"]
-    feed_map = await _get_user_feed(go_user_id)
+    feed_map = await _get_user_feed(go_user_id, gosso_cookie=gosso_cookie)
 
     # 본인 캘린더 여부 (feed + user API)
     cal_info = feed_map.get(calendar_id, {})
     is_own = cal_info.get("is_own", False)
     if not is_own:
-        user_cal_result = await _api_request("GET", f"/api/calendar/user/{go_user_id}/calendar")
+        user_cal_result = await _api_request("GET", f"/api/calendar/user/{go_user_id}/calendar", gosso_cookie=gosso_cookie)
         if user_cal_result:
             user_cals = user_cal_result if isinstance(user_cal_result, list) else user_cal_result.get("data", [])
             if isinstance(user_cals, list):
                 is_own = any(c.get("id") == calendar_id for c in user_cals)
 
-    result = await _api_request("GET", f"/api/calendar/{calendar_id}/event/{event_id}")
+    result = await _api_request("GET", f"/api/calendar/{calendar_id}/event/{event_id}", gosso_cookie=gosso_cookie)
     if not result:
         return "오류: 일정 상세를 가져올 수 없습니다."
 
@@ -730,6 +767,7 @@ async def create_event(
     attendee_emails: str = "",
     attendee_names: str = "",
     reminder_minutes: str = "30",
+    gosso_cookie: str = "",
 ) -> str:
     """내 캘린더에 일정을 등록합니다.
     반드시 사용자에게 등록 내용을 확인받은 후 호출하세요.
@@ -761,7 +799,7 @@ async def create_event(
 
     # 소유권 검증: 내 캘린더인지 확인 (user API 기반)
     is_own = False
-    user_cal_result = await _api_request("GET", f"/api/calendar/user/{go_user_id}/calendar")
+    user_cal_result = await _api_request("GET", f"/api/calendar/user/{go_user_id}/calendar", gosso_cookie=gosso_cookie)
     if user_cal_result:
         user_cals = user_cal_result if isinstance(user_cal_result, list) else user_cal_result.get("data", [])
         if isinstance(user_cals, list):
@@ -868,7 +906,7 @@ async def create_event(
           f"user=GO#{go_user_id}", file=sys.stderr)
 
     result = await _api_request("POST", f"/api/calendar/{calendar_id}/event/",
-                                json=payload)
+                                gosso_cookie=gosso_cookie, json=payload)
     if not result:
         return "오류: 일정 등록에 실패했습니다. 서버에 연결할 수 없습니다."
 
@@ -921,6 +959,7 @@ async def update_event(
     remove_attendee_names: str = "",
     recurrence: str = "",
     reminder_minutes: str = "",
+    gosso_cookie: str = "",
 ) -> str:
     """기존 일정을 수정합니다.
     변경할 필드만 지정하세요. 빈 문자열은 변경하지 않음을 의미합니다.
@@ -953,7 +992,7 @@ async def update_event(
 
     # 소유권 검증
     is_own = False
-    user_cal_result = await _api_request("GET", f"/api/calendar/user/{go_user_id}/calendar")
+    user_cal_result = await _api_request("GET", f"/api/calendar/user/{go_user_id}/calendar", gosso_cookie=gosso_cookie)
     if user_cal_result:
         user_cals = user_cal_result if isinstance(user_cal_result, list) else user_cal_result.get("data", [])
         if isinstance(user_cals, list):
@@ -963,7 +1002,7 @@ async def update_event(
         return "오류: 본인 캘린더의 일정만 수정할 수 있습니다."
 
     # 기존 일정 조회
-    detail = await _api_request("GET", f"/api/calendar/{calendar_id}/event/{event_id}")
+    detail = await _api_request("GET", f"/api/calendar/{calendar_id}/event/{event_id}", gosso_cookie=gosso_cookie)
     if not detail:
         return "오류: 일정 정보를 가져올 수 없습니다."
 
@@ -1047,7 +1086,7 @@ async def update_event(
           f"user=GO#{go_user_id}", file=sys.stderr)
 
     result = await _api_request("PUT", f"/api/calendar/{calendar_id}/event/{event_id}",
-                                json=updated)
+                                gosso_cookie=gosso_cookie, json=updated)
     if not result:
         return "오류: 일정 수정에 실패했습니다."
 
@@ -1075,6 +1114,7 @@ async def delete_event(
     calendar_id: int,
     event_id: str,
     delete_type: str = "all",
+    gosso_cookie: str = "",
 ) -> str:
     """내 일정을 삭제합니다.
     반드시 사용자에게 삭제 내용을 확인받은 후 호출하세요.
@@ -1097,7 +1137,7 @@ async def delete_event(
 
     # 소유권 검증 (user API 기반)
     is_own = False
-    user_cal_result = await _api_request("GET", f"/api/calendar/user/{go_user_id}/calendar")
+    user_cal_result = await _api_request("GET", f"/api/calendar/user/{go_user_id}/calendar", gosso_cookie=gosso_cookie)
     if user_cal_result:
         user_cals = user_cal_result if isinstance(user_cal_result, list) else user_cal_result.get("data", [])
         if isinstance(user_cals, list):
@@ -1107,7 +1147,7 @@ async def delete_event(
         return "오류: 본인 캘린더의 일정만 삭제할 수 있습니다."
 
     # 일정 상세 조회로 creator 확인
-    detail = await _api_request("GET", f"/api/calendar/{calendar_id}/event/{event_id}")
+    detail = await _api_request("GET", f"/api/calendar/{calendar_id}/event/{event_id}", gosso_cookie=gosso_cookie)
     if not detail:
         return "오류: 일정 정보를 가져올 수 없습니다."
 
@@ -1120,7 +1160,7 @@ async def delete_event(
 
     # 삭제 실행
     path = f"/api/calendar/{calendar_id}/event/{event_id}?recurChangeType={delete_type}"
-    result = await _api_request("DELETE", path)
+    result = await _api_request("DELETE", path, gosso_cookie=gosso_cookie)
 
     if not result:
         return "오류: 일정 삭제에 실패했습니다. 서버에 연결할 수 없습니다."

@@ -53,6 +53,7 @@ class ChatRequest(BaseModel):
     images: Optional[List[ImageData]] = None
     message_history: Optional[List[MessageHistory]] = None
     workspace_id: Optional[str] = None  # UUID string
+    gosso_cookie: Optional[str] = None  # LFON GOSSOcookie (캘린더 사용자 인증)
 
 
 # ============================================================================
@@ -613,6 +614,7 @@ async def chat_stream(
                         images=img_data,
                         all_tools=tools,
                         start_time=start_time,
+                        gosso_cookie=request.gosso_cookie,
                     ):
                         # 내부 수집 데이터 처리
                         if '"type": "_internal_collected"' in sse:

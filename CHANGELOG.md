@@ -5,7 +5,11 @@
 
 ---
 
+## [2026-04-14]
+- **수정** [Calendar] 캘린더 사용자별 SSO 인증 — 서비스 계정(wg0403) 대신 사용자 GOSSOcookie로 API 호출, 일정 등록/수정/삭제 권한 오류 해결, JSP에서 gosso 파라미터 전달 → [상세](docs/history/2026-04-14_캘린더-사용자별-SSO-인증.md)
+
 ## [2026-04-13]
+- **추가** [Widget/nginx] 다우오피스 그룹웨어 플로팅 위젯 연동 — custom_index_header.jsp 활용, SSE 이벤트 매핑 수정, MutationObserver SPA 대응, 위젯 on/off 파일명 전환 운영 → [상세](docs/history/2026-04-13_그룹웨어-플로팅-위젯-연동.md)
 - **추가** [ChromaDB] BM25+시멘틱 하이브리드 검색 도입 — Lot 번호/코드 검색 실패 해결, RRF 합산, BM25 캐시, 환경변수 가중치 조절 → [상세](docs/history/2026-04-13_하이브리드-검색-BM25-RRF.md)
 - **수정** [OutlineSync] Webhook+청크 기반 동기화로 전면 개편 — 30분 폴링→Webhook 실시간, Haiku 요약→청크 분할(본문 전체 검색), asyncio.Queue 순차 처리(GPU OOM 해결), 4시간 폴백 delta sync → [상세](docs/history/2026-04-13_Outline-Webhook-청크-동기화.md)
 - **수정** [IntentClassifier/BaseWorker] 시각화 과다 사용 억제 + PPT/XLSX 인텐트 오분류 방지 — 시각화 가이드 텍스트/마크다운 우선 원칙, PPT quick_classify 생성동사 필수화, LLM 프롬프트 문서생성 규칙 강화, 빈 파일 거짓 응답 방지 → [상세](docs/history/2026-04-13_시각화-인텐트-과다분류-수정.md)

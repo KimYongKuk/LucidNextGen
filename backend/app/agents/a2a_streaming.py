@@ -307,6 +307,7 @@ async def stream_a2a_response(
     images: Optional[List[Dict]],
     all_tools: List,
     start_time: float,
+    gosso_cookie: Optional[str] = None,
 ) -> AsyncIterator[str]:
     """
     A2A Hierarchical Agent 스트리밍 응답 생성
@@ -371,6 +372,7 @@ async def stream_a2a_response(
         "has_files": has_files,
         "has_session_xlsx": _has_session_xlsx(session_id),
         "chat_mode": chat_mode,
+        "gosso_cookie": gosso_cookie,
         "session_file_names": [],  # 아래에서 채움
     }
 

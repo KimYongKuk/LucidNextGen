@@ -107,3 +107,4 @@ class RequestContext(TypedDict):
     has_files: bool  # 세션에 사용자 파일이 업로드되었는지 여부
     has_session_xlsx: bool  # 세션에 xlsx 파일이 업로드되었는지 여부 (인텐트 분류용)
     chat_mode: str
+    gosso_cookie: Optional[str]  # 사용자 LFON GOSSOcookie (캘린더 API 사용자 인증용)
