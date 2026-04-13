@@ -55,6 +55,22 @@ _ACCESS_CONTROLLED_WRITE_TOOLS = {"create_document"}
 _collection_access_cache: Dict[str, Tuple[Set[str], Set[str], float]] = {}
 _COLLECTION_CACHE_TTL = 300  # 5분
 
+# AI 참조 스코프: Official_Public 컬렉션 이름 (디폴트 AI 참조 ON)
+AI_REFERENCE_PUBLIC_COLLECTION = os.environ.get(
+    "AI_REFERENCE_PUBLIC_COLLECTION", "Official_Public"
+)
+
+# 캐시: team_id → (public_collection_ids, ai_ref_doc_ids, timestamp)
+_ai_reference_cache: Dict[str, Tuple[Set[str], Set[str], float]] = {}
+_AI_REFERENCE_CACHE_TTL = 300  # 5분
+
+# Personal 컬렉션 캐시
+_personal_collection_cache: Optional[Tuple[Set[str], float]] = None
+_PERSONAL_COLLECTION_CACHE_TTL = 300  # 5분
+
+# 사번 → Outline user ID 캐시
+_user_id_cache: Dict[str, Tuple[Optional[str], float]] = {}
+
 # asyncpg 풀 (lazy init)
 _outline_db_pool = None
 
@@ -148,6 +164,229 @@ async def _get_collection_access(emp_code: str) -> Optional[Tuple[Set[str], Set[
     except Exception as e:
         logger.error(f"Outline 컬렉션 접근 조회 실패 (emp={emp_code}): {e}")
         return None
+
+
+# AI 참조 가능 문서 조회 쿼리
+# 1) Official_Public 컬렉션의 모든 발행된 문서 → AI 참조 가능
+# 2) ai_reference_documents에 enabled=true인 최상위 문서 + 그 하위 문서 → AI 참조 가능
+_AI_REFERENCE_QUERY = """
+WITH RECURSIVE
+  -- Official_Public 컬렉션 ID
+  public_collections AS (
+    SELECT id FROM collections
+    WHERE name = $1 AND "deletedAt" IS NULL AND "archivedAt" IS NULL
+  ),
+  -- ai_reference_documents에 명시적 활성화된 최상위 문서 ID
+  explicit_refs AS (
+    SELECT "documentId" FROM ai_reference_documents
+    WHERE enabled = true
+  ),
+  -- 명시적 활성화 문서의 하위 문서 (재귀)
+  ref_descendants AS (
+    SELECT id FROM documents WHERE id IN (SELECT "documentId" FROM explicit_refs)
+      AND "deletedAt" IS NULL
+    UNION ALL
+    SELECT d.id FROM documents d
+    JOIN ref_descendants rd ON d."parentDocumentId" = rd.id
+    WHERE d."deletedAt" IS NULL
+  )
+SELECT id::text FROM documents
+WHERE "deletedAt" IS NULL AND "publishedAt" IS NOT NULL
+  AND "collectionId" IN (SELECT id FROM public_collections)
+UNION
+SELECT id::text FROM ref_descendants
+"""
+
+
+async def _get_ai_referenceable_doc_ids() -> Optional[Set[str]]:
+    """AI 참조 가능한 문서 ID 집합 조회
+
+    Returns:
+        문서 ID 집합 또는 None (기능 비활성화/DB 오류)
+    """
+    if not OUTLINE_DATABASE_URL:
+        return None  # 접근 제어 비활성화
+
+    cache_key = "global"
+    now = time.time()
+    cached = _ai_reference_cache.get(cache_key)
+    if cached:
+        _, doc_ids, ts = cached
+        if now - ts < _AI_REFERENCE_CACHE_TTL:
+            return doc_ids
+
+    try:
+        pool = await _get_outline_pool()
+        if not pool:
+            return None
+
+        rows = await pool.fetch(
+            _AI_REFERENCE_QUERY, AI_REFERENCE_PUBLIC_COLLECTION
+        )
+        doc_ids = {row["id"] for row in rows}
+
+        _ai_reference_cache[cache_key] = (set(), doc_ids, now)
+        logger.info(f"AI 참조 가능 문서 조회: {len(doc_ids)}건")
+        return doc_ids
+
+    except Exception as e:
+        logger.error(f"AI 참조 가능 문서 조회 실패: {e}")
+        return None
+
+
+async def _get_personal_collection_ids() -> Optional[Set[str]]:
+    """Personal 컬렉션 ID 목록 조회 (캐시 5분)"""
+    global _personal_collection_cache
+    if not OUTLINE_DATABASE_URL:
+        return None
+
+    now = time.time()
+    if _personal_collection_cache:
+        ids, ts = _personal_collection_cache
+        if now - ts < _PERSONAL_COLLECTION_CACHE_TTL:
+            return ids
+
+    try:
+        pool = await _get_outline_pool()
+        if not pool:
+            return None
+        rows = await pool.fetch(
+            'SELECT id::text FROM collections WHERE "isPersonal" = true AND "deletedAt" IS NULL'
+        )
+        ids = {row["id"] for row in rows}
+        _personal_collection_cache = (ids, now)
+        return ids
+    except Exception as e:
+        logger.error(f"Personal 컬렉션 조회 실패: {e}")
+        return None
+
+
+async def _get_user_id_by_empcode(emp_code: str) -> Optional[str]:
+    """사번으로 Outline user ID 조회 (캐시 5분)"""
+    if not OUTLINE_DATABASE_URL or not emp_code or emp_code == "anonymous":
+        return None
+
+    now = time.time()
+    cached = _user_id_cache.get(emp_code)
+    if cached:
+        uid, ts = cached
+        if now - ts < _PERSONAL_COLLECTION_CACHE_TTL:
+            return uid
+
+    try:
+        pool = await _get_outline_pool()
+        if not pool:
+            return None
+        row = await pool.fetchrow(
+            'SELECT id::text FROM users WHERE "empCode" = $1 AND "deletedAt" IS NULL LIMIT 1',
+            emp_code,
+        )
+        uid = row["id"] if row else None
+        _user_id_cache[emp_code] = (uid, now)
+        return uid
+    except Exception as e:
+        logger.error(f"사번→userId 조회 실패 (emp={emp_code}): {e}")
+        return None
+
+
+def _filter_result_by_personal_collection(
+    result, personal_ids: Set[str], user_id: str, tool_name: str,
+):
+    """Personal 컬렉션 문서 중 본인 것만 남기고 필터링"""
+    content = result.content if isinstance(result, ToolMessage) else (
+        result if isinstance(result, str) else str(result)
+    )
+    try:
+        data = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return result
+
+    if "error" in data:
+        return result
+
+    filtered = False
+
+    if tool_name in ("search_documents", "list_recent_documents"):
+        key = "results"
+        if key in data:
+            orig = len(data[key])
+            data[key] = [
+                r for r in data[key]
+                if r.get("collectionId") not in personal_ids
+                or (r.get("createdBy") or {}).get("id") == user_id
+            ]
+            data["count"] = len(data[key])
+            filtered = orig != data["count"]
+
+    elif tool_name == "get_document":
+        coll_id = data.get("collectionId", "")
+        if coll_id in personal_ids:
+            creator_id = (data.get("createdBy") or {}).get("id", "")
+            if creator_id != user_id:
+                data = {"error": "해당 문서에 대한 접근 권한이 없습니다."}
+                filtered = True
+
+    if not filtered:
+        return result
+
+    new_content = json.dumps(data, ensure_ascii=False, default=str)
+    if isinstance(result, ToolMessage):
+        return ToolMessage(
+            content=new_content,
+            tool_call_id=result.tool_call_id,
+            name=getattr(result, "name", None) or tool_name,
+        )
+    return new_content
+
+
+def _filter_result_by_ai_reference(
+    result, ai_ref_doc_ids: Set[str], tool_name: str,
+):
+    """도구 결과에서 AI 참조 불가 문서를 필터링"""
+    content = result.content if isinstance(result, ToolMessage) else (
+        result if isinstance(result, str) else str(result)
+    )
+    try:
+        data = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return result
+
+    if "error" in data:
+        return result
+
+    filtered = False
+
+    if tool_name in ("search_documents", "list_recent_documents"):
+        key = "results"
+        if key in data:
+            orig = len(data[key])
+            data[key] = [r for r in data[key] if r.get("id") in ai_ref_doc_ids]
+            data["count"] = len(data[key])
+            filtered = orig != data["count"]
+
+    elif tool_name == "get_document":
+        doc_id = data.get("id", "")
+        if doc_id and doc_id not in ai_ref_doc_ids:
+            data = {"error": "해당 문서는 AI 챗봇 참조가 비활성화되어 있습니다."}
+            filtered = True
+
+    elif tool_name == "list_collection_documents":
+        # 트리 구조의 문서 목록 — 참조 불가 문서에 마킹
+        if "documents" in data:
+            for doc in data["documents"]:
+                doc["ai_reference"] = doc.get("id", "") in ai_ref_doc_ids
+
+    if not filtered:
+        return result
+
+    new_content = json.dumps(data, ensure_ascii=False, default=str)
+    if isinstance(result, ToolMessage):
+        return ToolMessage(
+            content=new_content,
+            tool_call_id=result.tool_call_id,
+            name=getattr(result, "name", None) or tool_name,
+        )
+    return new_content
 
 
 def _filter_result_by_access(
@@ -549,7 +788,24 @@ class OutlineWorker(BaseWorker):
                         result = await _hybrid_merge_search(
                             result, input_data, _tname,
                             readable_ids=access[0] if access else None,
+                            emp_code=_emp,
                         )
+
+                    # AI 참조 스코프 필터
+                    ai_ref_ids = await _get_ai_referenceable_doc_ids()
+                    if ai_ref_ids is not None:
+                        result = _filter_result_by_ai_reference(
+                            result, ai_ref_ids, _tname,
+                        )
+
+                    # Personal 컬렉션 필터: 본인 문서만 노출
+                    personal_ids = await _get_personal_collection_ids()
+                    if personal_ids:
+                        outline_uid = await _get_user_id_by_empcode(_emp)
+                        if outline_uid:
+                            result = _filter_result_by_personal_collection(
+                                result, personal_ids, outline_uid, _tname,
+                            )
 
                     return result
 
@@ -596,6 +852,22 @@ class OutlineWorker(BaseWorker):
                             result, readable, writable, _tname,
                         )
 
+                    # AI 참조 스코프 필터
+                    ai_ref_ids = await _get_ai_referenceable_doc_ids()
+                    if ai_ref_ids is not None:
+                        result = _filter_result_by_ai_reference(
+                            result, ai_ref_ids, _tname,
+                        )
+
+                    # Personal 컬렉션 필터: 본인 문서만 노출
+                    personal_ids = await _get_personal_collection_ids()
+                    if personal_ids:
+                        outline_uid = await _get_user_id_by_empcode(_emp)
+                        if outline_uid:
+                            result = _filter_result_by_personal_collection(
+                                result, personal_ids, outline_uid, _tname,
+                            )
+
                     return result
 
                 object.__setattr__(tool, "ainvoke", secured_ainvoke)
@@ -620,6 +892,7 @@ async def _hybrid_merge_search(
     input_data: dict,
     tool_name: str,
     readable_ids: Optional[Set[str]] = None,
+    emp_code: Optional[str] = None,
 ):
     """키워드 검색 결과에 시멘틱 검색 결과를 RRF 병합
 
@@ -651,6 +924,20 @@ async def _hybrid_merge_search(
             n_results=10,
             collection_ids=collection_ids,
         )
+
+        if not semantic_hits:
+            return keyword_result
+
+        # Personal 컬렉션 필터: 시멘틱 결과에서 타인 문서 제거
+        personal_ids = await _get_personal_collection_ids()
+        if personal_ids and emp_code:
+            outline_uid = await _get_user_id_by_empcode(emp_code)
+            if outline_uid:
+                semantic_hits = [
+                    h for h in semantic_hits
+                    if h.get("collection_id") not in personal_ids
+                    or h.get("created_by_id") == outline_uid
+                ]
 
         if not semantic_hits:
             return keyword_result

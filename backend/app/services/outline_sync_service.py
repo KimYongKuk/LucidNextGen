@@ -29,6 +29,12 @@ logger = logging.getLogger(__name__)
 # ── 설정 ──────────────────────────────────────────────────────
 OUTLINE_API_URL = os.environ.get("OUTLINE_API_URL", "http://192.168.90.30:3003/api")
 OUTLINE_API_KEY = os.environ.get("OUTLINE_API_KEY", "")
+OUTLINE_DATABASE_URL = os.environ.get("OUTLINE_DATABASE_URL", "")
+
+# AI 참조 스코프
+AI_REFERENCE_PUBLIC_COLLECTION = os.environ.get(
+    "AI_REFERENCE_PUBLIC_COLLECTION", "Official_Public"
+)
 
 # ChromaDB 컬렉션명
 OUTLINE_COLLECTION_NAME = "outline_wiki"
@@ -284,6 +290,61 @@ class OutlineSyncService:
                 metadatas=batch_metas,
             )
 
+    async def _is_ai_referenceable(self, document_id: str, collection_id: str) -> bool:
+        """문서가 AI 참조 가능한지 확인
+
+        조건:
+          1) Official_Public 컬렉션 소속 → 무조건 참조 가능
+          2) ai_reference_documents에 최상위 문서가 enabled=true로 등록 → 참조 가능
+        """
+        if not OUTLINE_DATABASE_URL:
+            return True  # DB 미설정 시 기본 허용 (기존 동작 유지)
+
+        try:
+            import asyncpg
+            conn = await asyncpg.connect(OUTLINE_DATABASE_URL)
+            try:
+                # 1) Official_Public 컬렉션 체크
+                is_public = await conn.fetchval(
+                    """SELECT EXISTS(
+                        SELECT 1 FROM collections
+                        WHERE id = $1 AND name = $2
+                          AND "deletedAt" IS NULL
+                    )""",
+                    collection_id, AI_REFERENCE_PUBLIC_COLLECTION,
+                )
+                if is_public:
+                    return True
+
+                # 2) 최상위 문서까지 올라가서 ai_reference_documents 체크
+                current_id = document_id
+                visited = set()
+                while current_id and current_id not in visited:
+                    visited.add(current_id)
+                    parent_id = await conn.fetchval(
+                        'SELECT "parentDocumentId" FROM documents WHERE id = $1',
+                        current_id,
+                    )
+                    if not parent_id:
+                        break  # current_id가 최상위
+                    current_id = parent_id
+
+                # current_id = 최상위 문서 ID
+                is_ref = await conn.fetchval(
+                    """SELECT EXISTS(
+                        SELECT 1 FROM ai_reference_documents
+                        WHERE "documentId" = $1 AND enabled = true
+                    )""",
+                    current_id,
+                )
+                return bool(is_ref)
+            finally:
+                await conn.close()
+
+        except Exception as e:
+            logger.error(f"[OutlineSync] AI 참조 체크 실패 ({document_id}): {e}")
+            return True  # 에러 시 기본 허용 (기존 동작 유지)
+
     async def process_single_document(
         self,
         document_id: str,
@@ -314,6 +375,17 @@ class OutlineSyncService:
         if not doc:
             return {"action": "skip", "document_id": document_id, "reason": "문서 조회 실패"}
 
+        # AI 참조 스코프 체크: 참조 불가 문서는 ChromaDB에서 제거
+        collection_id = doc.get("collectionId", "")
+        if not await self._is_ai_referenceable(document_id, collection_id):
+            deleted = await loop.run_in_executor(
+                _sync_executor,
+                self._delete_document_chunks_sync, document_id,
+            )
+            if deleted:
+                logger.info(f"[OutlineSync] AI 참조 OFF 문서 제거: {document_id}, 청크 {deleted}개")
+            return {"action": "skip", "document_id": document_id, "reason": "AI 참조 비활성화"}
+
         title = doc.get("title", "제목 없음")
         body = doc.get("text", "")
 
@@ -339,6 +411,7 @@ class OutlineSyncService:
             {
                 "document_id": document_id,
                 "collection_id": doc.get("collectionId", ""),
+                "created_by_id": (doc.get("createdBy") or {}).get("id", ""),
                 "title": title,
                 "chunk_index": i,
                 "updated_at": doc.get("updatedAt", ""),
@@ -596,6 +669,7 @@ class OutlineSyncService:
                 doc_best[doc_id] = {
                     "document_id": doc_id,
                     "collection_id": meta.get("collection_id", ""),
+                    "created_by_id": meta.get("created_by_id", ""),
                     "title": meta.get("title", ""),
                     "url": meta.get("url", ""),
                     "updated_at": meta.get("updated_at", ""),

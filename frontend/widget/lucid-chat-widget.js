@@ -33,17 +33,17 @@
     subtitle: 'L&F 업무 AI 어시스턴트',
     quickActions: ['SAP 사용법', '사내규정 조회', '업무양식 안내'],
     // SSE 설정
-    streamEndpoint: '/api/chat/stream',
-    // SSE 커스텀 JSON 이벤트 타입 매핑
-    sseTokenType: 'token',          // 토큰 스트리밍 이벤트 타입
+    streamEndpoint: '/api/v1/chat/message/stream',
+    // SSE 커스텀 JSON 이벤트 타입 매핑 (백엔드 a2a_streaming 형식)
+    sseTokenType: 'content',        // 토큰 스트리밍 이벤트 타입
     sseDoneType: 'done',            // 완료 이벤트 타입
     sseErrorType: 'error',          // 에러 이벤트 타입
-    sseContentField: 'content',     // 토큰 내용 필드명
+    sseContentField: 'chunk',       // 토큰 내용 필드명
     sseStatusField: 'type',         // 이벤트 타입 필드명
     // 추가 SSE 이벤트 타입 (선택)
     sseThinkingType: 'thinking',    // 사고 과정 이벤트
     sseSourceType: 'source',        // 출처/참조 이벤트
-    sseToolType: 'tool_call',       // 도구 호출 이벤트
+    sseToolType: 'tool_status',     // 도구 호출 이벤트
   };
 
   let config = {};
@@ -630,6 +630,16 @@
     container.appendChild(button);
     document.body.appendChild(container);
 
+    // SPA 환경: body 자식 변경 시 위젯이 사라지면 다시 붙이기
+    if (typeof MutationObserver !== 'undefined') {
+      var reattachObserver = new MutationObserver(function () {
+        if (!document.body.contains(container)) {
+          document.body.appendChild(container);
+        }
+      });
+      reattachObserver.observe(document.body, { childList: true });
+    }
+
     // Cache elements
     messagesEl = widget.querySelector('#lcd-messages');
     inputEl = widget.querySelector('#lcd-input');
@@ -963,6 +973,11 @@
       }
 
       function handleSSEEvent(data) {
+        // 백엔드 완료 이벤트: {"complete": true}
+        if (data.complete) {
+          onStreamEnd();
+          return;
+        }
         var eventType = data[config.sseStatusField] || '';
         var content = data[config.sseContentField] || '';
 
@@ -984,8 +999,9 @@
             break;
 
           case config.sseToolType:
-            var toolName = data.tool_name || data.name || '도구';
-            showStatus(toolName + ' 실행 중...');
+            var toolMsg = data.message || '';
+            var toolName = data.tool || data.tool_name || data.name || '도구';
+            showStatus(toolMsg || toolName + ' 실행 중...');
             break;
 
           case config.sseSourceType:
