@@ -13,8 +13,10 @@ import { generateUUID } from "@/lib/utils";
 
 export function EmbedChat({
   userId,
+  chatMode = "outline_embed",
 }: {
   userId: string;
+  chatMode?: string;
 }) {
   const { setDataStream } = useDataStream();
   const [sessionId, setSessionId] = useState(() => generateUUID());
@@ -33,7 +35,7 @@ export function EmbedChat({
   } = useSimpleChat({
     id: sessionId,
     messages: [],
-    chatMode: "outline_embed",
+    chatMode,
     userId,
     generateId: generateUUID,
     onData: (dataPart) => {

@@ -130,6 +130,19 @@ class Orchestrator:
                     intent = Intent.OUTLINE
                     fallback_intent = None
 
+        # groupware_embed 모드: 그룹웨어 관련 인텐트만 허용
+        elif chat_mode == "groupware_embed":
+            GROUPWARE_ALLOWED = {
+                Intent.MAIL, Intent.APPROVAL, Intent.BOARD,
+                Intent.CALENDAR, Intent.RESERVATION,
+                Intent.IT_SUPPORT, Intent.ACCT_SUPPORT,
+                Intent.WEB_SEARCH, Intent.DIRECT,
+            }
+            if intent not in GROUPWARE_ALLOWED:
+                print(f"[ORCHESTRATOR] groupware_embed mode: {intent.value} -> DIRECT")
+                intent = Intent.DIRECT
+                fallback_intent = None
+
         worker_name = INTENT_TO_WORKER.get(intent, "DirectResponseWorker")
 
         classify_time = int((time.time() - classify_start) * 1000)
