@@ -266,8 +266,14 @@ class VocWikiService:
         except Exception as e:
             return {"error": f"요청 실패: {str(e)[:300]}"}
 
-    async def _get_collection_tree(self, collection_id: str) -> list[dict]:
-        """컬렉션 문서 트리 조회 → 플랫 리스트 반환"""
+    async def _get_collection_tree(self, collection_id: str,
+                                    root_document_id: str = "") -> list[dict]:
+        """컬렉션 문서 트리 조회 → 플랫 리스트 반환
+
+        Args:
+            collection_id: Outline 컬렉션 ID
+            root_document_id: 지정 시 해당 문서의 자식만 반환 (depth 0부터 시작)
+        """
         result = await self._outline_request("collections.documents", {"id": collection_id})
         if "error" in result:
             logger.error(f"[VOC Wiki] Collection tree error: {result['error']}")
@@ -288,7 +294,23 @@ class VocWikiService:
                 for child in node.get("children", []):
                     flatten([child], depth + 1, node.get("id"))
 
-        flatten(nodes)
+        if root_document_id:
+            # 특정 문서의 자식만 추출 (해당 문서를 루트로 취급)
+            def find_subtree(items):
+                for node in items:
+                    if node.get("id") == root_document_id:
+                        return node.get("children", [])
+                    found = find_subtree(node.get("children", []))
+                    if found is not None:
+                        return found
+                return None
+
+            subtree = find_subtree(nodes)
+            if subtree:
+                flatten(subtree, depth=0, parent_id=root_document_id)
+        else:
+            flatten(nodes)
+
         return flat
 
     async def _get_document_content(self, doc_id: str) -> str:
@@ -457,9 +479,10 @@ class VocWikiService:
 
     # ── 문서 구조 관리 ────────────────────────────────
 
-    async def _get_existing_topics(self, collection_id: str) -> dict[str, list[str]]:
+    async def _get_existing_topics(self, collection_id: str,
+                                    root_document_id: str = "") -> dict[str, list[str]]:
         """현재 위키의 시스템/주제 구조 파악"""
-        tree = await self._get_collection_tree(collection_id)
+        tree = await self._get_collection_tree(collection_id, root_document_id=root_document_id)
         topics: dict[str, list[str]] = {}
 
         # depth=0 → 시스템 문서, depth=1 → 주제 문서
@@ -509,9 +532,10 @@ class VocWikiService:
         return "-"
 
     async def _update_system_toc(self, system_doc_id: str, collection_id: str,
-                                 system_name: str) -> None:
+                                 system_name: str,
+                                 root_document_id: str = "") -> None:
         """시스템 부모 문서의 목차 갱신"""
-        tree = await self._get_collection_tree(collection_id)
+        tree = await self._get_collection_tree(collection_id, root_document_id=root_document_id)
 
         # 자식 문서 수집
         children = [n for n in tree if n.get("parent_id") == system_doc_id and n["depth"] == 1]
@@ -588,13 +612,15 @@ class VocWikiService:
 
     # ── 메인 오케스트레이션 ───────────────────────────
 
-    async def sync(self, collection_id: str, since: Optional[date] = None) -> dict:
+    async def sync(self, collection_id: str, since: Optional[date] = None,
+                   parent_document_id: str = "") -> dict:
         """
         VOC → 위키 동기화 실행
 
         Args:
             collection_id: Outline 컬렉션 ID
             since: 조회 시작일 (None이면 마지막 동기화 이후)
+            parent_document_id: 지정 시 해당 문서 하위에 생성
 
         Returns:
             {"success": bool, "voc_count": int, "created": int, "updated": int}
@@ -604,9 +630,10 @@ class VocWikiService:
             return {"success": False, "error": "동기화가 이미 진행 중입니다."}
 
         async with self._sync_lock:
-            return await self._sync_inner(collection_id, since)
+            return await self._sync_inner(collection_id, since, parent_document_id)
 
-    async def _sync_inner(self, collection_id: str, since: Optional[date] = None) -> dict:
+    async def _sync_inner(self, collection_id: str, since: Optional[date] = None,
+                          parent_document_id: str = "") -> dict:
         """실제 동기화 로직 (락 내부에서 실행)"""
         today = date.today()
         today_str = today.strftime("%Y-%m-%d")
@@ -632,9 +659,11 @@ class VocWikiService:
                 await self._save_sync_log(today, 0, 0, 0)
                 return {"success": True, "voc_count": 0, "created": 0, "updated": 0}
 
-            # 3. 기존 문서 구조 파악
-            existing_topics = await self._get_existing_topics(collection_id)
-            tree = await self._get_collection_tree(collection_id)
+            # 3. 기존 문서 구조 파악 (parent_document_id 지정 시 그 하위만)
+            existing_topics = await self._get_existing_topics(
+                collection_id, root_document_id=parent_document_id)
+            tree = await self._get_collection_tree(
+                collection_id, root_document_id=parent_document_id)
 
             # 4. LLM 분류
             classifications = await self.classify_entries(entries, existing_topics)
@@ -663,14 +692,16 @@ class VocWikiService:
                         rows="",
                     )
                     system_doc_id = await self._create_document(
-                        f"{system} 지원 사례 모음", toc_md, collection_id
+                        f"{system} 지원 사례 모음", toc_md, collection_id,
+                        parent_document_id=parent_document_id,
                     )
                     if not system_doc_id:
                         logger.error(f"[VOC Wiki] Failed to create system doc: {system}")
                         continue
                     docs_created += 1
                     # 트리 재조회 (새 문서 반영)
-                    tree = await self._get_collection_tree(collection_id)
+                    tree = await self._get_collection_tree(
+                        collection_id, root_document_id=parent_document_id)
 
                 updated_systems.add(system_doc_id)
 
@@ -698,7 +729,8 @@ class VocWikiService:
                         if new_id:
                             docs_created += 1
                         # 트리 재조회
-                        tree = await self._get_collection_tree(collection_id)
+                        tree = await self._get_collection_tree(
+                            collection_id, root_document_id=parent_document_id)
 
                     # API 부하 분산
                     await asyncio.sleep(0.5)
@@ -709,7 +741,9 @@ class VocWikiService:
                 for node in tree:
                     if node["id"] == sys_doc_id:
                         sys_name = node["title"].replace(" 지원 사례 모음", "").strip()
-                        await self._update_system_toc(sys_doc_id, collection_id, sys_name)
+                        await self._update_system_toc(
+                            sys_doc_id, collection_id, sys_name,
+                            root_document_id=parent_document_id)
                         break
 
             # 8. 동기화 로그 저장

@@ -22,6 +22,7 @@ KST = ZoneInfo("Asia/Seoul")
 ENABLED = lambda: os.getenv("VOC_WIKI_SYNC_ENABLED", "true").lower() == "true"
 HOUR = lambda: int(os.getenv("VOC_WIKI_SYNC_HOUR", "6"))
 COLLECTION_ID = lambda: os.getenv("VOC_WIKI_COLLECTION_ID", "")
+PARENT_DOCUMENT_ID = lambda: os.getenv("VOC_WIKI_PARENT_DOCUMENT_ID", "")
 RECIPIENT = lambda: os.getenv("VOC_WIKI_SYNC_RECIPIENT", "wg0403@landf.co.kr")
 
 
@@ -110,7 +111,10 @@ class VocWikiScheduler:
         for i, (week_start, week_end) in enumerate(weeks):
             logger.info(f"[VOC Wiki Scheduler] Processing week {i+1}/{len(weeks)}: {week_start} ~ {week_end}")
             try:
-                result = await service.sync(collection_id, since=week_start)
+                result = await service.sync(
+                    collection_id, since=week_start,
+                    parent_document_id=PARENT_DOCUMENT_ID(),
+                )
                 total_result["weeks"].append({
                     "week": f"{week_start} ~ {week_end}",
                     **result,
@@ -141,7 +145,10 @@ class VocWikiScheduler:
             from app.services.voc_wiki_service import get_voc_wiki_service
             service = get_voc_wiki_service()
 
-            result = await service.sync(collection_id, since=since)
+            result = await service.sync(
+                collection_id, since=since,
+                parent_document_id=PARENT_DOCUMENT_ID(),
+            )
 
             # 결과 메일 발송 (신규 건이 있거나 실패한 경우)
             if result.get("voc_count", 0) > 0 or not result.get("success", True):
