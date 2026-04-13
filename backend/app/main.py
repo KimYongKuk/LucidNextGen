@@ -87,6 +87,8 @@ class _TeeWriter:
         return self._original.isatty()
 
 _print_logger = logging.getLogger("print")
+_print_logger.propagate = False  # 루트 로거로 전파 방지 (4중 중복 로그 해결)
+_print_logger.addHandler(_file_handler)
 sys.stdout = _TeeWriter(sys.stdout, _print_logger.info)
 sys.stderr = _TeeWriter(sys.stderr, _print_logger.warning)
 
@@ -159,9 +161,15 @@ async def lifespan(app: FastAPI):
     print("[STARTUP] VOC Wiki Sync Scheduler starting...")
     voc_wiki_scheduler.start()
 
-    # Outline Wiki ↔ ChromaDB 시멘틱 검색 동기화 스케줄러 시작
+    # Outline Wiki ↔ ChromaDB 폴백 동기화 스케줄러 시작
     print("[STARTUP] Outline Wiki Sync Scheduler starting...")
     outline_sync_scheduler.start()
+
+    # Outline Webhook 큐 프로세서 시작
+    print("[STARTUP] Outline Webhook Service starting...")
+    from app.services.outline_webhook_service import get_outline_webhook_service
+    _outline_webhook_service = get_outline_webhook_service()
+    _outline_webhook_service.start()
 
     startup_time = int((time.time() - startup_start) * 1000)
     print("="*70)
@@ -182,6 +190,7 @@ async def lifespan(app: FastAPI):
             nightly_summary_scheduler.stop()
             voc_wiki_scheduler.stop()
             outline_sync_scheduler.stop()
+            _outline_webhook_service.stop()
             await close_mcp_adapter()
             # Notification service pool cleanup
             from app.services.notice_service import _notification_service
@@ -240,7 +249,7 @@ async def validation_exception_handler(request, exc: RequestValidationError):
         }
     )
 
-from app.api.routes import chat, upload, auth, workspace, chat_a2a, feedback, report, board, openapi_compat, voc_wiki, outline_sync
+from app.api.routes import chat, upload, auth, workspace, chat_a2a, feedback, report, board, openapi_compat, voc_wiki, outline_sync, outline_webhook
 
 # 라우터 등록
 app.include_router(auth.router, prefix="/api", tags=["auth"])
@@ -254,6 +263,7 @@ app.include_router(board.router, prefix="/api", tags=["notifications"])
 app.include_router(openapi_compat.router, tags=["OpenAI Compatible"])  # /v1/chat/completions (prefix 없음)
 app.include_router(voc_wiki.router, prefix="/api", tags=["voc-wiki"])
 app.include_router(outline_sync.router, prefix="/api", tags=["outline-sync"])
+app.include_router(outline_webhook.router, prefix="/api", tags=["outline-webhook"])
 
 @app.get("/")
 async def root():

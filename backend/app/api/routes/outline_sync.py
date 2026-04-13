@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 """Outline Wiki 동기화 API 엔드포인트
 
-수동 동기화 트리거 및 상태 조회용.
+수동 동기화 트리거, 단건 재인덱싱, 상태 조회용.
 """
 
-import asyncio
 import logging
 
 from fastapi import APIRouter, BackgroundTasks
@@ -19,6 +18,7 @@ async def trigger_sync(background_tasks: BackgroundTasks):
     """전체 동기화를 백그라운드로 트리거
 
     서버 응답은 즉시 반환되고, 동기화는 백그라운드에서 실행됩니다.
+    초기 적재 또는 청크 방식 전환 시 사용.
     """
     try:
         from app.services.outline_sync_service import get_outline_sync_service
@@ -29,7 +29,7 @@ async def trigger_sync(background_tasks: BackgroundTasks):
             return {"message": "동기화가 이미 실행 중입니다.", "status": status}
 
         background_tasks.add_task(service.full_sync)
-        return {"message": "동기화가 시작되었습니다. /status에서 진행 상황을 확인하세요."}
+        return {"message": "전체 동기화가 시작되었습니다. /status에서 진행 상황을 확인하세요."}
     except Exception as e:
         logger.error(f"[OutlineSync] trigger 실패: {e}")
         return {"error": str(e)}
@@ -57,4 +57,30 @@ async def run_sync_now():
         return result
     except Exception as e:
         logger.error(f"[OutlineSync] run 실패: {e}")
+        return {"error": str(e)}
+
+
+@router.post("/delta")
+async def run_delta_sync():
+    """Delta sync 실행 (최근 변경분만 처리)"""
+    try:
+        from app.services.outline_sync_service import get_outline_sync_service
+        service = get_outline_sync_service()
+        result = await service.delta_sync()
+        return result
+    except Exception as e:
+        logger.error(f"[OutlineSync] delta sync 실패: {e}")
+        return {"error": str(e)}
+
+
+@router.post("/reindex/{document_id}")
+async def reindex_document(document_id: str):
+    """특정 문서를 재인덱싱 (디버깅/수동 보정용)"""
+    try:
+        from app.services.outline_sync_service import get_outline_sync_service
+        service = get_outline_sync_service()
+        result = await service.process_single_document(document_id, "documents.update")
+        return result
+    except Exception as e:
+        logger.error(f"[OutlineSync] reindex 실패 ({document_id}): {e}")
         return {"error": str(e)}

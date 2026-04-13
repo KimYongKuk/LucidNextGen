@@ -234,7 +234,7 @@ def _rrf_merge(
         if doc_id not in doc_data:
             doc_data[doc_id] = doc
 
-    # 시멘틱 결과 (ChromaDB 형식: document_id 필드)
+    # 시멘틱 결과 (ChromaDB 형식: document_id 필드, 청크 기반)
     for rank, hit in enumerate(semantic_results):
         doc_id = hit.get("document_id", "")
         if not doc_id:
@@ -242,14 +242,15 @@ def _rrf_merge(
         scores[doc_id] = scores.get(doc_id, 0) + 1.0 / (k + rank + 1)
         if doc_id not in doc_data:
             # 시멘틱 결과를 키워드 결과 형식으로 변환
+            snippet = hit.get("snippet", hit.get("summary", ""))
             doc_data[doc_id] = {
                 "id": doc_id,
                 "title": hit.get("title", ""),
                 "url": hit.get("url", ""),
                 "collectionId": hit.get("collection_id", ""),
                 "updatedAt": hit.get("updated_at", ""),
-                "snippet": hit.get("summary", ""),
-                "text_preview": hit.get("summary", ""),
+                "snippet": snippet,
+                "text_preview": snippet,
                 "source": "semantic",
             }
 
@@ -668,14 +669,15 @@ async def _hybrid_merge_search(
             # 키워드 검색 실패 → 시멘틱 결과만 반환
             output = []
             for hit in semantic_hits[:10]:
+                snippet = hit.get("snippet", hit.get("summary", ""))
                 output.append({
                     "id": hit["document_id"],
                     "title": hit.get("title", ""),
                     "url": hit.get("url", ""),
                     "collectionId": hit.get("collection_id", ""),
                     "updatedAt": hit.get("updated_at", ""),
-                    "snippet": hit.get("summary", ""),
-                    "text_preview": hit.get("summary", ""),
+                    "snippet": snippet,
+                    "text_preview": snippet,
                     "search_type": "semantic",
                 })
             merged_data = {"count": len(output), "results": output}
