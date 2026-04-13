@@ -125,6 +125,42 @@ async def decrypt_empno_endpoint(request: DecryptRequest):
         raise HTTPException(status_code=400, detail=f"복호화 실패: {str(e)}")
 
 
+# ── 그룹웨어 user_id → 사번 변환 ──
+
+@router.get("/auth/resolve-gw-user/{gw_user_id}")
+async def resolve_gw_user(gw_user_id: str):
+    """다우오피스 내부 user_id(숫자) → 사번 변환"""
+    tims_url = os.getenv("TIMS_DATABASE_URL", "")
+    if not tims_url:
+        raise HTTPException(status_code=500, detail="TIMS DB 미설정")
+
+    try:
+        conn = await asyncpg.connect(tims_url)
+        try:
+            row = await conn.fetchrow(
+                "SELECT employee_number, login_id, name FROM v_user_info_mapping WHERE user_id = $1 LIMIT 1",
+                int(gw_user_id),
+            )
+        finally:
+            await conn.close()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+
+        return {
+            "empno": row["employee_number"],
+            "login_id": row["login_id"],
+            "name": row["name"],
+        }
+    except ValueError:
+        raise HTTPException(status_code=400, detail="잘못된 user_id 형식")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"GW user resolve failed: {e}")
+        raise HTTPException(status_code=500, detail="사용자 조회 실패")
+
+
 # ── 자체 인증 엔드포인트 ──
 
 @router.post("/auth/login", response_model=LoginResponse)
