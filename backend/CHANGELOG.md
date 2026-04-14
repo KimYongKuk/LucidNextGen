@@ -4,6 +4,7 @@
 
 - **수정** [ReservationMCP] get_daily_reservations 출력에 item_id 포함 — LLM이 정확한 회의실 ID 참조 가능 → [상세](../docs/history/2026-04-15_예약-item_id-할루시네이션-방지.md)
 - **수정** [ReservationMCP] create_reservation 실행 전 item_id 유효성 검증 추가 — 존재하지 않는 ID 사전 차단
+- **수정** [CalendarWorker] ReservationWorker를 CalendarWorker로 통합 — 일정+예약 크로스 도메인 요청 단일 워커 처리 → [상세](../docs/history/2026-04-15_캘린더-예약-워커-통합.md)
 
 ## [2026-04-14] - 공유 도구(PDF/DOCX/차트) BaseWorker 기본값 승격
 

@@ -43,7 +43,7 @@ INTENT_TO_WORKER = {
     Intent.XLSX: "XlsxWorker",
     Intent.BOARD: "BoardWorker",
     Intent.OUTLINE: "OutlineWorker",
-    Intent.RESERVATION: "ReservationWorker",
+    Intent.RESERVATION: "CalendarWorker",
     Intent.CALENDAR: "CalendarWorker",
     Intent.NAS: "NASWorker",
     Intent.CLARIFY: "DirectResponseWorker",

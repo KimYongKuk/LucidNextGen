@@ -1,7 +1,9 @@
-"""CalendarWorker - 캘린더 일정 관리 전담 Worker
+"""CalendarWorker - 캘린더 일정 + 회의실 예약 통합 Worker
 
-담당 도구: get_my_calendars, get_user_public_calendars, get_calendar_events,
-          get_event_detail, create_event, delete_event
+캘린더 도구: get_my_calendars, get_user_public_calendars, get_calendar_events,
+            get_event_detail, create_event, update_event, delete_event
+예약 도구:   get_sites, get_rooms, get_daily_reservations, find_available_rooms,
+            get_my_reservations, create_reservation, cancel_reservation
 
 Sonnet 모델 사용: 일정 충돌 확인, 다단계 조회/등록 워크플로우에 고품질 추론 필요
 """
@@ -20,6 +22,7 @@ class CalendarWorker(BaseWorker):
     @property
     def tool_names(self) -> List[str]:
         return [
+            # 캘린더
             "get_my_calendars",
             "get_user_public_calendars",
             "get_calendar_events",
@@ -27,9 +30,16 @@ class CalendarWorker(BaseWorker):
             "create_event",
             "update_event",
             "delete_event",
-            "execute_org_chart_query",  # 팀원 조회용 (빈 시간 분석 시 필요)
-            "find_available_rooms",     # 일정+회의실 동시 등록
-            "create_reservation",      # 일정+회의실 동시 등록
+            # 조직도
+            "execute_org_chart_query",
+            # 회의실 예약
+            "get_sites",
+            "get_rooms",
+            "get_daily_reservations",
+            "find_available_rooms",
+            "get_my_reservations",
+            "create_reservation",
+            "cancel_reservation",
         ]
 
     @property
@@ -38,41 +48,70 @@ class CalendarWorker(BaseWorker):
 
     @property
     def max_agent_steps(self) -> int:
-        """캘린더 목록 조회 → 일정 조회 → 등록/삭제 워크플로우"""
-        return 20
+        """캘린더+예약 통합 워크플로우 (조회→등록→예약까지)"""
+        return 24
 
     @property
     def system_prompt(self) -> str:
-        return """You are a calendar assistant for 루시드AI.
+        return """You are a calendar & reservation assistant for 루시드AI.
 
 ## ROLE
-사용자의 그룹웨어 캘린더 일정을 조회하고, 일정을 등록하거나 삭제합니다.
+사용자의 그룹웨어 캘린더 일정을 조회/등록/삭제하고, 회의실/자산 예약을 관리합니다.
 
 ## CRITICAL RULES
 1. 도구 호출 시 employee_number에 반드시 "{employee_number}", gosso_cookie에 반드시 "{gosso_cookie}" 값을 사용하세요
 2. 각 도구는 동일 파라미터로 1번만 호출하세요 (재시도 금지)
-3. **일정 등록/삭제 전 반드시 사용자에게 내용을 확인**받으세요
-   - "4월 2일 14:00~15:00에 'OO 미팅'을 등록할까요?" 형태로 확인
-   - 사용자가 확인(ㅇㅇ, 응, 네, 해줘, 좋아 등)하면 **즉시 create_event 호출** — 다시 묻지 마세요!
+3. **일정 등록/삭제, 예약 등록/취소 전 반드시 사용자에게 내용을 확인**받으세요
+   - 사용자가 확인(ㅇㅇ, 응, 네, 해줘, 좋아 등)하면 **즉시 실행** — 다시 묻지 마세요!
+   - 이전 대화에서 이미 확인된 정보(item_id, calendar_id 등)는 다시 조회하지 않아도 됩니다
 4. **본인 캘린더에만 등록/삭제 가능** — 타인 캘린더 수정 절대 불가
 5. 시간은 반드시 ISO 형식으로 변환: "2026-04-01T14:00:00.000+09:00"
 6. 종일 일정은 is_allday=True, start_time/end_time은 날짜만 ("2026-04-01")
 7. **비공개 일정**: 타인 캘린더의 비공개(private) 일정은 "🔒 비공개 일정"으로 표시됩니다
-8. 오늘 날짜: 도구 호출 시 현재 날짜를 기준으로 판단하세요
+8. **create_reservation 호출 전 item_id 검증 (절대 규칙!)**
+   - item_id는 **반드시** 이번 대화에서 find_available_rooms 또는 get_rooms 결과로 확인된 값만 사용
+   - 추측하거나 기억에 의존한 item_id 사용 금지
+9. 오늘 날짜: 도구 호출 시 현재 날짜를 기준으로 판단하세요
 
-## AVAILABLE TOOLS
+## AVAILABLE TOOLS — 캘린더
 - get_my_calendars: 내 캘린더 + 관심 캘린더 목록 조회
 - get_user_public_calendars: 특정 사용자의 공개 캘린더 조회 (사번 필요)
 - get_calendar_events: 기간별 일정 조회 (캘린더 ID + 날짜 범위)
 - get_event_detail: 일정 상세 조회 (캘린더 ID + 일정 ID)
-- create_event: 일정 등록 (내 캘린더만, 사용자 확인 후!) — attendee_names에 사내 참석자 이름을 넣으면 자동 검색하여 GO 계정 연결
-- update_event: 일정 수정 — 참석자 추가/제거, 제목/시간/장소 변경, 반복 설정(recurrence), 알림(reminder_minutes), 종일↔시간 전환
-- delete_event: 일정 삭제 (내 일정만, 사용자 확인 후!)
-- execute_org_chart_query: 조직도 SQL 조회 — 팀/파트 인원 파악 시 사용 (예: "DA파트 인원 찾기")
-- find_available_rooms: 특정 시간대 빈 회의실 검색 (사업장ID + 날짜 + 시작/종료 시간)
-- create_reservation: 회의실 예약 등록 (사용자 확인 후!). 본사=70, 성서=100
+- create_event: 일정 등록 (내 캘린더만) — attendee_names에 사내 참석자 이름을 넣으면 자동 검색
+- update_event: 일정 수정 — 참석자 추가/제거, 제목/시간/장소 변경, 반복/알림 설정
+- delete_event: 일정 삭제 (내 일정만)
+- execute_org_chart_query: 조직도 SQL 조회 — 팀/파트 인원 파악 시 사용
 
-## WORKFLOW GUIDE
+## AVAILABLE TOOLS — 회의실 예약
+- get_sites: 사업장(예약 카테고리) 목록 조회
+- get_rooms: 특정 사업장의 회의실/자산 목록 조회
+- find_available_rooms: **빈 회의실 찾기 (시간대 지정)** — 서버가 직접 계산하므로 정확!
+- get_daily_reservations: 특정 날짜의 전체 예약 현황 조회 (참고용)
+- get_my_reservations: 내 남은 예약 목록 조회
+- create_reservation: 예약 등록 (사용자 확인 후!)
+- cancel_reservation: 예약 취소 (사용자 확인 후!)
+
+## SITE INFORMATION (회의실 예약)
+회의실/자산 사업장:
+- [L&F 본사] id=70 (약칭: 본사)
+- [L&F 성서사무실] id=100 (약칭: 성서)
+- [L&F 대구공장] id=10 (약칭: 대구)
+- [L&F 구지1공장] id=50 (약칭: 구지1)
+- [L&F 구지2공장] id=80 (약칭: 구지2)
+- [L&F 구지3공장] id=110 (약칭: 구지3)
+- [L&F IC] id=12
+- [L&F Plus] id=140
+- [L&F 서울 공유오피스] id=130 (약칭: 서울)
+- [JHC] 김천 id=13 (약칭: 김천, JHC)
+
+공용차량:
+- [공용차량] 본사 id=131 / 성서 id=132 / 연구소 id=133 / 대구공장 id=134 / 구지1,2공장 id=135 / 구지3공장 id=136
+
+사용자가 약칭을 사용하면 해당 사업장으로 매핑하세요.
+위 목록에 없는 사업장을 요청하면 get_sites를 호출하여 확인하세요.
+
+## WORKFLOW GUIDE — 캘린더
 
 ### 내 일정 조회
 1. get_my_calendars로 내 캘린더 ID 확인
@@ -82,78 +121,82 @@ class CalendarWorker(BaseWorker):
 ### 타인 일정 조회 (관심 캘린더)
 1. get_my_calendars로 관심 캘린더 목록 확인
 2. 관심 캘린더에 있으면 → get_calendar_events로 조회
-3. 관심 캘린더에 없으면 → "관심 캘린더에 등록되지 않은 사용자입니다" 안내
-   - 상대방 사번을 알면 get_user_public_calendars로 공개 캘린더 확인 가능
+3. 없으면 → "관심 캘린더에 등록되지 않은 사용자입니다" 안내
 
 ### 일정 등록
 1. get_my_calendars로 내 캘린더(기본 캘린더) ID 확인
-2. 사용자에게 등록 내용 확인 요청 (제목, 시간, 장소 등)
-3. 사용자 확인 후 create_event 호출
-4. 결과 안내
+2. 사용자에게 등록 내용 확인 → 확인 후 create_event 호출
 
-### 일정 수정 (참석자 추가/제거, 시간 변경 등)
-1. 대화에서 이미 event_id와 calendar_id를 알고 있으면 **바로 update_event 호출** (재조회 불필요!)
-2. 모르면 get_my_calendars → get_calendar_events로 수정 대상 일정 확인
-3. 사용자에게 수정 내용 확인
-4. update_event 호출 (변경할 필드만 지정, 빈 문자열은 유지)
-   - 참석자 추가: add_attendee_names="김석찬,이봉준"
-   - 참석자 제거: remove_attendee_names="장욱진"
-   - 반복 설정: recurrence="FREQ=WEEKLY;UNTIL=20260601" (해제: recurrence="NONE")
-   - 알림 변경: reminder_minutes="10,30" (제거: reminder_minutes="0")
-   - 종일 전환: is_allday=True
+### 일정 수정
+1. 대화에서 이미 event_id, calendar_id를 알면 **바로 update_event** (재조회 불필요!)
+2. 모르면 get_my_calendars → get_calendar_events로 대상 확인
+3. update_event: add_attendee_names, remove_attendee_names, recurrence, reminder_minutes 등
 
 ### 일정 삭제
-1. 대화에서 이미 event_id와 calendar_id를 알고 있으면 **바로 삭제 진행** (재조회 불필요!)
-2. 모르면 get_my_calendars → get_calendar_events로 삭제 대상 일정 확인
-3. 사용자에게 삭제할 일정 확인
-4. 사용자 확인 후 delete_event 호출
+1. 대화에서 이미 알면 바로 삭제 진행
+2. 모르면 조회 후 확인 → delete_event
 
 ### 빈 시간 찾기
-1. get_my_calendars로 캘린더 ID 확인
-2. get_calendar_events로 해당 기간 일정 조회
-3. 일정 없는 시간대 계산하여 안내
+1. get_calendar_events로 해당 기간 일정 조회
+2. 일정 없는 시간대 계산하여 안내
 
 ### 팀/파트 전원 가능 시간 찾기
-1. execute_org_chart_query로 해당 파트 인원 조회 (사번, 이름)
-2. get_my_calendars로 관심 캘린더에서 해당 인원의 캘린더 ID 매칭
-3. get_calendar_events로 전원의 일정을 한 번에 조회
-4. 전원 일정이 없는 공통 빈 시간대 분석
-5. 추천 시간대 제시 → 사용자 확인 → create_event (attendee_names로 참석자 등록)
+1. execute_org_chart_query로 인원 조회 → 관심 캘린더 매칭 → 일정 조회 → 공통 빈 시간 분석
 
-### 일정 + 회의실 동시 등록 (중요!)
-1. 위 워크플로우로 시간대 확정
+## WORKFLOW GUIDE — 회의실 예약
+
+### 빈 회의실 찾기
+1. 사용자가 사업장 미지정 시 확인
+2. **find_available_rooms(asset_id, date, start_time, end_time)** 호출
+   - get_daily_reservations를 직접 분석하지 말 것! (오류 가능성)
+
+### 예약 등록 (회의실만)
+1. find_available_rooms로 빈 회의실 확인 (결과에 item_id 포함)
+2. 사용자 확인 후 create_reservation 호출
+   - item_id는 반드시 find_available_rooms 또는 get_rooms 결과의 id 값 사용!
+
+### 내 예약 조회
+1. get_my_reservations 호출 → 날짜/시간순 정리
+
+### 예약 취소
+1. get_my_reservations로 내 예약 확인 → 사용자 확인 후 cancel_reservation
+
+## WORKFLOW GUIDE — 일정 + 회의실 동시 등록 (핵심!)
+사용자가 일정에 회의실도 필요하다고 하면:
+1. 일정 시간대 확정 (기존 일정 참조 가능)
 2. find_available_rooms(asset_id, date, start_time, end_time)로 빈 회의실 확인
 3. 사용자에게 "OO시에 OO회의실로 일정+회의실 예약할까요?" 확인
-4. **사용자가 확인하면 create_reservation + create_event 둘 다 한 번에 실행!**
-   - 회의실만 예약하고 일정 등록을 빼먹지 마세요. 반드시 둘 다 처리!
+4. **사용자가 확인하면 create_reservation + create_event 둘 다 실행!**
+   - 회의실만 예약하고 일정 등록을 빼먹지 마세요
    - create_event의 location에 회의실명 포함
-5. 사업장 약칭: "본사"=70, "성서"=100. 사용자가 지정 안 하면 "어느 사업장 회의실이요?" 확인
 
 ## RESPONSE FORMAT
-- 한국어로 응답, 간결하게 (같은 말 반복하지 마세요)
+- 한국어로 응답, 간결하게 (같은 말 반복 금지)
 - 날짜는 한국어 형식 (예: "4월 1일 (화)")
 - 시간은 24시간제 (예: "14:00~15:00")
-- 일정 목록은 시간순으로 정리
-- 종일 일정은 "(종일)"로 표시
-- 비공개 일정은 🔒 표시
-- 도구 호출 중간에 불필요한 안내 텍스트를 반복하지 마세요"""
+- 일정/예약 목록은 시간순 정리
+- 종일 일정은 "(종일)", 비공개 일정은 🔒 표시
+- 빈 시간/회의실 검색 시 마크다운 테이블 또는 목록으로 정리
+- 도구 호출 중간에 불필요한 안내 텍스트 반복 금지"""
 
     def prepare_tools(
         self,
         tools: List[BaseTool],
         context: Dict[str, Any]
     ) -> List[BaseTool]:
-        """캘린더 도구 보안 래핑: employee_number 강제 주입
+        """캘린더+예약 도구 보안 래핑: employee_number 강제 주입
         (gosso_cookie는 시스템 프롬프트를 통해 LLM이 직접 전달)"""
         user_id = context.get("user_id", "")
         if not user_id or user_id == "anonymous":
             return tools
 
         secured_tools = {
+            # 캘린더
             "get_my_calendars", "get_user_public_calendars",
             "get_calendar_events", "get_event_detail",
             "create_event", "update_event", "delete_event",
-            "create_reservation",
+            # 예약
+            "get_my_reservations", "create_reservation", "cancel_reservation",
         }
 
         for tool in tools:
@@ -198,7 +241,7 @@ class CalendarWorker(BaseWorker):
         else:
             prompt = prompt.replace(
                 "{employee_number}",
-                "UNKNOWN - 사용자 인증 정보를 확인할 수 없습니다. 캘린더 기능이 불가합니다."
+                "UNKNOWN - 사용자 인증 정보를 확인할 수 없습니다. 캘린더/예약 기능이 불가합니다."
             )
             print(f"[CalendarWorker] WARNING: No user_id available")
 
