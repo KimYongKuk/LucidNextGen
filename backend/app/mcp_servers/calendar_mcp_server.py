@@ -15,7 +15,6 @@
 """
 import sys
 import os
-import tempfile
 import asyncpg
 import httpx
 from datetime import datetime, timedelta
@@ -225,7 +224,8 @@ def _read_gosso_cookie(employee_number: str) -> str:
     """파일에서 사용자 GOSSOcookie 읽기 (CalendarWorker가 저장)"""
     if not employee_number:
         return ""
-    gosso_path = os.path.join(tempfile.gettempdir(), f"gosso_{employee_number}.txt")
+    gosso_dir = os.environ.get("GOSSO_DIR", "C:/tmp")
+    gosso_path = os.path.join(gosso_dir, f"gosso_{employee_number}.txt")
     try:
         if os.path.exists(gosso_path):
             with open(gosso_path, "r") as f:

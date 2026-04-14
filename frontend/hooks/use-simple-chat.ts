@@ -171,6 +171,9 @@ export function useSimpleChat({
           images: imageFiles.length > 0 ? imageFiles : null,
           message_history: messageHistory.length > 0 ? messageHistory : null,
           workspace_id: workspaceId,
+          ...(typeof document !== 'undefined' && document.cookie.match(/gosso=([^;]+)/) && {
+            gosso_cookie: document.cookie.match(/gosso=([^;]+)/)![1]
+          }),
         }),
         signal: abortControllerRef.current.signal,
       });

@@ -203,9 +203,10 @@ class CalendarWorker(BaseWorker):
             print(f"[CalendarWorker] WARNING: No user_id available")
 
         # GOSSOcookie를 파일로 저장 → MCP 서버가 읽어서 사용
-        import tempfile, os
+        import os
         gosso = context.get("gosso_cookie") or ""
-        gosso_path = os.path.join(tempfile.gettempdir(), f"gosso_{user_id}.txt")
+        gosso_dir = os.environ.get("GOSSO_DIR", "C:/tmp")
+        gosso_path = os.path.join(gosso_dir, f"gosso_{user_id}.txt")
         try:
             if gosso:
                 with open(gosso_path, "w") as f:
