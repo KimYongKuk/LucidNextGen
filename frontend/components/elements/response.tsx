@@ -189,8 +189,8 @@ function splitVisualBlocks(content: string, isStreaming: boolean = false): Conte
 // workerName: 해당 워커일 때만 광범위 패턴(1,2) 활성화, 미지정 시 전체 활성(하위호환)
 const processPDFContent = (content: string, workerName?: string): { processedContent: string; pdfFiles: string[] } => {
   const pdfFiles: string[] = [];
-  // 공유 도구로 PDF 생성 가능한 워커: Direct, WebSearch, UserFiles, CorpRAG (+ 기존 Visualization 하위호환)
-  const useBroadPatterns = !workerName || /^(visualization|direct|websearch|userfiles|corprag)/i.test(workerName);
+  // 모든 워커에 공유 도구(PDF/DOCX/차트)가 기본 제공되므로 항상 broad 패턴 사용
+  const useBroadPatterns = true;
 
   // 파일명에서 백틱, 따옴표, 별표 등 특수문자 제거
   const cleanFilename = (filename: string): string => {
@@ -384,8 +384,8 @@ const processXLSXContent = (content: string, workerName?: string): { processedCo
 // DOCX 경로에서 파일명 추출 및 다운로드 링크로 변환
 const processDocxContent = (content: string, workerName?: string): { processedContent: string; docxFiles: string[] } => {
   const docxFiles: string[] = [];
-  // 공유 도구로 DOCX 생성 가능한 워커: Direct, WebSearch, UserFiles, CorpRAG (+ 기존 Visualization 하위호환)
-  const useBroadPatterns = !workerName || /^(visualization|direct|websearch|userfiles|corprag)/i.test(workerName);
+  // 모든 워커에 공유 도구(PDF/DOCX/차트)가 기본 제공되므로 항상 broad 패턴 사용
+  const useBroadPatterns = true;
 
   const cleanFilename = (filename: string): string => {
     let cleaned = filename
