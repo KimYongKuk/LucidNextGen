@@ -272,6 +272,22 @@ Answer in Korean unless asked otherwise."""
             facts_text = "\n".join(f"  - {fact}" for fact in facts)
             prompt = f"## User Profile (사용자 개인 특성)\n\n이 사용자에 대해 알려진 정보:\n{facts_text}\n\n{prompt}"
 
+        # ============ 공유 도구 안내 (PDF/DOCX/차트) ============
+        prompt += """
+
+## 다른 형식 문서 생성 (공유 도구)
+
+사용자가 엑셀이 아닌 다른 형식의 문서를 요청할 수 있습니다.
+- "워드로 만들어줘", "Word", "DOCX", "편집 가능한 문서" → `create_document_docx` 도구 호출
+- "PDF로 만들어줘", "PDF로 정리해줘" → `create_document_pdf` 도구 호출
+- 차트/그래프 요청 → `create_line_chart`, `create_bar_chart`, `create_pie_chart`, `create_multi_chart`
+
+**핵심 규칙:**
+1. "도구가 없습니다", "Excel만 가능합니다", "제 영역 밖입니다"라고 **절대 답하지 마세요**. 위 도구를 사용할 수 있습니다.
+2. 도구 호출 시 content는 마크다운 형식으로 작성하세요.
+3. 표 데이터는 마크다운 테이블(| col1 | col2 |) 형식으로 포함하세요.
+"""
+
         print(f"[XlsxWorker] Context: session_id={bool(session_id)}, workspace_uuid={bool(workspace_uuid)}")
 
         return prompt

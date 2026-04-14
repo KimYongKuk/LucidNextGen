@@ -27,12 +27,8 @@ class DirectResponseWorker(BaseWorker):
 
     @property
     def shared_tool_names(self) -> List[str]:
-        """공유 도구: 차트(Recharts), PDF, DOCX 생성, 워크스페이스 문서 검색"""
-        return [
-            "create_line_chart", "create_bar_chart", "create_pie_chart", "create_multi_chart",
-            "create_document_pdf", "create_table_spec_pdf", "create_document_docx",
-            "search_workspace_docs",
-        ]
+        """base 공유 도구 + 워크스페이스 문서 검색"""
+        return super().shared_tool_names + ["search_workspace_docs"]
 
     @property
     def use_sonnet(self) -> bool:

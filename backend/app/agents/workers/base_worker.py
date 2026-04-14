@@ -451,13 +451,16 @@ class BaseWorker(ABC):
 
     @property
     def shared_tool_names(self) -> List[str]:
-        """공유 도구함 — 파일 산출물 생성용 (기본: 비활성)
+        """공유 도구함 — 파일 산출물 생성용 (기본: 활성)
 
         차트(Recharts), PDF, DOCX 등 시각화/문서 생성 도구를 공유합니다.
         VisualizationWorker 없이도 각 에이전트가 필요 시 직접 사용 가능.
-        opt-in 방식: 필요한 Worker만 오버라이드합니다.
+        모든 Worker에 기본 제공 — 불필요한 Worker에서 빈 리스트로 오버라이드.
         """
-        return []
+        return [
+            "create_line_chart", "create_bar_chart", "create_pie_chart", "create_multi_chart",
+            "create_document_pdf", "create_table_spec_pdf", "create_document_docx",
+        ]
 
     def get_model_config(self) -> ModelConfig:
         """모델 설정 반환"""
