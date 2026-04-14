@@ -224,8 +224,14 @@ class IntentClassifier:
                 return Intent.YOUTUBE
 
         # 일반 URL (YouTube 제외)
-        if re.search(URL_PATTERN, message):
-            return Intent.URL_FETCH
+        # URL이 데이터의 일부(테이블, 예시)가 아니라 분석/조회 대상인 경우에만 URL_FETCH
+        # - URL이 3개 이상 → 데이터 목록일 가능성 높음 → LLM에 위임
+        # - 문서 생성 동사(만들어줘, 생성, 변환 등)가 있으면 → URL 분석이 아님
+        url_matches = re.findall(URL_PATTERN, message)
+        if url_matches:
+            doc_action = r'(만들|생성|작성|변환|정리해|워드|word|docx|pdf|PDF|엑셀|excel|ppt|PPT)'
+            if len(url_matches) <= 2 and not re.search(doc_action, message, re.IGNORECASE):
+                return Intent.URL_FETCH
 
         # 업로드 파일 명시 참조 + 파일 존재 → USER_FILES (다른 도메인 키워드보다 우선)
         # 단, 위키 키워드가 함께 있으면 OUTLINE으로 넘김 (파일→위키 게시 시나리오)
