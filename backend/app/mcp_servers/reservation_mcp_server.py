@@ -271,12 +271,14 @@ async def get_daily_reservations(asset_id: int, date: str) -> str:
     if not filtered:
         return f"{date} 에 예약된 건이 없습니다. 모든 회의실이 비어있습니다."
 
-    # 회의실별 그룹핑
-    by_room: dict = {}
+    # 회의실별 그룹핑 (item_id 포함)
+    by_room: dict = {}  # (room_name, item_id) → [bookings]
     for r in filtered:
         room_name = r.get("itemName", "알 수 없음")
-        if room_name not in by_room:
-            by_room[room_name] = []
+        item_id = r.get("itemId") or r.get("item", {}).get("id") or "?"
+        room_key = (room_name, item_id)
+        if room_key not in by_room:
+            by_room[room_key] = []
 
         start = r["startTime"][11:16]  # "HH:MM"
         end = r["endTime"][11:16]
@@ -284,19 +286,19 @@ async def get_daily_reservations(asset_id: int, date: str) -> str:
         position = r.get("user", {}).get("positionName", "")
         anonym = r.get("useAnonym", False)
 
-        by_room[room_name].append({
+        by_room[room_key].append({
             "id": r["id"],
             "time": f"{start}~{end}",
             "user": "익명" if anonym else f"{user_name} {position}".strip(),
         })
 
     # 시간순 정렬
-    for room_name in by_room:
-        by_room[room_name].sort(key=lambda x: x["time"])
+    for room_key in by_room:
+        by_room[room_key].sort(key=lambda x: x["time"])
 
     lines = [f"## {date} 예약 현황\n"]
-    for room_name, bookings in sorted(by_room.items()):
-        lines.append(f"### {room_name}")
+    for (room_name, item_id), bookings in sorted(by_room.items()):
+        lines.append(f"### {room_name} (item_id={item_id})")
         for b in bookings:
             lines.append(f"  - {b['time']}  {b['user']}  (예약ID: {b['id']})")
         lines.append("")
@@ -524,6 +526,25 @@ async def create_reservation(
         return f"오류: 사번 '{employee_number}'에 대한 사용자 정보를 찾을 수 없습니다."
 
     go_user_id = user_info["go_user_id"]
+
+    # ── item_id 유효성 검증 (LLM 할루시네이션 방지) ──
+    if asset_id in _rooms_cache:
+        rooms = _rooms_cache[asset_id]
+    else:
+        room_result = await _api_request("GET", f"/api/asset/{asset_id}/item/?page=0&offset=100")
+        if room_result and room_result.get("code") == "200":
+            rooms = [{"id": r["id"], "name": r["name"]} for r in room_result["data"]]
+            _rooms_cache[asset_id] = rooms
+        else:
+            rooms = None
+
+    if rooms is not None:
+        valid_ids = {r["id"] for r in rooms}
+        if item_id not in valid_ids:
+            room_list = ", ".join(f"{r['name']}(id={r['id']})" for r in rooms)
+            return (f"오류: item_id={item_id}은(는) 사업장(id={asset_id})에 존재하지 않는 회의실입니다.\n"
+                    f"사용 가능한 회의실: {room_list}\n"
+                    f"정확한 item_id를 사용해주세요.")
 
     # ── 예약 전 충돌 검증 (daily API 재조회) ──
     # get_daily_reservations 결과가 불완전할 수 있으므로 예약 직전에 재확인
