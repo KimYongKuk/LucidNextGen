@@ -257,9 +257,15 @@ class IntentClassifier:
                 print(f"[INTENT] Quick: explicit mail action → MAIL")
                 return Intent.MAIL
 
-        # ========= Step 2: 생성/산출물 인텐트 (PPT 등) =========
-        # visualization 인텐트 제거: 차트/PDF/DOCX는 공유 도구로 어떤 에이전트든 직접 생성 가능
-        # SVG 인포그래픽/다이어그램은 모든 에이전트가 인라인 SVG로 생성 가능
+        # ========= Step 2: 생성/산출물 인텐트 (PPT, PDF/DOCX/차트 등) =========
+        # PDF/DOCX/Word/차트 생성 요청 → DIRECT (shared tools로 처리)
+        # follow-up 로직에 의해 이전 intent(xlsx 등)에 갇히는 것을 방지
+        doc_keyword = r'(워드|word|docx|DOCX|PDF|pdf|편집\s?가능한\s?문서)'
+        doc_create_verb = r'(만들|생성|작성|변환|정리해|뽑아|내보내|저장)'
+        if re.search(doc_keyword, message, re.IGNORECASE) and re.search(doc_create_verb, message, re.IGNORECASE):
+            print(f"[INTENT] Quick: PDF/DOCX keyword + create verb → DIRECT")
+            return Intent.DIRECT
+
         # PPT: 키워드 + 생성 동사가 함께 있어야만 PPT_GENERATION
         # "PPT 내용 정리해줘" → direct, "PPT 만들어줘" → ppt_generation
         ppt_keyword = r'(PPT|ppt|파워포인트|프레젠테이션|발표\s?자료|슬라이드로|PT\s?자료)'
