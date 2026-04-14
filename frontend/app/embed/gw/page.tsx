@@ -1,16 +1,17 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
-import { useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
 import { EmbedChat } from "@/components/embed-chat";
-import { getUserId } from "@/lib/utils";
 
 export default function GroupwareEmbedPage() {
-  const searchParams = useSearchParams();
-  // 우선순위: URL 파라미터 empno > SSO 쿠키 > anonymous
-  const userId = useMemo(() => {
-    return searchParams.get("empno") || getUserId() || "anonymous";
-  }, [searchParams]);
+  // 마운트 시 1회만 URL에서 empno 추출 (이후 변경 없음)
+  const [userId] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      return params.get("empno") || "anonymous";
+    }
+    return "anonymous";
+  });
 
   // embed 내 링크 클릭 시 새 탭으로 열기 (그룹웨어는 postMessage 불필요)
   useEffect(() => {
