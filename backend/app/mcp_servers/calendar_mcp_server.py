@@ -15,6 +15,7 @@
 """
 import sys
 import os
+import tempfile
 import asyncpg
 import httpx
 from datetime import datetime, timedelta
@@ -44,6 +45,7 @@ _user_mapping_cache: dict = {}       # 사번 → {go_user_id, user_name, dept_n
 _user_feed_cache: dict = {}          # go_user_id → {calendar_id: feed_info, ...}  (TTL 관리)
 _user_feed_cache_ts: dict = {}       # go_user_id → datetime (캐시 시각)
 FEED_CACHE_TTL = 300                 # 피드 캐시 TTL (5분)
+_current_employee_number: str = ""   # 현재 요청의 사번 (gosso 파일 읽기용)
 
 
 # ── DB 헬퍼 ───────────────────────────────────────────
@@ -60,6 +62,9 @@ async def _get_db_pool() -> asyncpg.Pool:
 
 async def _get_go_user_info(employee_number: str) -> Optional[dict]:
     """사번 → GO user.id/name/dept 매핑"""
+    global _current_employee_number
+    _current_employee_number = employee_number  # gosso 파일 읽기용
+
     if employee_number in _user_mapping_cache:
         return _user_mapping_cache[employee_number]
 
@@ -216,8 +221,26 @@ async def _api_request_with_cookies(
     return None
 
 
+def _read_gosso_cookie(employee_number: str) -> str:
+    """파일에서 사용자 GOSSOcookie 읽기 (CalendarWorker가 저장)"""
+    if not employee_number:
+        return ""
+    gosso_path = os.path.join(tempfile.gettempdir(), f"gosso_{employee_number}.txt")
+    try:
+        if os.path.exists(gosso_path):
+            with open(gosso_path, "r") as f:
+                return f.read().strip()
+    except Exception:
+        pass
+    return ""
+
+
 async def _api_request(method: str, path: str, gosso_cookie: str = "", **kwargs) -> Optional[Any]:
     """LFON API 호출 (사용자 GOSSOcookie 우선, 서비스 계정 폴백)"""
+    # gosso_cookie 파라미터가 없으면 파일에서 읽기
+    if not gosso_cookie and _current_employee_number:
+        gosso_cookie = _read_gosso_cookie(_current_employee_number)
+
     # 1) 사용자 GOSSOcookie가 있으면 우선 사용
     if gosso_cookie:
         result = await _api_request_with_cookies(

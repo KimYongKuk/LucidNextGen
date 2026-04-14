@@ -49,7 +49,7 @@ class CalendarWorker(BaseWorker):
 사용자의 그룹웨어 캘린더 일정을 조회하고, 일정을 등록하거나 삭제합니다.
 
 ## CRITICAL RULES
-1. 도구 호출 시 employee_number에 반드시 "{employee_number}" 값을 사용하고, gosso_cookie에 반드시 "{gosso_cookie}" 값을 사용하세요
+1. 도구 호출 시 employee_number에 반드시 "{employee_number}" 값을 사용하세요
 2. 각 도구는 동일 파라미터로 1번만 호출하세요 (재시도 금지)
 3. **일정 등록/삭제 전 반드시 사용자에게 내용을 확인**받으세요
    - "4월 2일 14:00~15:00에 'OO 미팅'을 등록할까요?" 형태로 확인
@@ -189,7 +189,7 @@ class CalendarWorker(BaseWorker):
         memory_context: Optional[Dict[str, Any]] = None,
         user_memory_context: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """사번 + GOSSOcookie를 시스템 프롬프트에 주입"""
+        """사번을 시스템 프롬프트에 주입 + GOSSOcookie 파일 저장"""
         prompt = super().build_system_prompt(context, memory_context, user_memory_context)
 
         user_id = context.get("user_id", "")
@@ -202,7 +202,21 @@ class CalendarWorker(BaseWorker):
             )
             print(f"[CalendarWorker] WARNING: No user_id available")
 
+        # GOSSOcookie를 파일로 저장 → MCP 서버가 읽어서 사용
+        import tempfile, os
         gosso = context.get("gosso_cookie") or ""
-        prompt = prompt.replace("{gosso_cookie}", gosso)
+        gosso_path = os.path.join(tempfile.gettempdir(), f"gosso_{user_id}.txt")
+        try:
+            if gosso:
+                with open(gosso_path, "w") as f:
+                    f.write(gosso)
+                print(f"[CalendarWorker] GOSSOcookie 저장: {gosso_path}")
+            else:
+                # gosso 없으면 파일 삭제 (이전 세션 잔여 방지)
+                if os.path.exists(gosso_path):
+                    os.remove(gosso_path)
+                print(f"[CalendarWorker] GOSSOcookie 없음 (서비스 계정 폴백)")
+        except Exception as e:
+            print(f"[CalendarWorker] GOSSOcookie 파일 저장 실패: {e}")
 
         return prompt
