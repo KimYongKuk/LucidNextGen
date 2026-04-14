@@ -49,7 +49,7 @@ class CalendarWorker(BaseWorker):
 사용자의 그룹웨어 캘린더 일정을 조회하고, 일정을 등록하거나 삭제합니다.
 
 ## CRITICAL RULES
-1. 도구 호출 시 employee_number에 반드시 "{employee_number}" 값을 사용하세요
+1. 도구 호출 시 employee_number에 반드시 "{employee_number}" 값을 사용하고, gosso_cookie에 반드시 "{gosso_cookie}" 값을 사용하세요
 2. 각 도구는 동일 파라미터로 1번만 호출하세요 (재시도 금지)
 3. **일정 등록/삭제 전 반드시 사용자에게 내용을 확인**받으세요
    - "4월 2일 14:00~15:00에 'OO 미팅'을 등록할까요?" 형태로 확인
@@ -143,50 +143,35 @@ class CalendarWorker(BaseWorker):
         tools: List[BaseTool],
         context: Dict[str, Any]
     ) -> List[BaseTool]:
-        """캘린더 도구 보안 래핑: employee_number + gosso_cookie를 강제 주입"""
+        """캘린더 도구 보안 래핑: employee_number 강제 주입
+        (gosso_cookie는 시스템 프롬프트를 통해 LLM이 직접 전달)"""
         user_id = context.get("user_id", "")
-        gosso_cookie = context.get("gosso_cookie") or ""
         if not user_id or user_id == "anonymous":
             return tools
 
-        # employee_number + gosso_cookie 주입 대상 도구
         secured_tools = {
             "get_my_calendars", "get_user_public_calendars",
             "get_calendar_events", "get_event_detail",
             "create_event", "update_event", "delete_event",
+            "create_reservation",
         }
-        # employee_number만 주입 (gosso_cookie 불필요)
-        empno_only_tools = {"create_reservation"}
 
         for tool in tools:
-            if tool.name not in secured_tools and tool.name not in empno_only_tools:
+            if tool.name not in secured_tools:
                 continue
 
             original_ainvoke = getattr(tool, '_unwrapped_ainvoke', None) or tool.ainvoke
             object.__setattr__(tool, '_unwrapped_ainvoke', original_ainvoke)
 
-            inject_gosso = tool.name in secured_tools
-
             async def secured_ainvoke(
                 input_data, config=None, *,
-                _original=original_ainvoke, _uid=user_id,
-                _gosso=gosso_cookie, _inject_gosso=inject_gosso,
-                _tname=tool.name, **kwargs
+                _original=original_ainvoke, _uid=user_id, _tname=tool.name, **kwargs
             ):
                 if isinstance(input_data, dict):
                     if "args" in input_data and isinstance(input_data.get("args"), dict):
                         input_data["args"]["employee_number"] = _uid
-                        if _inject_gosso and _gosso:
-                            input_data["args"]["gosso_cookie"] = _gosso
                     else:
                         input_data["employee_number"] = _uid
-                        if _inject_gosso and _gosso:
-                            input_data["gosso_cookie"] = _gosso
-                if _inject_gosso:
-                    args = input_data.get("args", input_data) if isinstance(input_data, dict) else {}
-                    has_gosso = "gosso_cookie" in args if isinstance(args, dict) else False
-                    print(f"[CalendarWorker] [SECURE_INVOKE] {_tname}: gosso injected={has_gosso}, "
-                          f"input_type={type(input_data).__name__}, keys={list(input_data.keys()) if isinstance(input_data, dict) else 'N/A'}")
                 try:
                     return await _original(input_data, config, **kwargs)
                 except Exception as e:
@@ -195,8 +180,7 @@ class CalendarWorker(BaseWorker):
 
             object.__setattr__(tool, "ainvoke", secured_ainvoke)
 
-        print(f"[CalendarWorker] 보안 래핑 완료: employee_number → {user_id}, "
-              f"gosso_cookie={'있음' if gosso_cookie else '없음'}")
+        print(f"[CalendarWorker] 보안 래핑 완료: employee_number → {user_id}")
         return tools
 
     def build_system_prompt(
@@ -205,7 +189,7 @@ class CalendarWorker(BaseWorker):
         memory_context: Optional[Dict[str, Any]] = None,
         user_memory_context: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """사번을 시스템 프롬프트에 주입"""
+        """사번 + GOSSOcookie를 시스템 프롬프트에 주입"""
         prompt = super().build_system_prompt(context, memory_context, user_memory_context)
 
         user_id = context.get("user_id", "")
@@ -217,5 +201,8 @@ class CalendarWorker(BaseWorker):
                 "UNKNOWN - 사용자 인증 정보를 확인할 수 없습니다. 캘린더 기능이 불가합니다."
             )
             print(f"[CalendarWorker] WARNING: No user_id available")
+
+        gosso = context.get("gosso_cookie") or ""
+        prompt = prompt.replace("{gosso_cookie}", gosso)
 
         return prompt
