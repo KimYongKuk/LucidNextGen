@@ -103,16 +103,18 @@
     close: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>',
   };
 
-  function buildWidget() {
+  function getEmpno() {
     // GO.session()에서 사번 자동 추출 (다우오피스 전역 객체)
-    var empno = config.userId;
     if (typeof GO !== 'undefined' && typeof GO.session === 'function') {
       var sess = GO.session();
       if (sess && sess.employeeNumber) {
-        empno = sess.employeeNumber;
+        return sess.employeeNumber;
       }
     }
+    return config.userId;
+  }
 
+  function buildWidget() {
     container = document.createElement('div');
     container.id = 'lucid-gw-container';
 
@@ -122,18 +124,10 @@
     button.innerHTML = '<span class="lucid-gw-icon-chat">' + ICONS.chat + '</span><span class="lucid-gw-icon-close" style="display:none">' + ICONS.close + '</span>';
     button.addEventListener('click', toggleWidget);
 
-    // iframe 래퍼
+    // iframe 래퍼 (iframe은 첫 클릭 시 생성 — GO.session() 초기화 대기)
     var frameWrap = document.createElement('div');
     frameWrap.id = 'lucid-gw-frame-wrap';
 
-    // iframe
-    var iframeSrc = config.apiUrl + config.embedPath + '?empno=' + encodeURIComponent(empno);
-    widgetFrame = document.createElement('iframe');
-    widgetFrame.id = 'lucid-gw-frame';
-    widgetFrame.src = iframeSrc;
-    widgetFrame.setAttribute('allow', 'clipboard-write');
-
-    frameWrap.appendChild(widgetFrame);
     container.appendChild(frameWrap);
     container.appendChild(button);
     document.body.appendChild(container);
@@ -155,6 +149,17 @@
     var closeIcon = button.querySelector('.lucid-gw-icon-close');
 
     if (isOpen) {
+      // 첫 열기 시 iframe 생성 (이 시점에 GO.session() 확실히 준비됨)
+      if (!widgetFrame) {
+        var empno = getEmpno();
+        var iframeSrc = config.apiUrl + config.embedPath + '?empno=' + encodeURIComponent(empno);
+        widgetFrame = document.createElement('iframe');
+        widgetFrame.id = 'lucid-gw-frame';
+        widgetFrame.src = iframeSrc;
+        widgetFrame.setAttribute('allow', 'clipboard-write');
+        widgetFrame.style.cssText = 'width:100%;height:100%;border:none;border-radius:16px;';
+        frameWrap.appendChild(widgetFrame);
+      }
       frameWrap.classList.add('lucid-gw-visible');
       chatIcon.style.display = 'none';
       closeIcon.style.display = 'flex';

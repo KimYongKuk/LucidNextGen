@@ -456,7 +456,7 @@ export function useSimpleChat({
       setStatus('ready');
       abortControllerRef.current = null;
     }
-  }, [sessionId, workspaceId, onData, onFinish, onError, customGenerateId]);
+  }, [sessionId, workspaceId, userId, chatMode, onData, onFinish, onError, customGenerateId]);
 
   const stop = useCallback(() => {
     if (abortControllerRef.current) {
