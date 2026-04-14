@@ -19,6 +19,7 @@ from langgraph.prebuilt import create_react_agent
 
 from app.core.model_config import get_worker_config, ModelConfig
 from app.core.region_fallback import get_region_fallback_manager
+from app.utils.bedrock_exceptions import is_throttling_error
 
 # Bedrock API 타임아웃 (복잡한 도구 호출 시 기본 60초 초과 방지)
 BEDROCK_CONFIG = BotoConfig(read_timeout=120, connect_timeout=10)
@@ -1110,7 +1111,7 @@ iframe에 미리 정의된 CSS 변수를 사용하세요. 하드코딩 색상 �
 
         worker_internal_start = time.time()
 
-        # 모델 생성 (Prompt Caching 활성화 + 리전 폴백)
+        # 모델 생성 (Prompt Caching 활성화 + inference profile 폴백)
         model_start = time.time()
         config = self.get_model_config()
         region_mgr = get_region_fallback_manager()
@@ -1122,9 +1123,6 @@ iframe에 미리 정의된 CSS 변수를 사용하세요. 하드코딩 색상 �
             disable_streaming=False,
             config=BEDROCK_CONFIG,
         )
-        if region_mgr.is_fallback_active:
-            llm_kwargs["region_name"] = region_mgr.fallback_region
-            print(f"[{self.name}] Using fallback region: {region_mgr.fallback_region} ({effective_model_id})")
         llm = CachedChatBedrockConverse(**llm_kwargs)
         model_time = int((time.time() - model_start) * 1000)
         print(f"[{self.name}] [TIMING] Model creation: {model_time}ms")
@@ -1202,10 +1200,10 @@ iframe에 미리 정의된 CSS 변수를 사용하세요. 하드코딩 색상 �
                 except Exception as e:
                     print(f"[{self.name}] [TOOL_SCHEMA] {t.name}: ERROR - {e}")
 
-        # 스트리밍 실행
+        # 스트리밍 실행 (throttling 시 inference profile 자동 전환)
         total_setup_time = int((time.time() - worker_internal_start) * 1000)
         print(f"[{self.name}] [TIMING] Total setup before stream: {total_setup_time}ms")
-        print(f"[{self.name}] Starting stream with {config.display_name}")
+        print(f"[{self.name}] Starting stream with {config.display_name} ({effective_model_id})")
 
         # 타이밍 플래그
         llm_started = False
@@ -1217,70 +1215,148 @@ iframe에 미리 정의된 CSS 변수를 사용하세요. 하드코딩 색상 �
         total_cache_read_tokens = 0
         total_cache_write_tokens = 0
         stream_start = time.time()
+        used_model_id = effective_model_id  # 실제 사용된 model ID (폴백 시 변경됨)
 
-        async for event in agent.astream_events(
-            {"messages": messages},
-            version="v2",
-            config={"recursion_limit": self.max_agent_steps},
-        ):
-            event_kind = event.get("event", "")
-            elapsed = int((time.time() - stream_start) * 1000)
+        try:
+            async for event in agent.astream_events(
+                {"messages": messages},
+                version="v2",
+                config={"recursion_limit": self.max_agent_steps},
+            ):
+                event_kind = event.get("event", "")
+                elapsed = int((time.time() - stream_start) * 1000)
 
-            # LLM 호출 시작
-            if event_kind == "on_chat_model_start" and not llm_started:
-                print(f"[{self.name}] [TIMING] LLM call started: {elapsed}ms")
-                llm_started = True
+                # LLM 호출 시작
+                if event_kind == "on_chat_model_start" and not llm_started:
+                    print(f"[{self.name}] [TIMING] LLM call started: {elapsed}ms")
+                    llm_started = True
 
-            # LLM 호출 완료 → tool_calls 확인 + 토큰 수집
-            if event_kind == "on_chat_model_end":
-                llm_call_count += 1
-                output = event.get("data", {}).get("output", None)
-                # 토큰 사용량 수집
-                if output and hasattr(output, "usage_metadata") and output.usage_metadata:
-                    um = output.usage_metadata
-                    step_in = um.get("input_tokens", 0)
-                    step_out = um.get("output_tokens", 0)
-                    total_input_tokens += step_in
-                    total_output_tokens += step_out
-                    # Prompt Caching 메트릭
-                    cache_read = 0
-                    cache_write = 0
-                    details = um.get("input_token_details") or {}
-                    if details:
-                        cache_read = details.get("cache_read", 0)
-                        cache_write = details.get("cache_creation", 0)
-                    total_cache_read_tokens += cache_read
-                    total_cache_write_tokens += cache_write
-                    cache_info = f" cache_read={cache_read:,} cache_write={cache_write:,}" if (cache_read or cache_write) else ""
-                    print(f"[{self.name}] [TOKEN #{llm_call_count}] in={step_in:,} out={step_out:,}{cache_info} (cumul: in={total_input_tokens:,} out={total_output_tokens:,})")
-                if output and hasattr(output, "tool_calls") and output.tool_calls:
-                    tc_summary = [{"name": tc.get("name"), "args_keys": list(tc.get("args", {}).keys())} for tc in output.tool_calls]
-                    print(f"[{self.name}] [LLM_END #{llm_call_count}] tool_calls: {tc_summary}")
-                else:
-                    # LLM이 도구를 호출하지 않은 경우 → 응답 내용 출력
-                    resp_text = ""
-                    if output and hasattr(output, "content"):
-                        if isinstance(output.content, str):
-                            resp_text = output.content[:200]
-                        elif isinstance(output.content, list):
-                            for item in output.content:
-                                if isinstance(item, dict) and "text" in item:
-                                    resp_text += item["text"]
-                            resp_text = resp_text[:200]
-                    print(f"[{self.name}] [LLM_END #{llm_call_count}] NO tool_calls. Response: {resp_text}")
+                # LLM 호출 완료 → tool_calls 확인 + 토큰 수집
+                if event_kind == "on_chat_model_end":
+                    llm_call_count += 1
+                    output = event.get("data", {}).get("output", None)
+                    # 토큰 사용량 수집
+                    if output and hasattr(output, "usage_metadata") and output.usage_metadata:
+                        um = output.usage_metadata
+                        step_in = um.get("input_tokens", 0)
+                        step_out = um.get("output_tokens", 0)
+                        total_input_tokens += step_in
+                        total_output_tokens += step_out
+                        # Prompt Caching 메트릭
+                        cache_read = 0
+                        cache_write = 0
+                        details = um.get("input_token_details") or {}
+                        if details:
+                            cache_read = details.get("cache_read", 0)
+                            cache_write = details.get("cache_creation", 0)
+                        total_cache_read_tokens += cache_read
+                        total_cache_write_tokens += cache_write
+                        cache_info = f" cache_read={cache_read:,} cache_write={cache_write:,}" if (cache_read or cache_write) else ""
+                        print(f"[{self.name}] [TOKEN #{llm_call_count}] in={step_in:,} out={step_out:,}{cache_info} (cumul: in={total_input_tokens:,} out={total_output_tokens:,})")
+                    if output and hasattr(output, "tool_calls") and output.tool_calls:
+                        tc_summary = [{"name": tc.get("name"), "args_keys": list(tc.get("args", {}).keys())} for tc in output.tool_calls]
+                        print(f"[{self.name}] [LLM_END #{llm_call_count}] tool_calls: {tc_summary}")
+                    else:
+                        # LLM이 도구를 호출하지 않은 경우 → 응답 내용 출력
+                        resp_text = ""
+                        if output and hasattr(output, "content"):
+                            if isinstance(output.content, str):
+                                resp_text = output.content[:200]
+                            elif isinstance(output.content, list):
+                                for item in output.content:
+                                    if isinstance(item, dict) and "text" in item:
+                                        resp_text += item["text"]
+                                resp_text = resp_text[:200]
+                        print(f"[{self.name}] [LLM_END #{llm_call_count}] NO tool_calls. Response: {resp_text}")
 
-            # 첫 번째 LLM 토큰 (스트리밍 시작)
-            if event_kind == "on_chat_model_stream" and not first_token:
-                print(f"[{self.name}] [TIMING] First LLM token: {elapsed}ms")
-                first_token = True
+                # 첫 번째 LLM 토큰 (스트리밍 시작)
+                if event_kind == "on_chat_model_stream" and not first_token:
+                    print(f"[{self.name}] [TIMING] First LLM token: {elapsed}ms")
+                    first_token = True
 
-            # 도구 실행 시작
-            if event_kind == "on_tool_start" and not tool_started:
-                tool_name = event.get("name", "unknown")
-                print(f"[{self.name}] [TIMING] Tool '{tool_name}' started: {elapsed}ms")
-                tool_started = True
+                # 도구 실행 시작
+                if event_kind == "on_tool_start" and not tool_started:
+                    tool_name = event.get("name", "unknown")
+                    print(f"[{self.name}] [TIMING] Tool '{tool_name}' started: {elapsed}ms")
+                    tool_started = True
 
-            yield event
+                yield event
+
+        except Exception as e:
+            if not is_throttling_error(e):
+                raise  # throttling이 아닌 에러는 그대로 전파
+
+            # ── Throttling 감지 → inference profile prefix 전환 후 재시도 ──
+            from app.core.region_fallback import swap_inference_prefix
+            fallback_model_id = swap_inference_prefix(effective_model_id)
+
+            if fallback_model_id == effective_model_id:
+                # prefix 전환 불가 (알 수 없는 prefix) → 그대로 raise
+                raise
+
+            print(f"[{self.name}] [PROFILE_FALLBACK] Throttled on {effective_model_id}, "
+                  f"retrying with {fallback_model_id}")
+
+            # RegionFallbackManager에 폴백 상태 기록 (다음 요청부터 바로 전환)
+            region_mgr.activate_fallback()
+
+            # 폴백 모델로 LLM + Agent 재생성
+            fallback_llm = CachedChatBedrockConverse(
+                model=fallback_model_id,
+                temperature=0.7,
+                max_tokens=config.max_tokens,
+                disable_streaming=False,
+                config=BEDROCK_CONFIG,
+            )
+            agent = create_react_agent(fallback_llm, tools_for_agent, state_modifier=modifier)
+            used_model_id = fallback_model_id
+
+            # 타이밍 리셋
+            llm_started = False
+            first_token = False
+            tool_started = False
+            stream_start = time.time()
+
+            # 재시도 스트리밍 (이번엔 실패하면 그대로 전파)
+            async for event in agent.astream_events(
+                {"messages": messages},
+                version="v2",
+                config={"recursion_limit": self.max_agent_steps},
+            ):
+                event_kind = event.get("event", "")
+                elapsed = int((time.time() - stream_start) * 1000)
+
+                if event_kind == "on_chat_model_start" and not llm_started:
+                    print(f"[{self.name}] [TIMING] LLM call started (fallback): {elapsed}ms")
+                    llm_started = True
+
+                if event_kind == "on_chat_model_end":
+                    llm_call_count += 1
+                    output = event.get("data", {}).get("output", None)
+                    if output and hasattr(output, "usage_metadata") and output.usage_metadata:
+                        um = output.usage_metadata
+                        step_in = um.get("input_tokens", 0)
+                        step_out = um.get("output_tokens", 0)
+                        total_input_tokens += step_in
+                        total_output_tokens += step_out
+                        details = um.get("input_token_details") or {}
+                        cache_read = details.get("cache_read", 0) if details else 0
+                        cache_write = details.get("cache_creation", 0) if details else 0
+                        total_cache_read_tokens += cache_read
+                        total_cache_write_tokens += cache_write
+                        cache_info = f" cache_read={cache_read:,} cache_write={cache_write:,}" if (cache_read or cache_write) else ""
+                        print(f"[{self.name}] [TOKEN #{llm_call_count}] in={step_in:,} out={step_out:,}{cache_info} (fallback)")
+
+                if event_kind == "on_chat_model_stream" and not first_token:
+                    print(f"[{self.name}] [TIMING] First LLM token (fallback): {elapsed}ms")
+                    first_token = True
+
+                if event_kind == "on_tool_start" and not tool_started:
+                    tool_name = event.get("name", "unknown")
+                    print(f"[{self.name}] [TIMING] Tool '{tool_name}' started (fallback): {elapsed}ms")
+                    tool_started = True
+
+                yield event
 
         # 스트리밍 완료 후 토큰 사용량 이벤트 전달
         if total_input_tokens > 0 or total_output_tokens > 0:
@@ -1303,7 +1379,7 @@ iframe에 미리 정의된 CSS 변수를 사용하세요. 하드코딩 색상 �
                 import asyncio
                 asyncio.create_task(get_token_usage_service().log(
                     caller=self.name,
-                    model_id=config.model_id,
+                    model_id=used_model_id,
                     input_tokens=total_input_tokens,
                     output_tokens=total_output_tokens,
                     cache_read_tokens=total_cache_read_tokens,

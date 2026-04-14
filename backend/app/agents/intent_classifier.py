@@ -189,17 +189,14 @@ class IntentClassifier:
         self.llm = self._create_llm()
 
     def _create_llm(self) -> ChatBedrockConverse:
-        """현재 리전 상태에 맞는 LLM 인스턴스 생성"""
+        """현재 프로필 상태에 맞는 LLM 인스턴스 생성"""
         config = get_orchestrator_config()
         effective_model_id = self._region_mgr.get_model_id(config.model_id)
-        llm_kwargs = dict(
+        return ChatBedrockConverse(
             model=effective_model_id,
             temperature=0.0,
             max_tokens=config.max_tokens,
         )
-        if self._region_mgr.is_fallback_active:
-            llm_kwargs["region_name"] = self._region_mgr.fallback_region
-        return ChatBedrockConverse(**llm_kwargs)
 
     def _ensure_correct_region(self):
         """리전 상태가 바뀌었으면 LLM 재생성"""
@@ -525,6 +522,31 @@ class IntentClassifier:
             return (primary, secondary)
 
         except Exception as e:
+            # throttling 시 inference profile prefix 전환 후 재시도
+            from app.utils.bedrock_exceptions import is_throttling_error
+            if is_throttling_error(e):
+                from app.core.region_fallback import swap_inference_prefix
+                print(f"[INTENT] Throttled, swapping inference profile prefix and retrying...")
+                self._region_mgr.activate_fallback()
+                self.llm = self._create_llm()
+                try:
+                    response = await self.llm.ainvoke([
+                        SystemMessage(content="You are a precise intent classifier."),
+                        HumanMessage(content=prompt),
+                    ])
+                    raw = response.content.strip().lower()
+                    print(f"[INTENT] LLM classified (fallback profile): {raw}")
+                    parts = [p.strip() for p in raw.split(",")]
+                    primary = self._parse_intent(parts[0])
+                    secondary = self._parse_intent(parts[1]) if len(parts) > 1 else None
+                    if not primary:
+                        return (Intent.DIRECT, None)
+                    primary = self._apply_overrides(primary, context)
+                    if secondary == primary:
+                        secondary = None
+                    return (primary, secondary)
+                except Exception as e2:
+                    print(f"[INTENT] Fallback profile also failed: {e2}")
             print(f"[INTENT] Classification error: {e}, falling back to DIRECT")
             return (Intent.DIRECT, None)
 

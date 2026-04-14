@@ -48,9 +48,7 @@ class BedrockService:
 
     @property
     def client(self):
-        """현재 리전 상태에 따라 적절한 client 반환"""
-        if self._region_mgr.is_fallback_active:
-            return self._fallback_client_lazy
+        """boto3 client 반환 (inference profile prefix 전환 방식이므로 항상 primary client)"""
         return self._primary_client
 
     def _get_model_id(self, original_model_id: str) -> str:
@@ -194,9 +192,38 @@ class BedrockService:
                     else:
                         raise  # 쓰로틀링이 아닌 에러는 즉시 raise
 
-        # 모든 모델 실패 → 리전 폴백 활성화 후 재시도 안내
+        # 모든 모델 실패 → inference profile prefix 전환 후 전체 재시도
         self._on_all_retries_exhausted()
-        raise Exception(f"모든 모델이 쓰로틀링으로 실패했습니다: {last_exception}")
+
+        from app.core.region_fallback import swap_inference_prefix
+        for model_config in self.model_chain:
+            retry_model_id = swap_inference_prefix(model_config.model_id)
+            if retry_model_id == model_config.model_id:
+                continue
+            try:
+                request_body = {
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": model_config.max_tokens,
+                    "temperature": 0.7,
+                    "system": system,
+                    "messages": messages
+                }
+                print(f"[BEDROCK] [PROFILE_FALLBACK] Retrying with {retry_model_id}")
+                response = self.client.invoke_model_with_response_stream(
+                    modelId=retry_model_id,
+                    body=json.dumps(request_body)
+                )
+                for event in response['body']:
+                    chunk = json.loads(event['chunk']['bytes'])
+                    if chunk['type'] == 'content_block_delta':
+                        if 'delta' in chunk and 'text' in chunk['delta']:
+                            yield chunk['delta']['text']
+                return
+            except Exception as e2:
+                print(f"[BEDROCK] [PROFILE_FALLBACK] {retry_model_id} also failed: {e2}")
+                last_exception = e2
+
+        raise Exception(f"모든 모델/프로필이 쓰로틀링으로 실패했습니다: {last_exception}")
 
     async def generate_text(
         self,
@@ -279,7 +306,30 @@ class BedrockService:
                         raise
 
         self._on_all_retries_exhausted()
-        raise Exception(f"모든 모델이 쓰로틀링으로 실패했습니다: {last_exception}")
+
+        from app.core.region_fallback import swap_inference_prefix
+        for model_config in self.model_chain:
+            retry_model_id = swap_inference_prefix(model_config.model_id)
+            if retry_model_id == model_config.model_id:
+                continue
+            try:
+                request_body = {
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": min(max_tokens, model_config.max_tokens),
+                    "temperature": temperature,
+                    "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+                }
+                print(f"[BEDROCK] [PROFILE_FALLBACK] generate_text retrying with {retry_model_id}")
+                response = self.client.invoke_model(modelId=retry_model_id, body=json.dumps(request_body))
+                response_body = json.loads(response['body'].read())
+                if 'content' in response_body and len(response_body['content']) > 0:
+                    return response_body['content'][0]['text']
+                return ""
+            except Exception as e2:
+                print(f"[BEDROCK] [PROFILE_FALLBACK] {retry_model_id} also failed: {e2}")
+                last_exception = e2
+
+        raise Exception(f"모든 모델/프로필이 쓰로틀링으로 실패했습니다: {last_exception}")
 
     async def generate_text_haiku(
         self,
@@ -346,7 +396,24 @@ class BedrockService:
 
         except Exception as e:
             if is_throttling_error(e):
+                # prefix 전환 후 즉시 재시도
                 self._on_all_retries_exhausted()
+                from app.core.region_fallback import swap_inference_prefix
+                retry_model_id = swap_inference_prefix(effective_model_id)
+                if retry_model_id != effective_model_id:
+                    print(f"[BEDROCK] generate_text_haiku throttled, retrying with {retry_model_id}")
+                    try:
+                        response = self.client.invoke_model(
+                            modelId=retry_model_id,
+                            body=json.dumps(request_body)
+                        )
+                        response_body = json.loads(response['body'].read())
+                        if 'content' in response_body and len(response_body['content']) > 0:
+                            return response_body['content'][0]['text']
+                        return ""
+                    except Exception as e2:
+                        print(f"[BEDROCK] generate_text_haiku fallback also failed: {e2}")
+                        raise
             print(f"[BEDROCK] generate_text_haiku error: {e}")
             raise
 
@@ -396,6 +463,25 @@ class BedrockService:
         except Exception as e:
             if is_throttling_error(e):
                 self._on_all_retries_exhausted()
+                from app.core.region_fallback import swap_inference_prefix
+                retry_model_id = swap_inference_prefix(effective_model_id)
+                if retry_model_id != effective_model_id:
+                    print(f"[BEDROCK] stream_text_haiku throttled, retrying with {retry_model_id}")
+                    try:
+                        response = self.client.invoke_model_with_response_stream(
+                            modelId=retry_model_id,
+                            body=json.dumps(request_body)
+                        )
+                        for event in response["body"]:
+                            chunk = json.loads(event["chunk"]["bytes"])
+                            if chunk["type"] == "content_block_delta":
+                                delta = chunk.get("delta", {})
+                                if delta.get("type") == "text_delta":
+                                    yield delta["text"]
+                        return
+                    except Exception as e2:
+                        print(f"[BEDROCK] stream_text_haiku fallback also failed: {e2}")
+                        raise
             print(f"[BEDROCK] stream_text_haiku error: {e}")
             raise
 
@@ -470,7 +556,32 @@ class BedrockService:
                         raise
 
         self._on_all_retries_exhausted()
-        raise Exception(f"모든 모델이 쓰로틀링으로 실패했습니다: {last_exception}")
+
+        from app.core.region_fallback import swap_inference_prefix
+        for model_config in self.model_chain:
+            retry_model_id = swap_inference_prefix(model_config.model_id)
+            if retry_model_id == model_config.model_id:
+                continue
+            try:
+                request = {
+                    "modelId": retry_model_id,
+                    "messages": messages,
+                    "inferenceConfig": {
+                        "maxTokens": min(max_tokens, model_config.max_tokens),
+                        "temperature": temperature
+                    }
+                }
+                if system_prompt:
+                    request["system"] = [{"text": system_prompt}]
+                if tools:
+                    request["toolConfig"] = {"tools": tools}
+                print(f"[BEDROCK] [PROFILE_FALLBACK] converse_with_tools retrying with {retry_model_id}")
+                return self.client.converse(**request)
+            except Exception as e2:
+                print(f"[BEDROCK] [PROFILE_FALLBACK] {retry_model_id} also failed: {e2}")
+                last_exception = e2
+
+        raise Exception(f"모든 모델/프로필이 쓰로틀링으로 실패했습니다: {last_exception}")
 
 
 # 싱글톤
