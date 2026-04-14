@@ -129,7 +129,7 @@ async def decrypt_empno_endpoint(request: DecryptRequest):
 
 @router.get("/auth/resolve-gw-user/{gw_user_id}")
 async def resolve_gw_user(gw_user_id: str):
-    """다우오피스 내부 user_id(숫자) → 사번 변환"""
+    """다우오피스 내부 go_users.id(숫자) → 사번 변환"""
     tims_url = os.getenv("TIMS_DATABASE_URL", "")
     if not tims_url:
         raise HTTPException(status_code=500, detail="TIMS DB 미설정")
@@ -137,8 +137,15 @@ async def resolve_gw_user(gw_user_id: str):
     try:
         conn = await asyncpg.connect(tims_url)
         try:
+            # go_users.id → login_id 조회, 그 뒤 v_user_info_mapping에서 사번 조회
             row = await conn.fetchrow(
-                "SELECT employee_number, login_id, name FROM v_user_info_mapping WHERE user_id = $1 LIMIT 1",
+                """
+                SELECT m.employee_number, u.login_id, m.name
+                FROM go_users u
+                JOIN v_user_info_mapping m ON u.login_id = m.login_id
+                WHERE u.id = $1
+                LIMIT 1
+                """,
                 int(gw_user_id),
             )
         finally:
