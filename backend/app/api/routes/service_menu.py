@@ -1,7 +1,7 @@
 """서비스 메뉴 API 라우터
 
 그룹웨어 플로팅 위젯에서 사용할 서비스 메뉴 목록을 반환합니다.
-사번 → PostgreSQL(go_users → go_companies) → 소속 조직 판별 → MySQL(service_menu) 필터링
+사번 → PostgreSQL(v_user_info_mapping + v_org_chart) → 소속 조직 판별 → MySQL(service_menu) 필터링
 """
 import logging
 from typing import Optional
@@ -21,6 +21,13 @@ _pg_pool: Optional[asyncpg.Pool] = None
 # 사번 → 조직명 캐시 (프로세스 수명)
 _company_cache: dict[str, str] = {}
 
+# 부서경로 2번째 ID → 회사명 매핑
+_DEPT_PATH_COMPANY_MAP = {
+    "12": "엘앤에프",
+    "566": "엘앤에프플러스",
+    "58": "JH화학공업",
+}
+
 
 async def _get_pg_pool() -> asyncpg.Pool:
     global _pg_pool
@@ -32,7 +39,12 @@ async def _get_pg_pool() -> asyncpg.Pool:
 
 
 async def _get_company_name(empno: str) -> Optional[str]:
-    """사번으로 소속 회사명 조회 (캐시 적용)"""
+    """사번으로 소속 회사명 조회 (캐시 적용)
+
+    v_user_info_mapping으로 user_id를 얻고, v_org_chart의 부서경로에서
+    2번째 ID(12=엘앤에프, 566=엘앤에프플러스, 58=JH화학공업)로 회사를 판별한다.
+    부서경로가 '10'만 있는 최상위 직속은 부서명으로 판별한다.
+    """
     if empno in _company_cache:
         return _company_cache[empno]
 
@@ -40,22 +52,39 @@ async def _get_company_name(empno: str) -> Optional[str]:
         pool = await _get_pg_pool()
         row = await pool.fetchrow(
             """
-            SELECT c.name
-            FROM go_users u
-            JOIN go_companies c ON u.company_id = c.id
+            SELECT o."부서경로", o."부서", u.dept_name
+            FROM v_user_info_mapping u
+            JOIN v_org_chart o ON u.user_id = o.user_id
             WHERE u.employee_number = $1
-              AND u.deleted_at IS NULL
+            LIMIT 1
             """,
             empno,
         )
-        if row:
-            company_name = row["name"]
-            _company_cache[empno] = company_name
-            logger.info(f"[ServiceMenu] empno={empno} → company={company_name}")
-            return company_name
-        else:
-            logger.warning(f"[ServiceMenu] empno={empno} not found in go_users")
+        if not row:
+            logger.warning(f"[ServiceMenu] empno={empno} not found")
             return None
+
+        dept_path = row["부서경로"] or ""
+        dept_name = row["부서"] or row["dept_name"] or ""
+        parts = dept_path.split(":")
+
+        if len(parts) >= 2:
+            # 부서경로 2번째 ID로 회사 판별
+            company_name = _DEPT_PATH_COMPANY_MAP.get(parts[1])
+        else:
+            # 최상위 직속 (경로가 '10'만) — 부서명으로 판별
+            company_name = None
+            if "플러스" in dept_name or "LFP" in dept_name.upper():
+                company_name = "엘앤에프플러스"
+            elif "JH" in dept_name.upper() or "화학" in dept_name:
+                company_name = "JH화학공업"
+
+        if not company_name:
+            company_name = "엘앤에프"  # 기본값
+
+        _company_cache[empno] = company_name
+        logger.info(f"[ServiceMenu] empno={empno} → company={company_name} (path={dept_path})")
+        return company_name
     except Exception as e:
         logger.error(f"[ServiceMenu] PG query failed: {e}")
         return None
