@@ -903,7 +903,7 @@ async def create_event(
         payload["recurrence"] = recurrence
 
     print(f"[Calendar MCP] 일정 등록: cal={calendar_id}, summary={summary}, "
-          f"user=GO#{go_user_id}", file=sys.stderr)
+          f"user=GO#{go_user_id}, gosso={'있음' if gosso_cookie else '없음'}", file=sys.stderr)
 
     result = await _api_request("POST", f"/api/calendar/{calendar_id}/event/",
                                 gosso_cookie=gosso_cookie, json=payload)

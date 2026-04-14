@@ -182,6 +182,11 @@ class CalendarWorker(BaseWorker):
                         input_data["employee_number"] = _uid
                         if _inject_gosso and _gosso:
                             input_data["gosso_cookie"] = _gosso
+                if _inject_gosso:
+                    args = input_data.get("args", input_data) if isinstance(input_data, dict) else {}
+                    has_gosso = "gosso_cookie" in args if isinstance(args, dict) else False
+                    print(f"[CalendarWorker] [SECURE_INVOKE] {_tname}: gosso injected={has_gosso}, "
+                          f"input_type={type(input_data).__name__}, keys={list(input_data.keys()) if isinstance(input_data, dict) else 'N/A'}")
                 try:
                     return await _original(input_data, config, **kwargs)
                 except Exception as e:
