@@ -46,6 +46,10 @@ export function useSimpleChat({
   const [followUpSuggestions, setFollowUpSuggestions] = useState<string[] | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const userId = externalUserId || getUserId() || "anonymous";
+  const userIdRef = useRef(userId);
+  userIdRef.current = userId;
+  const chatModeRef = useRef(chatMode);
+  chatModeRef.current = chatMode;
 
   const sendMessage = useCallback(async (message: Omit<ChatMessage, 'id' | 'createdAt'>) => {
     // 이전 팔로우업 제안 초기화
@@ -161,9 +165,9 @@ export function useSimpleChat({
         },
         body: JSON.stringify({
           message: content,
-          chat_mode: chatMode,
+          chat_mode: chatModeRef.current,
           session_id: sessionId,
-          user_id: userId,
+          user_id: userIdRef.current,
           images: imageFiles.length > 0 ? imageFiles : null,
           message_history: messageHistory.length > 0 ? messageHistory : null,
           workspace_id: workspaceId,
@@ -456,7 +460,7 @@ export function useSimpleChat({
       setStatus('ready');
       abortControllerRef.current = null;
     }
-  }, [sessionId, workspaceId, userId, chatMode, onData, onFinish, onError, customGenerateId]);
+  }, [sessionId, workspaceId, onData, onFinish, onError, customGenerateId]);
 
   const stop = useCallback(() => {
     if (abortControllerRef.current) {
