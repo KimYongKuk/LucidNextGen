@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { SquarePen } from "lucide-react";
 import { useSimpleChat } from "@/hooks/use-simple-chat";
 import { useDataStream } from "./data-stream-provider";
@@ -8,18 +8,23 @@ import { Messages } from "./messages";
 import { MultimodalInput } from "./multimodal-input";
 import { FollowUpSuggestions } from "./follow-up-suggestions";
 import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
+import { getApiUrl } from "@/lib/api/config";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
 
 export function EmbedChat({
   userId,
   chatMode = "outline_embed",
+  initialSessionId,
+  onNewChat,
 }: {
   userId: string;
   chatMode?: string;
+  initialSessionId?: string;
+  onNewChat?: () => void;
 }) {
   const { setDataStream } = useDataStream();
-  const [sessionId, setSessionId] = useState(() => generateUUID());
+  const [sessionId, setSessionId] = useState(() => initialSessionId || generateUUID());
   const [input, setInput] = useState("");
   const [currentModelId] = useState(DEFAULT_CHAT_MODEL);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -46,13 +51,46 @@ export function EmbedChat({
     },
   });
 
+  // initialSessionId가 있으면 기존 대화 메시지 복원
+  useEffect(() => {
+    if (!initialSessionId || userId === "anonymous") return;
+
+    const loadMessages = async () => {
+      try {
+        const baseUrl = getApiUrl();
+        const res = await fetch(
+          `${baseUrl}/api/v1/chat/sessions/${initialSessionId}/messages?user_id=${encodeURIComponent(userId)}`
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data.messages || data.messages.length === 0) return;
+
+        // 백엔드 형식 → ChatMessage 형식 변환
+        const restored: ChatMessage[] = data.messages.map((msg: { role: string; content: string; sources?: unknown[]; corp_sources?: unknown[] }) => ({
+          id: generateUUID(),
+          role: msg.role as "user" | "assistant",
+          parts: [{ type: "text" as const, text: msg.content }],
+          ...(msg.sources && msg.sources.length > 0 ? { sources: msg.sources } : {}),
+          ...(msg.corp_sources && msg.corp_sources.length > 0 ? { corpSources: msg.corp_sources } : {}),
+        }));
+
+        setMessages(restored);
+      } catch (e) {
+        console.error("[EMBED_CHAT] Failed to restore messages:", e);
+      }
+    };
+
+    loadMessages();
+  }, [initialSessionId, userId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleNewChat = useCallback(() => {
     setSessionId(generateUUID());
     setMessages([]);
     setInput("");
     setAttachments([]);
     setDataStream([]);
-  }, [setMessages, setDataStream]);
+    onNewChat?.();
+  }, [setMessages, setDataStream, onNewChat]);
 
   return (
     <div className="flex h-full min-w-0 flex-col bg-background">

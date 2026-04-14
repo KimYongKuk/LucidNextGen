@@ -23,12 +23,13 @@
     widgetWidth: '30vw',
     widgetMinWidth: 400,
     widgetMaxWidth: 560,
-    widgetHeight: 'calc(100vh - 80px)',
+    widgetHeight: 'calc(100vh - 120px)',
     buttonSize: 58,
     buttonMargin: 24,
     embedPath: '/embed/gw',
   };
 
+  var STORAGE_KEY = 'lucid_gw_session_id';
   var config = {};
   var isOpen = false;
   var container, button, widgetFrame;
@@ -76,7 +77,7 @@
         overflow: hidden; \
         border: 1px solid rgba(0,0,0,0.06); \
         position: fixed; \
-        bottom: ' + config.buttonMargin + 'px; \
+        bottom: ' + (config.buttonMargin + config.buttonSize + 12) + 'px; \
         ' + (config.position === 'bottom-left' ? 'left' : 'right') + ': ' + config.buttonMargin + 'px; \
       } \
       #lucid-gw-frame-wrap.lucid-gw-visible { \
@@ -117,6 +118,26 @@
     return config.userId;
   }
 
+  function getSessionId() {
+    // sessionStorage에서 기존 세션 복원, 없으면 새로 생성
+    try {
+      var existing = sessionStorage.getItem(STORAGE_KEY);
+      if (existing) return existing;
+    } catch (e) { /* sessionStorage 접근 불가 시 무시 */ }
+    var id = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+      var r = Math.random() * 16 | 0;
+      return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+    });
+    try { sessionStorage.setItem(STORAGE_KEY, id); } catch (e) { /* 무시 */ }
+    return id;
+  }
+
+  function resetSession() {
+    // 새 대화 시 세션 초기화
+    try { sessionStorage.removeItem(STORAGE_KEY); } catch (e) { /* 무시 */ }
+    widgetFrame = null;
+  }
+
   function buildWidget() {
     container = document.createElement('div');
     container.id = 'lucid-gw-container';
@@ -134,6 +155,27 @@
     container.appendChild(frameWrap);
     container.appendChild(button);
     document.body.appendChild(container);
+
+    // iframe에서 새 대화 요청 시 세션 리셋
+    window.addEventListener('message', function (e) {
+      if (e.data && e.data.type === 'lucid-new-chat') {
+        resetSession();
+        var frameWrap = document.getElementById('lucid-gw-frame-wrap');
+        if (frameWrap) frameWrap.innerHTML = '';
+        // 다음 열기 시 새 iframe 생성됨
+        if (isOpen) {
+          var empno = getEmpno();
+          var sid = getSessionId();
+          var iframeSrc = config.apiUrl + config.embedPath + '?empno=' + encodeURIComponent(empno) + '&sid=' + encodeURIComponent(sid);
+          widgetFrame = document.createElement('iframe');
+          widgetFrame.id = 'lucid-gw-frame';
+          widgetFrame.src = iframeSrc;
+          widgetFrame.setAttribute('allow', 'clipboard-write');
+          widgetFrame.style.cssText = 'width:100%;height:100%;border:none;border-radius:16px;';
+          frameWrap.appendChild(widgetFrame);
+        }
+      }
+    });
 
     // SPA 환경: body 자식 변경 시 위젯이 사라지면 다시 붙이기
     if (typeof MutationObserver !== 'undefined') {
@@ -155,7 +197,8 @@
       // 첫 열기 시 iframe 생성 (이 시점에 GO.session() 확실히 준비됨)
       if (!widgetFrame) {
         var empno = getEmpno();
-        var iframeSrc = config.apiUrl + config.embedPath + '?empno=' + encodeURIComponent(empno);
+        var sid = getSessionId();
+        var iframeSrc = config.apiUrl + config.embedPath + '?empno=' + encodeURIComponent(empno) + '&sid=' + encodeURIComponent(sid);
         widgetFrame = document.createElement('iframe');
         widgetFrame.id = 'lucid-gw-frame';
         widgetFrame.src = iframeSrc;
