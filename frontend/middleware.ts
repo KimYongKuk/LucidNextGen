@@ -28,7 +28,6 @@ export default async function proxy(request: NextRequest) {
     : { searchParams: new URLSearchParams(), pathname: new URL(request.url).pathname }
 
   const encryptedEmpno = searchParams.get('empno')
-  const encryptedGosso = searchParams.get('gosso')
 
   // 1. SSO: URL 파라미터에 empno가 있으면 복호화 후 쿠키에 저장
   if (encryptedEmpno) {
@@ -57,34 +56,16 @@ export default async function proxy(request: NextRequest) {
         maxAge: 60 * 60 * 24 // 24시간
       })
 
-      // gosso 파라미터가 있으면 복호화하여 쿠키에 저장 (캘린더 사용자 인증용)
-      const gd = searchParams.get('gd') || ''  // JSP 디버그 파라미터
-      if (encryptedGosso) {
-        try {
-          const gossoResponse = await fetch(`${BACKEND_URL}/api/auth/decrypt`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ encrypted_empno: encryptedGosso })
-          })
-          if (gossoResponse.ok) {
-            const { decrypted_empno: decryptedGosso } = await gossoResponse.json()
-            redirectResponse.cookies.set('gosso', decryptedGosso, {
-              httpOnly: false,
-              secure: false,
-              sameSite: 'lax',
-              path: '/',
-              maxAge: 60 * 60 * 24 // empno와 동일 24시간 (실제 만료는 LFON 세션에 의존)
-            })
-            redirectResponse.cookies.set('gosso_debug', 'ok', { path: '/', maxAge: 300 })
-          } else {
-            redirectResponse.cookies.set('gosso_debug', `decrypt_fail_${gossoResponse.status}`, { path: '/', maxAge: 300 })
-          }
-        } catch (e: any) {
-          redirectResponse.cookies.set('gosso_debug', `error_${e?.message?.slice(0,30) || 'unknown'}`, { path: '/', maxAge: 300 })
-        }
-      } else {
-        // gosso 파라미터 자체가 없음 — JSP에서 전달 안 됨
-        redirectResponse.cookies.set('gosso_debug', gd ? `jsp_${gd}` : 'no_gosso_param', { path: '/', maxAge: 300 })
+      // gosso 파라미터: GOSSOcookie 평문 전달 → 그대로 쿠키 저장
+      const gossoValue = searchParams.get('gosso')
+      if (gossoValue) {
+        redirectResponse.cookies.set('gosso', gossoValue, {
+          httpOnly: false,
+          secure: false,
+          sameSite: 'lax',
+          path: '/',
+          maxAge: 60 * 60 * 24 // empno와 동일 24시간 (실제 만료는 LFON 세션에 의존)
+        })
       }
 
       return redirectResponse
