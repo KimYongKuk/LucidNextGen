@@ -6,6 +6,9 @@
 ---
 
 ## [2026-04-14]
+- **추가** [Widget] 그룹웨어 서비스 메뉴 플로팅 위젯 — 사번→조직 자동 판별, 조직별 메뉴 필터링, service_menu DB 테이블, 새 탭 SSO 이동 → [상세](docs/history/2026-04-14_그룹웨어-서비스-메뉴-위젯.md)
+- **수정** [Fallback] Worker LLM 호출 us↔global inference profile 자동 전환 — throttling 시 prefix 전환 재시도, 모든 Bedrock 호출 경로에 적용 → [상세](docs/history/2026-04-14_Inference-Profile-자동-폴백.md)
+- **추가** [Embed/GW] 그룹웨어 전용 embed 모드 — iframe 방식 위젯, groupware_embed 인텐트 필터링, GO.session() 사번 추출, userId useRef 안정화 → [상세](docs/history/2026-04-14_그룹웨어-전용-embed-모드.md)
 - **수정** [Calendar] 캘린더 사용자별 SSO 인증 — 서비스 계정(wg0403) 대신 사용자 GOSSOcookie로 API 호출, 일정 등록/수정/삭제 권한 오류 해결, JSP에서 gosso 파라미터 전달 → [상세](docs/history/2026-04-14_캘린더-사용자별-SSO-인증.md)
 
 ## [2026-04-13]
