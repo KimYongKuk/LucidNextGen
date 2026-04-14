@@ -58,6 +58,7 @@ export default async function proxy(request: NextRequest) {
       })
 
       // gosso 파라미터가 있으면 복호화하여 쿠키에 저장 (캘린더 사용자 인증용)
+      const gd = searchParams.get('gd') || ''  // JSP 디버그 파라미터
       if (encryptedGosso) {
         try {
           const gossoResponse = await fetch(`${BACKEND_URL}/api/auth/decrypt`, {
@@ -74,10 +75,16 @@ export default async function proxy(request: NextRequest) {
               path: '/',
               maxAge: 60 * 60 * 24 // empno와 동일 24시간 (실제 만료는 LFON 세션에 의존)
             })
+            redirectResponse.cookies.set('gosso_debug', 'ok', { path: '/', maxAge: 300 })
+          } else {
+            redirectResponse.cookies.set('gosso_debug', `decrypt_fail_${gossoResponse.status}`, { path: '/', maxAge: 300 })
           }
-        } catch {
-          // gosso 복호화 실패는 무시 — 서비스 계정 폴백
+        } catch (e: any) {
+          redirectResponse.cookies.set('gosso_debug', `error_${e?.message?.slice(0,30) || 'unknown'}`, { path: '/', maxAge: 300 })
         }
+      } else {
+        // gosso 파라미터 자체가 없음 — JSP에서 전달 안 됨
+        redirectResponse.cookies.set('gosso_debug', gd ? `jsp_${gd}` : 'no_gosso_param', { path: '/', maxAge: 300 })
       }
 
       return redirectResponse
