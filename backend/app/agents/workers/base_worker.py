@@ -472,7 +472,7 @@ class BaseWorker(ABC):
 
     # Output 파일을 생성하는 MCP 도구 목록 (아카이브 대상)
     ARCHIVABLE_TOOLS = {
-        "create_document_pdf", "create_table_spec_pdf",
+        "create_document_pdf", "create_table_spec_pdf", "create_document_docx",
         "create_presentation",
         "create_line_chart", "create_bar_chart", "create_pie_chart", "create_multi_chart",
         "create_workbook", "write_data_to_excel",
