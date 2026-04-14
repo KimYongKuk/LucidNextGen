@@ -20,8 +20,10 @@
     userId: '',
     position: 'bottom-right',
     zIndex: 99999,
-    widgetWidth: 420,
-    widgetHeight: 640,
+    widgetWidth: '30vw',
+    widgetMinWidth: 400,
+    widgetMaxWidth: 560,
+    widgetHeight: 'calc(100vh - 80px)',
     buttonSize: 58,
     buttonMargin: 24,
     embedPath: '/embed/gw',
@@ -63,18 +65,19 @@
       #lucid-gw-button:active { transform: scale(0.95); } \
       #lucid-gw-button svg { width: 28px; height: 28px; } \
       #lucid-gw-frame-wrap { \
-        width: ' + config.widgetWidth + 'px; \
-        height: ' + config.widgetHeight + 'px; \
-        max-height: calc(100vh - 100px); \
+        width: ' + config.widgetWidth + '; \
+        min-width: ' + config.widgetMinWidth + 'px; \
+        max-width: ' + config.widgetMaxWidth + 'px; \
+        height: ' + config.widgetHeight + '; \
         background: #ffffff; \
         border-radius: 16px; \
         box-shadow: 0 8px 40px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.08); \
         display: none; \
         overflow: hidden; \
         border: 1px solid rgba(0,0,0,0.06); \
-        position: absolute; \
-        bottom: ' + (config.buttonSize + 12) + 'px; \
-        ' + (config.position === 'bottom-left' ? 'left' : 'right') + ': 0; \
+        position: fixed; \
+        bottom: ' + config.buttonMargin + 'px; \
+        ' + (config.position === 'bottom-left' ? 'left' : 'right') + ': ' + config.buttonMargin + 'px; \
       } \
       #lucid-gw-frame-wrap.lucid-gw-visible { \
         display: block; \

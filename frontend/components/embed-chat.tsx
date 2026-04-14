@@ -85,7 +85,7 @@ export function EmbedChat({
       />
 
       {/* 입력 영역 */}
-      <div className="sticky bottom-0 z-1 mx-auto flex w-full max-w-4xl flex-col gap-2 border-t-0 bg-background px-2 pb-16 md:px-4 md:pb-16">
+      <div className="sticky bottom-0 z-1 mx-auto flex w-full max-w-4xl flex-col gap-2 border-t-0 bg-background px-2 pb-4 md:px-4 md:pb-4">
         {status === "ready" && !input.trim() && (
           <FollowUpSuggestions
             suggestions={followUpSuggestions}
