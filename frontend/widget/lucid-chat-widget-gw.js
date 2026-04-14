@@ -104,6 +104,15 @@
   };
 
   function buildWidget() {
+    // GO.session()에서 사번 자동 추출 (다우오피스 전역 객체)
+    var empno = config.userId;
+    if (typeof GO !== 'undefined' && typeof GO.session === 'function') {
+      var sess = GO.session();
+      if (sess && sess.employeeNumber) {
+        empno = sess.employeeNumber;
+      }
+    }
+
     container = document.createElement('div');
     container.id = 'lucid-gw-container';
 
@@ -118,7 +127,7 @@
     frameWrap.id = 'lucid-gw-frame-wrap';
 
     // iframe
-    var iframeSrc = config.apiUrl + config.embedPath + '?empno=' + encodeURIComponent(config.userId);
+    var iframeSrc = config.apiUrl + config.embedPath + '?empno=' + encodeURIComponent(empno);
     widgetFrame = document.createElement('iframe');
     widgetFrame.id = 'lucid-gw-frame';
     widgetFrame.src = iframeSrc;
