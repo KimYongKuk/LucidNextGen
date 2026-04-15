@@ -184,11 +184,12 @@ class CalendarWorker(BaseWorker):
         tools: List[BaseTool],
         context: Dict[str, Any]
     ) -> List[BaseTool]:
-        """캘린더+예약 도구 보안 래핑: employee_number 강제 주입
-        (gosso_cookie는 시스템 프롬프트를 통해 LLM이 직접 전달)"""
+        """캘린더+예약 도구 보안 래핑: employee_number + gosso_cookie 강제 주입"""
         user_id = context.get("user_id", "")
         if not user_id or user_id == "anonymous":
             return tools
+
+        gosso_cookie = context.get("gosso_cookie") or ""
 
         secured_tools = {
             # 캘린더
@@ -208,13 +209,18 @@ class CalendarWorker(BaseWorker):
 
             async def secured_ainvoke(
                 input_data, config=None, *,
-                _original=original_ainvoke, _uid=user_id, _tname=tool.name, **kwargs
+                _original=original_ainvoke, _uid=user_id,
+                _gosso=gosso_cookie, _tname=tool.name, **kwargs
             ):
                 if isinstance(input_data, dict):
                     if "args" in input_data and isinstance(input_data.get("args"), dict):
                         input_data["args"]["employee_number"] = _uid
+                        if _gosso:
+                            input_data["args"]["gosso_cookie"] = _gosso
                     else:
                         input_data["employee_number"] = _uid
+                        if _gosso:
+                            input_data["gosso_cookie"] = _gosso
                 try:
                     return await _original(input_data, config, **kwargs)
                 except Exception as e:
@@ -223,7 +229,7 @@ class CalendarWorker(BaseWorker):
 
             object.__setattr__(tool, "ainvoke", secured_ainvoke)
 
-        print(f"[CalendarWorker] 보안 래핑 완료: employee_number → {user_id}")
+        print(f"[CalendarWorker] 보안 래핑 완료: employee_number → {user_id}, gosso → {'있음' if gosso_cookie else '없음'}")
         return tools
 
     def build_system_prompt(
