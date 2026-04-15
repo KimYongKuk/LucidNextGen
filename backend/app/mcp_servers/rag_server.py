@@ -65,7 +65,7 @@ async def search_hr_docs(
 
         formatted_results = []
         for idx, result in enumerate(results, 1):
-            filename = result.get('metadata', {}).get('filename', 'Unknown')
+            filename = (result.get('metadata') or {}).get('filename', 'Unknown')
             text = result.get('text', '')
             similarity = result.get('similarity', 0)
             formatted_results.append(f"[인사 문서 {idx}: {filename} (유사도: {similarity:.2f})]\n{text}\n")
@@ -102,7 +102,7 @@ async def search_ac_docs(
 
         formatted_results = []
         for idx, result in enumerate(results, 1):
-            filename = result.get('metadata', {}).get('filename', 'Unknown')
+            filename = (result.get('metadata') or {}).get('filename', 'Unknown')
             text = result.get('text', '')
             similarity = result.get('similarity', 0)
             formatted_results.append(f"[재경 문서 {idx}: {filename} (유사도: {similarity:.2f})]\n{text}\n")
@@ -138,7 +138,7 @@ async def search_it_docs(
 
         formatted_results = []
         for idx, result in enumerate(results, 1):
-            filename = result.get('metadata', {}).get('filename', 'Unknown')
+            filename = (result.get('metadata') or {}).get('filename', 'Unknown')
             text = result.get('text', '')
             similarity = result.get('similarity', 0)
             formatted_results.append(f"[IT 문서 {idx}: {filename} (유사도: {similarity:.2f})]\n{text}\n")
@@ -174,7 +174,7 @@ async def search_safety_docs(
 
         formatted_results = []
         for idx, result in enumerate(results, 1):
-            filename = result.get('metadata', {}).get('filename', 'Unknown')
+            filename = (result.get('metadata') or {}).get('filename', 'Unknown')
             text = result.get('text', '')
             similarity = result.get('similarity', 0)
             formatted_results.append(f"[안전환경 문서 {idx}: {filename} (유사도: {similarity:.2f})]\n{text}\n")
@@ -212,7 +212,7 @@ async def search_user_files(
         # 결과 포맷팅
         formatted_results = []
         for idx, result in enumerate(results, 1):
-            filename = result.get('metadata', {}).get('filename', 'Unknown')
+            filename = (result.get('metadata') or {}).get('filename', 'Unknown')
             text = result.get('text', '')
             similarity = result.get('similarity', 0)
             formatted_results.append(f"[파일 {idx}: {filename} (유사도: {similarity:.2f})]\n{text}\n")
@@ -252,7 +252,7 @@ async def search_workspace_docs(
 
         formatted_results = []
         for idx, result in enumerate(results, 1):
-            filename = result.get('metadata', {}).get('filename', 'Unknown')
+            filename = (result.get('metadata') or {}).get('filename', 'Unknown')
             text = result.get('text', '')
             similarity = result.get('similarity', 0)
             formatted_results.append(f"[워크스페이스 문서 {idx}: {filename} (유사도: {similarity:.2f})]\n{text}\n")

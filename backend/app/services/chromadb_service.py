@@ -738,7 +738,7 @@ class ChromaDBService:
                     similarity = 1 - (distance / 2)
                     semantic_docs.append({
                         "text": doc,
-                        "metadata": results['metadatas'][0][i] if results['metadatas'] else {},
+                        "metadata": (results['metadatas'][0][i] or {}) if results['metadatas'] else {},
                         "similarity": round(similarity, 3),
                     })
 

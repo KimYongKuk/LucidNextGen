@@ -167,7 +167,7 @@ def reciprocal_rank_fusion(
         if key not in doc_scores:
             doc_scores[key] = {
                 "text": doc_text,
-                "metadata": all_metadatas[doc_idx] if doc_idx < len(all_metadatas) else {},
+                "metadata": (all_metadatas[doc_idx] or {}) if doc_idx < len(all_metadatas) else {},
                 "similarity": 0.0,
                 "rrf": 0.0,
                 "from_semantic": False,
