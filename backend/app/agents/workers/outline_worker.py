@@ -62,7 +62,7 @@ AI_REFERENCE_PUBLIC_COLLECTION = os.environ.get(
 
 # 캐시: team_id → (public_collection_ids, ai_ref_doc_ids, timestamp)
 _ai_reference_cache: Dict[str, Tuple[Set[str], Set[str], float]] = {}
-_AI_REFERENCE_CACHE_TTL = 300  # 5분
+_AI_REFERENCE_CACHE_TTL = 60  # 1분
 
 # Personal 컬렉션 캐시
 _personal_collection_cache: Optional[Tuple[Set[str], float]] = None
