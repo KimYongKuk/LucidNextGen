@@ -5,6 +5,9 @@
 
 ---
 
+## [2026-04-17]
+- **수정** [MCP] 동시 스폰 수 4개로 제한 — Windows 18개 서브프로세스 일괄 스폰 시 `ExceptionGroup` 경쟁 실패 방지, 세마포어 도입, MailWorker 등 메일 도구 누락 재발 방지 → [상세](docs/history/2026-04-17_MCP_concurrent_spawn_limit.md)
+
 ## [2026-04-14]
 - **추가** [Widget] 그룹웨어 서비스 메뉴 플로팅 위젯 — 사번→조직 자동 판별, 조직별 메뉴 필터링, service_menu DB 테이블, 새 탭 SSO 이동 → [상세](docs/history/2026-04-14_그룹웨어-서비스-메뉴-위젯.md)
 - **수정** [Fallback] Worker LLM 호출 us↔global inference profile 자동 전환 — throttling 시 prefix 전환 재시도, 모든 Bedrock 호출 경로에 적용 → [상세](docs/history/2026-04-14_Inference-Profile-자동-폴백.md)

@@ -163,6 +163,9 @@ class MCPAdapter:
     # 개별 서버 도구 로딩 타임아웃 (초)
     SERVER_LOAD_TIMEOUT: int = 10
 
+    # 동시 스폰 서버 수 제한 (Windows에서 한꺼번에 많은 프로세스 스폰 시 ExceptionGroup 실패 방지)
+    MAX_CONCURRENT_LOADS: int = 4
+
     # 재시도 무의미한 영구 에러 타입
     _PERMANENT_ERRORS = (FileNotFoundError, PermissionError, NotADirectoryError)
 
@@ -268,34 +271,39 @@ class MCPAdapter:
         if MCPAdapter._blacklisted_servers:
             print(f"[MCP] Skipping blacklisted: {', '.join(MCPAdapter._blacklisted_servers.keys())}")
 
-        async def _load_server_tools(name: str):
-            """개별 서버에서 도구 로드 (타임아웃 + 영구실패 블랙리스트)"""
-            try:
-                return await asyncio.wait_for(
-                    self._client.get_tools(server_name=name),
-                    timeout=MCPAdapter.SERVER_LOAD_TIMEOUT,
-                )
-            except asyncio.TimeoutError:
-                print(f"[MCP] WARNING: Server '{name}' timed out ({MCPAdapter.SERVER_LOAD_TIMEOUT}s)")
-                return []
-            except Exception as e:
-                # ExceptionGroup 내부의 실제 에러 추출
-                root = e
-                if isinstance(e, BaseExceptionGroup):
-                    flat = e.exceptions
-                    if len(flat) == 1:
-                        root = flat[0]
-                        # 중첩 ExceptionGroup 한 단계 더 풀기
-                        if isinstance(root, BaseExceptionGroup) and len(root.exceptions) == 1:
-                            root = root.exceptions[0]
+        # 동시 스폰 제한: Windows에서 18개 서브프로세스를 한꺼번에 스폰하면
+        # 프로세스 스폰 경쟁으로 ExceptionGroup 실패가 대량 발생 → 세마포어로 4개씩 제한
+        semaphore = asyncio.Semaphore(MCPAdapter.MAX_CONCURRENT_LOADS)
 
-                if isinstance(root, MCPAdapter._PERMANENT_ERRORS):
-                    err_msg = f"{type(root).__name__}: {root}"
-                    MCPAdapter._blacklisted_servers[name] = err_msg
-                    print(f"[MCP] BLACKLISTED: Server '{name}' — {err_msg} (permanent failure, won't retry)")
-                else:
-                    print(f"[MCP] WARNING: Server '{name}' failed to load: {type(e).__name__}: {e}")
-                return []
+        async def _load_server_tools(name: str):
+            """개별 서버에서 도구 로드 (타임아웃 + 영구실패 블랙리스트 + 동시 스폰 제한)"""
+            async with semaphore:
+                try:
+                    return await asyncio.wait_for(
+                        self._client.get_tools(server_name=name),
+                        timeout=MCPAdapter.SERVER_LOAD_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    print(f"[MCP] WARNING: Server '{name}' timed out ({MCPAdapter.SERVER_LOAD_TIMEOUT}s)")
+                    return []
+                except Exception as e:
+                    # ExceptionGroup 내부의 실제 에러 추출
+                    root = e
+                    if isinstance(e, BaseExceptionGroup):
+                        flat = e.exceptions
+                        if len(flat) == 1:
+                            root = flat[0]
+                            # 중첩 ExceptionGroup 한 단계 더 풀기
+                            if isinstance(root, BaseExceptionGroup) and len(root.exceptions) == 1:
+                                root = root.exceptions[0]
+
+                    if isinstance(root, MCPAdapter._PERMANENT_ERRORS):
+                        err_msg = f"{type(root).__name__}: {root}"
+                        MCPAdapter._blacklisted_servers[name] = err_msg
+                        print(f"[MCP] BLACKLISTED: Server '{name}' — {err_msg} (permanent failure, won't retry)")
+                    else:
+                        print(f"[MCP] WARNING: Server '{name}' failed to load: {type(e).__name__}: {e}")
+                    return []
 
         results = await asyncio.gather(*[_load_server_tools(n) for n in server_names])
 
