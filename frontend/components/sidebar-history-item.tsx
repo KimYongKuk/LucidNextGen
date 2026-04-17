@@ -30,6 +30,7 @@ const PureChatItem = ({
   onTogglePin,
   isPinned,
   setOpenMobile,
+  workspaceId,
 }: {
   chat: Chat;
   isActive: boolean;
@@ -37,11 +38,15 @@ const PureChatItem = ({
   onTogglePin?: (chatId: string) => void;
   isPinned?: boolean;
   setOpenMobile: (open: boolean) => void;
+  workspaceId?: string | null;
 }) => {
+  const href = workspaceId
+    ? `/chat/${chat.id}?workspace_id=${workspaceId}`
+    : `/chat/${chat.id}`;
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={isActive}>
-        <Link href={`/chat/${chat.id}`} onClick={() => setOpenMobile(false)}>
+        <Link href={href} onClick={() => setOpenMobile(false)}>
           <span>{chat.title}</span>
         </Link>
       </SidebarMenuButton>
@@ -85,6 +90,9 @@ export const ChatItem = memo(PureChatItem, (prevProps, nextProps) => {
     return false;
   }
   if (prevProps.isPinned !== nextProps.isPinned) {
+    return false;
+  }
+  if (prevProps.workspaceId !== nextProps.workspaceId) {
     return false;
   }
   return true;

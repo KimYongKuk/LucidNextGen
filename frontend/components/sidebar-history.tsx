@@ -313,6 +313,7 @@ export function SidebarHistory() {
                         onTogglePin={(id) => handleTogglePin(id, true)}
                         isPinned={true}
                         setOpenMobile={setOpenMobile}
+                        workspaceId={workspaceId}
                       />
                     );
                   })}
@@ -338,6 +339,7 @@ export function SidebarHistory() {
                         onTogglePin={(id) => handleTogglePin(id, false)}
                         isPinned={false}
                         setOpenMobile={setOpenMobile}
+                        workspaceId={workspaceId}
                       />
                     );
                   })}
@@ -363,6 +365,7 @@ export function SidebarHistory() {
                         onTogglePin={(id) => handleTogglePin(id, false)}
                         isPinned={false}
                         setOpenMobile={setOpenMobile}
+                        workspaceId={workspaceId}
                       />
                     );
                   })}

@@ -151,14 +151,27 @@ export function Chat({
   useEffect(() => {
     if (query && !hasAppendedQueryRef.current) {
       hasAppendedQueryRef.current = true;
-      window.history.replaceState({}, "", `/chat/${id}`);
+      const path = effectiveWorkspaceId
+        ? `/chat/${id}?workspace_id=${effectiveWorkspaceId}`
+        : `/chat/${id}`;
+      window.history.replaceState({}, "", path);
 
       sendMessage({
         role: "user" as const,
         parts: [{ type: "text", text: query }],
       });
     }
-  }, [query, id]);
+  }, [query, id, effectiveWorkspaceId]);
+
+  // 세션이 속한 워크스페이스를 URL에 반영하여 사이드바 필터링 유지
+  useEffect(() => {
+    if (!effectiveWorkspaceId) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("workspace_id") !== effectiveWorkspaceId) {
+      url.searchParams.set("workspace_id", effectiveWorkspaceId);
+      window.history.replaceState({}, "", url.pathname + url.search);
+    }
+  }, [effectiveWorkspaceId]);
 
   const { data: votes } = useSWR<Vote[]>(
     messages.length >= 2 ? `/api/vote?chatId=${id}` : null,
