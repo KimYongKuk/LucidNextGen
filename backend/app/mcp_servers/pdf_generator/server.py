@@ -68,6 +68,9 @@ class KoreanPDF(FPDF):
                 self.add_font("MalgunGothic", "B", str(malgun_bold))
             else:
                 self.add_font("MalgunGothic", "B", str(malgun_regular))
+            # 맑은 고딕은 italic 전용 ttf가 없으므로 regular/bold로 폴백
+            self.add_font("MalgunGothic", "I", str(malgun_regular))
+            self.add_font("MalgunGothic", "BI", str(malgun_bold if malgun_bold.exists() else malgun_regular))
             self.default_font = "MalgunGothic"
         else:
             # 폴백: 나눔고딕 또는 기본 폰트
