@@ -40,14 +40,23 @@ SYSTEM_NAME_TO_CODE = {
     "MDM": "15", "AD": "17", "MES": "18", "VPN": "19",
 }
 
-# 시스템 코드 → 담당 부서명 매핑
-SYSTEM_CODE_TO_DEPT = {
-    "0": "ERP파트",       "1": "DA파트",        "2": "보안기술팀",
-    "3": "보안기술팀",    "4": "IT인프라팀",    "5": "IT인프라팀",
-    "6": "IT인프라팀",    "8": "ERP파트",       "9": "DA파트",
-    "13": "IT인프라팀",   "14": "보안기술팀",   "15": "보안기술팀",
-    "17": "IT인프라팀",   "18": "DX파트",       "19": "보안기술팀",
+# 시스템 코드 → 담당 부서명(들) 매핑 (1 시스템 → N 부서 허용)
+# 튜플 값이어야 함 (_get_dept_members 가 리스트/튜플 받음)
+SYSTEM_CODE_TO_DEPTS = {
+    "0":  ("ERP파트",),           "1":  ("DA파트",),
+    "2":  ("보안기술팀",),        "3":  ("보안기술팀",),
+    "4":  ("IT인프라팀",),        "5":  ("IT인프라팀",),
+    "6":  ("IT인프라팀",),        "8":  ("ERP파트",),
+    "9":  ("DA파트",),            "13": ("IT인프라팀",),
+    "14": ("보안기술팀", "보안관리파트"),  # 보안성 검토: 기술+관리 공동
+    "15": ("보안기술팀",),        "17": ("IT인프라팀",),
+    "18": ("DX파트",),            "19": ("보안기술팀",),
 }
+
+# 담당자로 지정할 직위 (v_org_chart."직위")
+# 팀원/NULL은 제외하고 파트장/책임 직위만 배정 대상
+# 주의: "직책"(duty, 파트장/팀원)과 "직위"(position, 책임/선임)는 별개 필드
+ASSIGNEE_ALLOWED_POSITIONS = ("파트장", "책임")
 
 # 전역 연결 풀
 _db_pool: Optional[asyncpg.Pool] = None
@@ -110,21 +119,30 @@ async def _get_user_full_info(employee_number: str) -> Optional[dict]:
         return None
 
 
-async def _get_dept_members(dept_name: str) -> list[dict]:
-    """부서명으로 해당 부서의 모든 멤버 LFON 정보 조회"""
+async def _get_dept_members(dept_names: tuple[str, ...] | list[str]) -> list[dict]:
+    """부서명(들)로 해당 부서의 멤버 중 ASSIGNEE_ALLOWED_POSITIONS 직위만 조회
+
+    dept_names 에 여러 부서명을 넣으면 합쳐서 조회 (보안성 검토처럼 공동 담당 케이스).
+    """
+    dept_list = list(dept_names)
     try:
         pool = await get_db_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT user_id, login_id, name, dept_id, dept_name, employee_number
-                FROM v_user_info_mapping
-                WHERE dept_name = $1
+                SELECT m.user_id, m.login_id, m.name, m.dept_id, m.dept_name, m.employee_number
+                FROM v_user_info_mapping m
+                JOIN v_org_chart o ON m.user_id = o.user_id
+                WHERE m.dept_name = ANY($1::text[])
+                  AND o."직위" = ANY($2::text[])
                 """,
-                dept_name,
+                dept_list,
+                list(ASSIGNEE_ALLOWED_POSITIONS),
             )
         members = [dict(r) for r in rows]
-        print(f"[IT VOC MCP] 부서 멤버 조회: {dept_name} → {len(members)}명", file=sys.stderr)
+        positions = "/".join(ASSIGNEE_ALLOWED_POSITIONS)
+        depts_label = "/".join(dept_list)
+        print(f"[IT VOC MCP] 부서 멤버 조회: {depts_label} ({positions}) → {len(members)}명", file=sys.stderr)
         return members
     except Exception as e:
         print(f"[IT VOC MCP] 부서 멤버 조회 실패: {e}", file=sys.stderr)
@@ -248,13 +266,20 @@ async def _resolve_employee_number(identifier: str) -> Optional[str]:
 
 
 @mcp.tool()
-async def reset_sap_password(employee_number: str) -> str:
+async def reset_sap_password(employee_number: str, system: str = "prd") -> str:
     """SAP 비밀번호를 초기화합니다. 초기화 비밀번호는 Pass1234567890! 입니다.
     사용자가 "SAP 비밀번호 초기화", "SAP 패스워드 리셋" 등을 요청할 때 호출하세요.
 
     employee_number: 시스템이 자동 주입합니다. 호출 시 아무 값이나 넣으세요.
+    system: 대상 SAP 시스템. "prd"(운영, 기본값) 또는 "dev"(개발).
+        사용자가 "개발 SAP", "DEV", "개발 서버" 등을 언급하면 "dev"로 호출.
+        일반적인 경우는 "prd"(운영)로 호출.
     """
-    print(f"\n[IT VOC MCP] SAP 패스워드 초기화 요청: {employee_number}", file=sys.stderr)
+    system_norm = (system or "prd").lower()
+    if system_norm not in ("dev", "prd"):
+        return f"오류: 지원하지 않는 system 값입니다 ('{system}'). 'dev' 또는 'prd'만 가능합니다."
+
+    print(f"\n[IT VOC MCP] SAP 패스워드 초기화 요청: emp={employee_number}, system={system_norm}", file=sys.stderr)
 
     # login_id 또는 employee_number → 사번으로 해석
     emp_no = await _resolve_employee_number(employee_number)
@@ -268,23 +293,29 @@ async def reset_sap_password(employee_number: str) -> str:
                 json={
                     "function_name": "Z02CMF_PASSWORD_INIT",
                     "params": {"I_EMP_NO": emp_no},
+                    "system": system_norm,
                 },
             )
             data = resp.json()
+            sys_label = "운영(PRD)" if system_norm == "prd" else "개발(DEV)"
             if data.get("success") and data.get("data"):
                 es_return = data["data"].get("ES_RETURN", data["data"].get("ES_RESULT", {}))
                 retcd = es_return.get("RETCD", "")
                 retmg = es_return.get("RETMG", "")
                 if retcd == "S":
-                    print(f"[IT VOC MCP] SAP 패스워드 초기화 성공: {emp_no}", file=sys.stderr)
-                    return f"성공: {retmg}\n초기화 비밀번호: Pass1234567890!\n(첫 로그인 시 반드시 변경하세요)"
+                    print(f"[IT VOC MCP] SAP 패스워드 초기화 성공: {emp_no} ({system_norm})", file=sys.stderr)
+                    return (
+                        f"성공 [{sys_label}]: {retmg}\n"
+                        f"초기화 비밀번호: Pass1234567890!\n"
+                        f"(첫 로그인 시 반드시 변경하세요)"
+                    )
                 else:
-                    print(f"[IT VOC MCP] SAP 패스워드 초기화 실패: {retmg}", file=sys.stderr)
-                    return f"실패 (RETCD={retcd}): {retmg}"
+                    print(f"[IT VOC MCP] SAP 패스워드 초기화 실패: {retmg} ({system_norm})", file=sys.stderr)
+                    return f"실패 [{sys_label}] (RETCD={retcd}): {retmg}"
             else:
                 error = data.get("error", "알 수 없는 오류")
-                print(f"[IT VOC MCP] SAP RFC 호출 오류: {error}", file=sys.stderr)
-                return f"RFC 호출 오류: {error}"
+                print(f"[IT VOC MCP] SAP RFC 호출 오류: {error} ({system_norm})", file=sys.stderr)
+                return f"RFC 호출 오류 [{sys_label}]: {error}"
     except Exception as e:
         print(f"[IT VOC MCP] SAP RFC Bridge 연결 오류: {e}", file=sys.stderr)
         return f"SAP RFC Bridge 연결 실패: {e}\nBridge 서비스(192.168.100.72:8001) 상태를 확인하세요."
@@ -482,11 +513,11 @@ async def register_works_voc(
 
     # 2. 시스템 코드 및 담당 부서 결정
     system_code = SYSTEM_NAME_TO_CODE.get(system_name, "7")  # 기본: 기타
-    dept_name_for_assign = SYSTEM_CODE_TO_DEPT.get(system_code, "IT운영팀")
-    print(f"[IT VOC MCP] 시스템: {system_name} → 코드={system_code}, 담당부서={dept_name_for_assign}", file=sys.stderr)
+    dept_names_for_assign = SYSTEM_CODE_TO_DEPTS.get(system_code, ("IT운영팀",))
+    print(f"[IT VOC MCP] 시스템: {system_name} → 코드={system_code}, 담당부서={'/'.join(dept_names_for_assign)}", file=sys.stderr)
 
     # 3. 담당 부서원 조회
-    assignee_members = await _get_dept_members(dept_name_for_assign)
+    assignee_members = await _get_dept_members(dept_names_for_assign)
     assignee_objs = [_build_assignee_obj(m) for m in assignee_members]
     print(f"[IT VOC MCP] 담당자 {len(assignee_objs)}명: {[a['name'] for a in assignee_objs]}", file=sys.stderr)
 
@@ -626,7 +657,7 @@ async def register_works_voc(
                     f"- 요청자: {requester['name']} ({requester['dept_name']})\n"
                     f"- 제목: {title}\n"
                     f"- 시스템: {system_name or '기타'}\n"
-                    f"- 담당부서: {dept_name_for_assign} ({len(assignee_objs)}명 배정)\n"
+                    f"- 담당부서: {'/'.join(dept_names_for_assign)} ({len(assignee_objs)}명 배정)\n"
                     f"LFON WORKS에서 진행 상황을 확인하실 수 있습니다.\n"
                     f"\n{debug_keys}"
                 )
@@ -666,14 +697,14 @@ async def _register_via_openapi(
         if resp.status_code == 200:
             data = resp.json()
             if data.get("resultCode") == 0 or not data.get("resultCode"):
-                dept_name_for_assign = SYSTEM_CODE_TO_DEPT.get(system_code, "IT운영팀")
+                dept_names_for_assign = SYSTEM_CODE_TO_DEPTS.get(system_code, ("IT운영팀",))
                 print(f"[IT VOC MCP] VOC 등록 성공 (OpenAPI 폴백)", file=sys.stderr)
                 return (
                     f"WORKS 서비스데스크에 등록이 완료되었습니다.\n"
                     f"- 요청자: {requester['name']} ({requester['dept_name']})\n"
                     f"- 제목: {title}\n"
                     f"- 시스템: {system_name or '기타'}\n"
-                    f"- 담당부서: {dept_name_for_assign} (자동 배정은 실패하여 수동 배정이 필요합니다)\n"
+                    f"- 담당부서: {'/'.join(dept_names_for_assign)} (자동 배정은 실패하여 수동 배정이 필요합니다)\n"
                     f"LFON WORKS에서 진행 상황을 확인하실 수 있습니다."
                 )
             else:

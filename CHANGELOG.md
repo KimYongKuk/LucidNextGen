@@ -6,8 +6,9 @@
 ---
 
 ## [2026-04-17]
+- **수정** [SAP RFC Bridge] 다중 시스템 지원 (DEV+PRD) — `SAPConnectionPool`을 시스템별 dict 구조로 전환, `.env`를 `SAP_DEV_*`/`SAP_PRD_*` 접두사 분리, `/rfc/call`·`/rfc/ping`·`/rfc/password-init`에 `system` 필드 추가, `reset_sap_password` MCP 도구와 ITSupportWorker 시스템 프롬프트에 dev/prd 선택 로직 반영, PRD IP 172.16.3.147로 보정 → [상세](docs/history/2026-04-17_SAP-RFC-Bridge-다중시스템.md)
 - **수정** [PDF] `create_document_pdf` italic 폰트 미등록 버그 — `Undefined font: malgungothicI` 오류로 subtitle 포함 PDF 생성 실패 → MalgunGothic에 `I`/`BI` 스타일을 regular/bold로 폴백 등록, 2차 증상(LLM이 docx 성공에도 "전체 도구 오류" 오응답)도 함께 해소 → [상세](docs/history/2026-04-17_PDF-italic-font-fix.md)
-- **수정** [IT VOC] 담당자 자동지정 직책 필터링 — `_get_dept_members()`에 `v_org_chart` JOIN 추가, 파트장/책임 직책만 배정 대상으로 한정 (팀장/임원 제외), `ASSIGNEE_ALLOWED_DUTIES` 상수로 관리 → [상세](docs/history/2026-04-17_VOC-담당자-직책-필터링.md)
+- **수정** [IT VOC] 담당자 자동지정 직위 필터링 + 다중 부서 매핑 — `_get_dept_members()`에 `v_org_chart` JOIN, 직위 "파트장/책임"만 배정 (팀원/NULL 제외), `SYSTEM_CODE_TO_DEPT`(str) → `SYSTEM_CODE_TO_DEPTS`(tuple) 로 다중 부서 공동 담당 허용(예: 보안성 검토=보안기술팀+보안관리파트), `v_org_chart."직위"` 컬럼 추가(DBA) → [상세](docs/history/2026-04-17_VOC-담당자-직책-필터링.md)
 - **추가** [Ops] NSSM 로그 수동 초기화 배치 — `C:\Services\logs\clear-logs.bat`, `Clear-Content` in-place truncate로 서비스 재시작 없이 `backend-blue/green.log` 및 error 로그 비움 (NSSM 로테이션 미설정 상태에서의 수동 운영 수단, `deploy.log` 제외)
 - **수정** [Bedrock] 폴백 상태 영속화 — `_using_fallback`/`_restore_at`을 JSON 파일에 저장, 재시작(배포 포함) 후에도 KST 09:00 복구 예약 유지, Blue/Green 공용 경로 `C:/Services/LFChatbot_prod/shared/` 도입 → [상세](docs/history/2026-04-17_폴백-상태-영속화.md)
 - **수정** [MCP] 동시 스폰 수 4개로 제한 — Windows 18개 서브프로세스 일괄 스폰 시 `ExceptionGroup` 경쟁 실패 방지, 세마포어 도입, MailWorker 등 메일 도구 누락 재발 방지 → [상세](docs/history/2026-04-17_MCP_concurrent_spawn_limit.md)
