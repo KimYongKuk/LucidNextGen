@@ -198,7 +198,10 @@ export function WorkspaceSettingsModal({
                 }
             }
             if (diskOnlyFiles.length > 0) {
-                toast.info(`업로드 완료. 다음 파일은 검색 인덱싱이 건너뛰어졌습니다 (첨부·다운로드는 가능):\n${diskOnlyFiles.join("\n")}`);
+                toast.info("업로드 완료", {
+                    description: `※주의:\n암호화된 파일은 IT VOC 등록을 위한 파일 업로드만 가능합니다.\n암호화된 파일은 분석/요약이 불가하므로, 복호화 후 재업로드 하세요.\n\n해당 파일:\n${diskOnlyFiles.map(f => f.split(" (")[0]).join(", ")}`,
+                    duration: 10000,
+                });
             } else {
                 toast.success("Files uploaded successfully");
             }

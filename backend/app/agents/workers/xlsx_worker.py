@@ -170,45 +170,16 @@ class XlsxWorker(BaseWorker):
 
     @property
     def tool_names(self) -> List[str]:
+        # 핵심 원칙: Sonnet이 선택할 수 있는 xlsx 쓰기 도구는 `create_xlsx` 하나뿐.
+        # create_workbook, write_data_to_excel 등 2-step 도구를 제거하면 Sonnet이
+        # 중복 호출/우회 시도할 여지 자체가 사라져 multi-call 불안정성이 원천 차단된다.
         return [
-            # 합성 도구 — 신규 엑셀 파일 생성은 이 하나만 사용 (단일 호출 완결)
+            # 신규 엑셀 생성 — 단일 호출 완결 (create + write + save 일괄)
             "create_xlsx",
-            # Workbook management (기존 파일 수정·편집용)
-            "create_workbook",
-            "create_worksheet",
+            # 기존 파일 조회 (읽기 전용)
             "get_workbook_metadata",
-            # Data
             "read_data_from_excel",
-            "write_data_to_excel",
-            # Formula
-            "apply_formula",
-            "validate_formula_syntax",
-            # Format
-            "format_range",
-            "merge_cells",
-            "unmerge_cells",
-            "get_merged_cells",
-            # Chart
-            "create_chart",
-            # Pivot
-            "create_pivot_table",
-            # Table
-            "create_table",
-            # Sheet management
-            "copy_worksheet",
-            "delete_worksheet",
-            "rename_worksheet",
-            # Row/Col
-            "insert_rows",
-            "insert_columns",
-            "delete_sheet_rows",
-            "delete_sheet_columns",
-            # Range
-            "copy_range",
-            "delete_range",
-            "validate_excel_range",
-            "get_data_validation_info",
-            # 웹 검색 도구 (시장 데이터, 통계 등 최신 정보 필요 시)
+            # 웹 검색 (시장 데이터·통계 등 최신 정보 필요 시)
             "tavily_search",
         ]
 
@@ -278,30 +249,18 @@ create_xlsx(filepath="파일명.xlsx", headers=["A","B","C","D"], rows=[[1,2,3,4
 - 검색 결과의 구체적 수치/통계를 엑셀 데이터에 반영
 - 사용자가 직접 데이터를 제공했거나, 기존 파일 수정인 경우에는 검색 불필요
 
-## 기존 파일 수정 워크플로우 (신규 생성이 아닌 경우만)
-- **수정 요청**("수정해줘", "바꿔줘", "다시 해줘"): 대화에 이전 파일 내용이 있어도 과거 기록일 뿐. 지금 도구를 호출해야 함.
-- 1. get_workbook_metadata → 시트명 확인 (추측 금지)
-- 2. read_data_from_excel(sheet_name=확인된 시트명) → 필요 시 현재 데이터 읽기
-- 3. write_data_to_excel / apply_formula / format_range 등으로 수정
+## 기존 파일 읽기
+- `get_workbook_metadata` → 시트명 확인 → `read_data_from_excel(sheet_name=확인된 시트명)`
 
 ## 규칙
-1. **경로**: 새 파일은 `{output_dir}/파일명.xlsx`, 기존 파일은 AVAILABLE FILES의 경로 사용
-2. **data 형식**: `List[List]` — 첫 행=헤더, 숫자는 따옴표 없이. Dict 형식 금지!
-3. **순차 호출**: 한 번에 하나의 도구만 호출 (동시 호출 시 파일 손상)
-4. **기본 시트**: create_workbook은 "Sheet" 시트를 자동 생성함. 새 시트 만들지 말고 반드시 이 기본 시트에 먼저 작업! 이름 변경은 rename_worksheet 사용
-5. **파일명 안내**: 파일 생성/수정 후 반드시 "**파일명:** xxx.xlsx" 출력 (읽기/분석만 한 경우 출력 금지)
-6. **서식**: 사용자가 명시적으로 요청한 경우에만 format_range 사용
-7. **성공/에러 판정 (⚠️ 엄수)**:
-   - 도구 응답이 **`✅ SUCCESS:`** 로 시작하면 → **절대적 성공**. 재시도/재호출 금지. 사용자에게 파일명 안내하고 종료.
-   - 도구 응답이 **`Error:`** / `❌` / `Failed:` / `ValidationError` / `WorkbookError` 로 시작하면 → 에러. 2회 반복 시 사용자에게 안내.
-   - 그 외 응답(`Data written to ...`, `Created workbook at ...` 등)도 에러 접두사가 없으면 **성공**.
-   - 🚫 **절대 금지**: 도구가 성공 응답을 반환했는데 "서버 오류", "AttributeError", "내부 오류"라고 추측하여 응답하지 말 것. 응답이 짧더라도 에러 접두사가 없으면 성공이다.
-8. **생성 완료 후 행동**: `✅ SUCCESS:` 응답을 받으면 즉시 사용자에게 파일명을 안내하고 종료. 같은 도구를 재호출하지 말 것.
-9. **검증 과다 금지**: `create_workbook` + `write_data_to_excel` 이 모두 `✅ SUCCESS:`로 끝나면, 작업은 완료된 것입니다. `get_workbook_metadata`, `read_data_from_excel` 등으로 **재확인하지 마세요**. 이런 검증 호출은 사용자가 명시적으로 "확인해줘"라고 요청한 경우에만 수행합니다. 불필요한 검증은 LLM 자신을 혼란시키고 응답 지연만 늘립니다.
+1. **경로**: 새 파일은 `{output_dir}/파일명.xlsx`
+2. **create_xlsx 호출은 딱 1번만**. 응답이 `✅ SUCCESS:`로 오면 즉시 사용자에게 파일명 안내하고 종료.
+3. **data 형식**: rows는 `List[List]` 형태. 예: `[[1,2,3,4], [5,6,7,8]]`
 
 ## 응답 형식
 - 한국어 응답, JSON/data 배열 노출 금지
-- 작업 내용 간략 설명 후 "**파일명:** xxx.xlsx"
+- `✅ SUCCESS:` 수신 시: 간략 설명 + "**파일명:** xxx.xlsx" 로 종료
+- 에러 접두사(`Error:`, `❌`)가 없으면 성공. "서버 오류" 같은 추측 응답 금지.
 
 Answer in Korean unless asked otherwise."""
 

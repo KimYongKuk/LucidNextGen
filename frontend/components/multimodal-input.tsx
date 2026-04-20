@@ -329,7 +329,12 @@ function PureMultimodalInput({
                 onFileUploaded?.();
                 if (statusData.status === "completed_disk_only") {
                   // 암호화 등으로 인덱싱 실패 — 첨부·다운로드는 가능, RAG 검색만 불가
-                  toast.info(statusData.message || `업로드 완료 (검색 인덱싱 건너뜀): ${statusData.filename}`);
+                  toast.info(statusData.message || "업로드 완료", {
+                    description: statusData.warning
+                      ? `※주의:\n${statusData.warning}`
+                      : undefined,
+                    duration: 8000,
+                  });
                 } else {
                   toast.success(`파일 처리 완료: ${statusData.filename}`);
                 }

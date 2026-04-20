@@ -191,6 +191,16 @@ async def _process_workspace_upload_background(
     }
     logger.info(f"Starting background upload for {filename} (ID: {file_id}) to workspace {workspace_id}")
 
+    # 표준 경고 문구 (사용자 노출용 — 내부 경로/에러 상세는 포함하지 않음)
+    ENCRYPTED_WARNING = (
+        "암호화된 파일은 IT VOC 등록을 위한 파일 업로드만 가능합니다.\n"
+        "암호화된 파일은 분석/요약이 불가하므로, 복호화 후 재업로드 하세요."
+    )
+    INDEXING_FAILED_WARNING = (
+        "이 파일은 분석/요약용 인덱싱에 실패했습니다.\n"
+        "IT VOC 등록을 위한 첨부는 가능하며, 분석/요약이 필요하시면 다른 포맷으로 재업로드 해보세요."
+    )
+
     # 1) 사전 암호화 감지
     is_encrypted, enc_reason = _detect_file_encryption(file_content, filename)
     if is_encrypted:
@@ -199,8 +209,8 @@ async def _process_workspace_upload_background(
             "status": "completed_disk_only",
             "filename": filename,
             "workspace_id": workspace_id,
-            "message": f"업로드 완료 (검색 인덱싱 건너뜀: {enc_reason})",
-            "warning": enc_reason,
+            "message": "업로드 완료",
+            "warning": ENCRYPTED_WARNING,
             "progress": 100,
         }
         await asyncio.sleep(600)
@@ -226,16 +236,16 @@ async def _process_workspace_upload_background(
         }
         logger.info(f"Background upload complete for {filename} (ID: {file_id})")
     except Exception as e:
-        err_msg = str(e)
-        logger.warning(f"Embedding failed (disk-only success) for {filename} (ID: {file_id}): {err_msg}")
+        # 내부 에러 상세는 로그에만 남기고 사용자에게는 표준 안내만
+        logger.warning(f"Embedding failed (disk-only success) for {filename} (ID: {file_id}): {e}")
         import traceback
         traceback.print_exc()
         WORKSPACE_UPLOAD_STATUS[file_id] = {
             "status": "completed_disk_only",
             "filename": filename,
             "workspace_id": workspace_id,
-            "message": f"업로드 완료 (검색 인덱싱 실패: {err_msg[:120]})",
-            "warning": err_msg[:200],
+            "message": "업로드 완료",
+            "warning": INDEXING_FAILED_WARNING,
             "progress": 100,
         }
 
