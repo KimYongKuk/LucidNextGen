@@ -118,6 +118,17 @@
     return config.userId;
   }
 
+  function getGossoCookie() {
+    // 그룹웨어 페이지의 GOSSOcookie 추출 (HttpOnly 아니면 접근 가능)
+    // iframe에 전달하여 캘린더/일정 쓰기 작업 인증에 사용.
+    try {
+      var m = document.cookie.match(/(?:^|;\s*)GOSSOcookie=([^;]+)/);
+      return m ? decodeURIComponent(m[1]) : '';
+    } catch (e) {
+      return '';
+    }
+  }
+
   function getSessionId() {
     // sessionStorage에서 기존 세션 복원, 없으면 새로 생성
     try {
@@ -145,6 +156,7 @@
     // 플로팅 버튼
     button = document.createElement('button');
     button.id = 'lucid-gw-button';
+    button.title = 'Lucid AI';
     button.innerHTML = '<span class="lucid-gw-icon-chat">' + ICONS.chat + '</span><span class="lucid-gw-icon-close" style="display:none">' + ICONS.close + '</span>';
     button.addEventListener('click', toggleWidget);
 
@@ -166,7 +178,9 @@
         if (isOpen) {
           var empno = getEmpno();
           var sid = getSessionId();
+          var gosso = getGossoCookie();
           var iframeSrc = config.apiUrl + config.embedPath + '?empno=' + encodeURIComponent(empno) + '&sid=' + encodeURIComponent(sid);
+          if (gosso) iframeSrc += '&gosso=' + encodeURIComponent(gosso);
           widgetFrame = document.createElement('iframe');
           widgetFrame.id = 'lucid-gw-frame';
           widgetFrame.src = iframeSrc;
@@ -194,6 +208,10 @@
     var closeIcon = button.querySelector('.lucid-gw-icon-close');
 
     if (isOpen) {
+      // 서비스 메뉴가 열려있으면 닫기
+      if (global.LucidServiceMenu && typeof global.LucidServiceMenu.close === 'function') {
+        global.LucidServiceMenu.close();
+      }
       // 첫 열기 시 iframe 생성 (이 시점에 GO.session() 확실히 준비됨)
       if (!widgetFrame) {
         var empno = getEmpno();
