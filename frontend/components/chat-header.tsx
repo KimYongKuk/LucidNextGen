@@ -10,7 +10,7 @@ import { PlusIcon } from "./icons";
 import { useSidebar } from "./ui/sidebar";
 import { Bell, BookOpen, Folder, HelpCircle, Moon, Newspaper, Store, Sun, Shield, X } from "lucide-react";
 import Link from "next/link";
-import { getUserId, isAdminUser } from "@/lib/utils";
+import { getUserId, isAdminUser, isOperatorUser } from "@/lib/utils";
 import { useOnboarding } from "@/components/onboarding/onboarding-provider";
 import { useWhatsNew } from "@/components/whats-new/whats-new-provider";
 import { useNotifications } from "@/components/notice-toast/notice-toast-provider";
@@ -36,8 +36,11 @@ function PureChatHeader({
   const { openInbox, unreadTotal } = useInbox();
   const wikiUrl = process.env.NEXT_PUBLIC_WIKI_URL || "https://wiki.lnf.co.kr";
   const [isAdmin, setIsAdmin] = useState(false);
+  const [isOperator, setIsOperator] = useState(false);
   useEffect(() => {
-    setIsAdmin(isAdminUser(getUserId()));
+    const uid = getUserId();
+    setIsAdmin(isAdminUser(uid));
+    setIsOperator(isOperatorUser(uid));
   }, []);
 
   const { width: windowWidth } = useWindowSize();
@@ -128,57 +131,61 @@ function PureChatHeader({
         </Tooltip>
       )}
 
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            className="relative order-5 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
-            onClick={openInbox}
-            variant="ghost"
-            size="icon"
-          >
-            <Bell className="h-4 w-4" />
-            {(unreadTotal > 0 || hasUnseenAnnouncements) && (
-              <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-blue-500" />
-            )}
-            <span className="sr-only">알림함</span>
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>알림함</TooltipContent>
-      </Tooltip>
+      {isOperator && (
+        <>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                className="relative order-5 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
+                onClick={openInbox}
+                variant="ghost"
+                size="icon"
+              >
+                <Bell className="h-4 w-4" />
+                {(unreadTotal > 0 || hasUnseenAnnouncements) && (
+                  <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-blue-500" />
+                )}
+                <span className="sr-only">알림함</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>알림함</TooltipContent>
+          </Tooltip>
 
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            asChild
-            className="order-6 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
-            variant="ghost"
-            size="icon"
-          >
-            <Link href="/agent-store">
-              <Store className="h-4 w-4" />
-              <span className="sr-only">Agent Store</span>
-            </Link>
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>Agent Store</TooltipContent>
-      </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                asChild
+                className="order-6 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
+                variant="ghost"
+                size="icon"
+              >
+                <Link href="/agent-store">
+                  <Store className="h-4 w-4" />
+                  <span className="sr-only">Agent Store</span>
+                </Link>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Agent Store</TooltipContent>
+          </Tooltip>
 
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            asChild
-            className="order-6 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
-            variant="ghost"
-            size="icon"
-          >
-            <a href={wikiUrl} target="_blank" rel="noopener noreferrer">
-              <BookOpen className="h-4 w-4" />
-              <span className="sr-only">L&F WIKI</span>
-            </a>
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>L&F WIKI</TooltipContent>
-      </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                asChild
+                className="order-6 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
+                variant="ghost"
+                size="icon"
+              >
+                <a href={wikiUrl} target="_blank" rel="noopener noreferrer">
+                  <BookOpen className="h-4 w-4" />
+                  <span className="sr-only">L&F WIKI</span>
+                </a>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>L&F WIKI</TooltipContent>
+          </Tooltip>
+        </>
+      )}
 
       <Tooltip>
         <TooltipTrigger asChild>

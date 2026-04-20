@@ -103,6 +103,15 @@ export function isAdminUser(userId: string | null): boolean {
   return adminUsers.includes(userId);
 }
 
+export function isOperatorUser(userId: string | null): boolean {
+  if (!userId) return false;
+  const operatorUsers = (process.env.NEXT_PUBLIC_OPERATOR_USERS || 'A2304013')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+  return operatorUsers.includes(userId);
+}
+
 type ResponseMessageWithoutId = CoreToolMessage | CoreAssistantMessage;
 type ResponseMessage = ResponseMessageWithoutId & { id: string };
 

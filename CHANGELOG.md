@@ -5,6 +5,11 @@
 
 ---
 
+## [2026-04-21]
+- **수정** [Frontend/ChatHeader] 알림함·Agent Store·L&F WIKI 아이콘 운영자 전용으로 제한 — 개발 중이던 3개 기능이 운영 서버에 그대로 노출된 핫픽스. `isOperatorUser(userId)` 유틸 신규 추가(기본값 `A2304013`, `NEXT_PUBLIC_OPERATOR_USERS` 환경변수로 확장 가능), `chat-header.tsx`에서 해당 3개 Tooltip/Button 블록을 `{isOperator && (...)}`로 감쌈. 관리자(Shield)·데일리 브리핑(Newspaper)·테마 토글은 기존 로직 그대로 유지.
+
+---
+
 ## [2026-04-20]
 - **추가** [ITSupportWorker/WORKS VOC] VOC 자동 등록 시 파일 첨부 지원 — 내부 API 리버스 엔지니어링으로 `/api/file` 업로드 + VOC body의 `_14v07o8vj` 필드에 메타 embed하는 2단계 플로우 구현. LLM은 파일명만 넘기고 MCP가 `user_uploads/{date}/{employee_number}/` 하위에서 안전하게 resolve. 프롬프트에 업로드 파일 목록 자동 주입으로 대화 중간 업로드도 다음 턴부터 인식. 업로드 사이즈 상한 10MB→50MB 동반 상향(nginx는 이미 50MB). **후속 수정**: 1차 테스트에서 paste/drag 이미지가 `/api/upload/image`(ChromaDB 미저장, 디스크만)로 올라와 `has_session_files()`가 False 반환 → Planner가 clarify로 오라우팅 → DirectResponseWorker가 "이미지 첨부 미지원" 환각 응답하던 이슈 수정. `has_session_files(session_id, user_id)` 시그니처 확장해 ChromaDB + 디스크 둘 다 체크, 프롬프트에 업로드 경과 시간 + 🆕 마커(최근 10분 이내) 추가, UUID 파일명이어도 🆕이면 현재 대화 관련성 인정하라는 규칙 강화 → [상세](docs/history/2026-04-20_WORKS-VOC-첨부파일.md)
 - **추가** [SecurityGuard] 보안관 에이전트 추가 — 악의적 입력(프롬프트 인젝션/jailbreak/데이터 탈취/권한 탈취) 탐지·차단 시스템. 3-Layer(Rule 정규식 27개 + in-memory Rate Limit + Haiku LLM 재판정, rule 의심 30+ 시만 호출 + 일일 1000회 한도) → 5-Tier 대응(PASS/WARN/BLOCK_REQUEST/TEMP_24h/PERM) → 누적 승격(WARN 5→TEMP, TEMP 3→PERM). Orchestrator Phase -1 + chat.py/chat_a2a.py 조기 게이트. 관리자 API 7개 + `/admin/report` 내 보안 탭(KPI/추이/분포/Top 위반자/차단 해제/Dry-Run 테스트/이벤트 상세 모달). TEMP/PERM 차단 시 기존 `email_service.py`로 관리자 메일 발송. 차단 사용자에게 위협 타입 + 해제 시각 공개. 신규 테이블 3개(events/blocks/llm_daily_usage, DBA 마이그레이션 필요) → [상세](docs/history/2026-04-20_Security_Guard_Agent.md)
