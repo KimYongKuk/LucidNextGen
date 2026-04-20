@@ -171,9 +171,15 @@ export function useSimpleChat({
           images: imageFiles.length > 0 ? imageFiles : null,
           message_history: messageHistory.length > 0 ? messageHistory : null,
           workspace_id: workspaceId,
-          ...(typeof document !== 'undefined' && document.cookie.match(/gosso=([^;]+)/) && {
-            gosso_cookie: document.cookie.match(/gosso=([^;]+)/)![1]
-          }),
+          // gosso_cookie 추출 — GOSSOcookie(LFON 원본) 우선, 없으면 gosso(middleware 세팅) 폴백
+          // LFON이 GOSSOcookie를 `.landf.co.kr` 도메인으로 세팅하면 iframe에서도 직접 읽힘 →
+          // SSO URL param 경로 안 거쳐도 그룹웨어 로그인 상태만으로 쓰기 작업 가능
+          ...(typeof document !== 'undefined' && (() => {
+            const m1 = document.cookie.match(/(?:^|;\s*)GOSSOcookie=([^;]+)/);
+            const m2 = document.cookie.match(/(?:^|;\s*)gosso=([^;]+)/);
+            const val = m1?.[1] || m2?.[1];
+            return val ? { gosso_cookie: val } : {};
+          })()),
         }),
         signal: abortControllerRef.current.signal,
       });
