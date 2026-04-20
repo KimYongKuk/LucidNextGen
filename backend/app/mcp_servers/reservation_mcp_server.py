@@ -11,7 +11,7 @@ import os
 import asyncpg
 import httpx
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Dict, List
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
