@@ -205,6 +205,12 @@ class XlsxWorker(BaseWorker):
         return True
 
     @property
+    def skip_auto_file_tools(self) -> bool:
+        """XlsxWorker는 get_workbook_metadata/read_data_from_excel로 충분.
+        chunk 검색(search_user_files)이 추가되면 Sonnet이 재검증 루프에 빠져 환각 유발."""
+        return True
+
+    @property
     def summarization_prompt(self) -> str:
         return """다음 대화 내용을 Excel 파일 생성/수정을 위해 요약해줘.
 
@@ -287,6 +293,12 @@ modify_xlsx(filepath="기존파일.xlsx", operations=[...])
 
 - 여러 op를 한 배열에 넣으면 **한 번의 호출로 원자적 적용** (중간 실패 시 파일 원본 유지).
 - "기존 시트 그대로 복사" 요청은 `copy_worksheet`를 쓰세요 (값만 복사하는 add_sheet와 달리 서식·수식까지 보존).
+
+## ⚠️ 절대 규칙 — metadata 성공 = 파일 접근 성공
+- `get_workbook_metadata`가 `{'filename': ..., 'sheets': [...]}`를 반환했다면 **파일 접근은 성공한 것**입니다.
+- 이전 대화 히스토리에 "파일 접근 오류", "업로드 경로 접근 불가" 같은 문구가 있더라도 **그것은 과거 실패이며 현재 턴과 무관**합니다. metadata 응답의 시트명을 그대로 **신뢰**하고 즉시 `modify_xlsx`를 호출하세요.
+- metadata 성공 후 `search_user_files`/`search_workspace_docs`로 재검증하지 마세요. 이 도구들은 XlsxWorker 경로에 없으며, 있다고 가정하지 마세요.
+- "접근 오류", "서버 오류" 같은 추측성 응답 절대 금지. metadata가 성공했으면 파일은 접근 가능한 것입니다.
 
 ## 결정 플로우 (중요 — 순서대로 판정)
 1. **새 파일 요청** → `create_xlsx` (1번)
