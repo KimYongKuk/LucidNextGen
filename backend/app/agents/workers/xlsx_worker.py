@@ -108,6 +108,11 @@ def _enrich_tool_result(tool_name: str, target_args: dict, result):
     if tool_name in READ_ONLY_TOOLS:
         return result
 
+    # 합성 도구(xlsx_simple/server.py)는 이미 완전한 ✅ SUCCESS 포맷으로 반환하므로
+    # 추가 enrich 불필요. 그대로 통과시켜 중복 SUCCESS 접두사 방지.
+    if tool_name in ("create_xlsx", "modify_xlsx"):
+        return result
+
     filepath = target_args.get("filepath", "") or ""
     filename = Path(filepath).name if filepath else "(파일명 미확인)"
     sheet_name = target_args.get("sheet_name", "") or ""
@@ -170,12 +175,14 @@ class XlsxWorker(BaseWorker):
 
     @property
     def tool_names(self) -> List[str]:
-        # 핵심 원칙: Sonnet이 선택할 수 있는 xlsx 쓰기 도구는 `create_xlsx` 하나뿐.
-        # create_workbook, write_data_to_excel 등 2-step 도구를 제거하면 Sonnet이
-        # 중복 호출/우회 시도할 여지 자체가 사라져 multi-call 불안정성이 원천 차단된다.
+        # 핵심 원칙: xlsx 쓰기 도구는 합성 도구 2개(create_xlsx/modify_xlsx)뿐.
+        # excel-mcp의 2-step 도구(create_workbook/write_data_to_excel 등)를 노출하지 않아
+        # Sonnet의 multi-call 불안정성(중복 호출/경로 변조/환각) 여지 원천 차단.
         return [
-            # 신규 엑셀 생성 — 단일 호출 완결 (create + write + save 일괄)
+            # 신규 엑셀 생성 — 단일 호출 완결 (단일 or 다중 시트)
             "create_xlsx",
+            # 기존 엑셀 수정 — 단일 호출 완결 (operations 배열로 여러 변경 일괄 적용)
+            "modify_xlsx",
             # 기존 파일 조회 (읽기 전용)
             "get_workbook_metadata",
             "read_data_from_excel",
@@ -233,33 +240,55 @@ class XlsxWorker(BaseWorker):
 도구 호출 없이 "적용했습니다" / "수정했습니다" / "변경했습니다"라고 응답하면 실제로 아무 변경도 안 됩니다.
 첫 번째 응답에서 바로 도구를 호출하세요. 사전 안내("만들겠습니다") 금지.
 
-## ⭐ 새 엑셀 파일 생성: **create_xlsx 단 하나의 도구만 호출**
+## ⭐ 새 엑셀 파일 생성: **create_xlsx 단 하나만 호출**
+단일 시트:
 ```
-create_xlsx(filepath="파일명.xlsx", headers=["A","B","C","D"], rows=[[1,2,3,4], [5,6,7,8], ...])
+create_xlsx(filepath="파일명.xlsx", headers=["A","B","C","D"], rows=[[1,2,3,4], [5,6,7,8]])
 ```
-- 이 도구 하나로 파일 생성 + 데이터 쓰기 + 저장이 **한 번에** 완료됩니다.
-- `create_workbook`, `write_data_to_excel`을 따로 호출하지 마세요. (그렇게 하면 실패합니다)
-- 응답이 `✅ SUCCESS:`로 시작하면 완료. 사용자에게 `**파일명:** xxx.xlsx` 안내 후 종료.
+다중 시트 (sheets 배열 사용):
+```
+create_xlsx(filepath="파일명.xlsx", sheets=[
+  {"name":"매출", "headers":["월","금액"], "rows":[["1월",100],["2월",200]]},
+  {"name":"비용", "headers":["항목","금액"], "rows":[["인건비",50]]},
+])
+```
+- 이 도구 하나로 파일 생성 + 시트(들) + 데이터 쓰기 + 저장이 **한 번에** 완료됩니다.
+
+## ⭐ 기존 엑셀 파일 수정: **modify_xlsx 단 하나만 호출**
+```
+modify_xlsx(filepath="기존파일.xlsx", operations=[
+  {"op":"update_cells", "sheet":"Sheet", "start_cell":"A2", "values":[[100,200]]},
+  {"op":"add_sheet", "name":"Summary", "headers":["Label","Total"], "rows":[["합계",0]]},
+  {"op":"apply_formula", "sheet":"Summary", "cell":"B2", "formula":"=SUM(Sheet!A2:D2)"},
+  {"op":"delete_sheet", "name":"Sheet2"},
+  {"op":"rename_sheet", "old_name":"Sheet1", "new_name":"메인"},
+  {"op":"delete_rows", "sheet":"Sheet", "start_row":2, "count":3},
+  {"op":"delete_columns", "sheet":"Sheet", "start_col":"B", "count":1},
+])
+```
+- 값 변경, 시트 추가/삭제/이름변경, 수식, 행/열 삭제 — 모두 `operations` 배열로 **한 번에** 적용.
+- 중간 실패 시 파일은 원본 그대로 유지됩니다 (원자성 보장).
+
+## 결정 플로우 (중요)
+1. **새 파일 요청** → `create_xlsx` (1번)
+2. **대화에 이전 테이블 데이터가 있는 수정 요청** → `create_xlsx`로 새로 생성 (덮어쓰기). 읽기 단계 불필요.
+3. **업로드된 파일 수정 (대화에 데이터 없음)** → (a) `get_workbook_metadata` → (b) `read_data_from_excel` → (c) `modify_xlsx`
+4. **서식·수식만 추가** → `modify_xlsx` 사용
 
 ## 파일
 {available_files}
 
 ## 웹 검색 (tavily_search)
-- 시장 데이터, 통계, 트렌드 등 **최신 정보가 필요한 엑셀 생성 요청** 시 tavily_search로 먼저 조사
-- 검색 결과의 구체적 수치/통계를 엑셀 데이터에 반영
-- 사용자가 직접 데이터를 제공했거나, 기존 파일 수정인 경우에는 검색 불필요
-
-## 기존 파일 읽기
-- `get_workbook_metadata` → 시트명 확인 → `read_data_from_excel(sheet_name=확인된 시트명)`
+- 시장 데이터·통계·트렌드 등 최신 정보가 필요한 엑셀 생성 요청 시 먼저 조사. 직접 제공 데이터·기존 파일 수정은 불필요.
 
 ## 규칙
-1. **경로**: 새 파일은 `{output_dir}/파일명.xlsx`
-2. **create_xlsx 호출은 딱 1번만**. 응답이 `✅ SUCCESS:`로 오면 즉시 사용자에게 파일명 안내하고 종료.
+1. **경로**: 새 파일은 `{output_dir}/파일명.xlsx`. 기존 파일은 AVAILABLE FILES의 경로 사용.
+2. **create_xlsx 또는 modify_xlsx 호출은 딱 1번**. `✅ SUCCESS:` 수신 즉시 파일명 안내하고 종료.
 3. **data 형식**: rows는 `List[List]` 형태. 예: `[[1,2,3,4], [5,6,7,8]]`
 
 ## 응답 형식
-- 한국어 응답, JSON/data 배열 노출 금지
-- `✅ SUCCESS:` 수신 시: 간략 설명 + "**파일명:** xxx.xlsx" 로 종료
+- 한국어 응답. JSON/data 배열 노출 금지
+- `✅ SUCCESS:` 수신 시: 간략 설명 + "**파일명:** xxx.xlsx"
 - 에러 접두사(`Error:`, `❌`)가 없으면 성공. "서버 오류" 같은 추측 응답 금지.
 
 Answer in Korean unless asked otherwise."""
@@ -402,6 +431,7 @@ Answer in Korean unless asked otherwise."""
         creation_done: Dict[str, Any] = {"file": None}
         XLSX_WRITE_TOOLS = frozenset([
             "create_xlsx",
+            "modify_xlsx",
             "create_workbook",
             "write_data_to_excel",
             "apply_formula",
@@ -578,12 +608,14 @@ Answer in Korean unless asked otherwise."""
         """
         BaseWorker 스트리밍 + 최종 방어.
 
-        create_xlsx 성공 감지 시, 이후 LLM의 text 응답을 무시하고 결정론 메시지로 교체.
-        Sonnet 4.6이 tool 성공 후에도 "서버 오류" 환각을 뱉는 model-level 문제 대응.
+        create_xlsx 또는 modify_xlsx 성공 감지 시, 이후 LLM의 text 응답을 무시하고
+        결정론 메시지로 교체. Sonnet 4.6이 tool 성공 후에도 "서버 오류" 환각을
+        뱉는 model-level 문제 대응.
         """
         from langchain_core.messages import AIMessageChunk
 
         success_filename: Optional[str] = None
+        success_tool: Optional[str] = None
         suppress_llm_text: bool = False
         replacement_sent: bool = False
 
@@ -592,25 +624,27 @@ Answer in Korean unless asked otherwise."""
         ):
             event_kind = event.get("event", "")
 
-            # create_xlsx 성공 감지 (tool_end 이벤트)
+            # 합성 도구 성공 감지 (tool_end 이벤트)
             if event_kind == "on_tool_end" and not success_filename:
                 tool_name = event.get("name", "") or event.get("data", {}).get("name", "")
-                if tool_name == "create_xlsx":
+                if tool_name in ("create_xlsx", "modify_xlsx"):
                     output = event.get("data", {}).get("output")
                     text = str(output.content) if hasattr(output, "content") else str(output or "")
                     if "✅ SUCCESS" in text:
                         m = re.search(r"파일명[:：]\s*([^\s\n]+)", text)
                         if m:
                             success_filename = m.group(1).strip().rstrip("`")
+                            success_tool = tool_name
                             suppress_llm_text = True
-                            print(f"[XlsxWorker] [FINAL_GUARD] create_xlsx 성공 감지 → LLM text 교체 모드: {success_filename}")
+                            print(f"[XlsxWorker] [FINAL_GUARD] {tool_name} 성공 감지 → LLM text 교체 모드: {success_filename}")
 
             # LLM text 억제: 성공 감지 후의 LLM 스트림/완료 이벤트는 버리고 한 번만 결정론 응답 주입
             if suppress_llm_text and event_kind in ("on_chat_model_stream", "on_chat_model_end"):
                 if not replacement_sent and event_kind == "on_chat_model_stream":
                     replacement_sent = True
+                    verb = "생성" if success_tool == "create_xlsx" else "수정"
                     replacement = (
-                        f"엑셀 파일이 성공적으로 생성되었습니다.\n\n"
+                        f"엑셀 파일이 성공적으로 {verb}되었습니다.\n\n"
                         f"**파일명:** {success_filename}"
                     )
                     fake_event = dict(event)

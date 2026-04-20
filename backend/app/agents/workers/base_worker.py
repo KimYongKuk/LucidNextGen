@@ -495,6 +495,7 @@ class BaseWorker(ABC):
         "create_presentation",
         "create_line_chart", "create_bar_chart", "create_pie_chart", "create_multi_chart",
         "create_workbook", "write_data_to_excel",
+        "create_xlsx", "modify_xlsx",
     }
 
     def prepare_tools(
