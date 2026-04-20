@@ -404,44 +404,40 @@ async def find_available_rooms(asset_id: int, date: str, start_time: str, end_ti
     return "\n".join(lines)
 
 
-@mcp.tool()
-async def get_my_reservations(employee_number: str, days: int = 7) -> str:
-    """내 남은(향후) 예약 목록을 조회합니다.
-    전 사업장을 병렬 조회하여 본인 예약만 필터링합니다.
+# 내 예약 ID 집합 캐시 (소유자 검증 최적화 — 60초 TTL)
+_my_reservations_cache: Dict[str, tuple] = {}  # {employee_number: (ids_set, timestamp)}
+_MY_RESERVATIONS_CACHE_TTL = 60  # 초
 
-    Args:
-        employee_number: 사번 (자동 주입됨)
-        days: 조회 기간 (기본 7일, 최대 30일). 사용자가 "한 달" 등 요청 시 30 지정.
+
+async def _fetch_my_reservations_raw(employee_number: str, days: int = 30) -> Optional[List[Dict]]:
+    """내 예약 원본 데이터 반환 (본인 검증 + get_my_reservations 공통 로직).
 
     Returns:
-        내 예약 목록 (사업장, 회의실, 시간)
+        리스트 (각 항목은 userId == go_user_id인 예약 dict) — 없으면 []
+        None = 사용자 매핑 실패 (호출자가 에러 처리)
     """
     import asyncio
-
-    # 사번 → GO user.id 매핑
     user_info = await _get_go_user_id(employee_number)
     if not user_info:
-        return f"오류: 사번 '{employee_number}'에 대한 사용자 정보를 찾을 수 없습니다."
-
+        return None
     go_user_id = user_info["go_user_id"]
     now = datetime.now()
-    days = min(max(days, 1), 30)  # 1~30일 범위 제한
+    days = min(max(days, 1), 30)
 
-    # 사업장 목록 가져오기 (캐시)
+    # 사업장 목록 (캐시)
     global _sites_cache
     if not _sites_cache:
         result = await _api_request("GET", "/api/asset")
         if not result or result.get("code") != "200":
-            return "오류: 사업장 목록을 가져올 수 없습니다."
+            return []
         _sites_cache = [{"id": s["id"], "name": s["name"]} for s in result["data"]]
 
-    # 날짜 스텝 생성 (2일 간격, daily API가 2일치 반환)
-    date_steps = []
-    for i in range(0, days, 2):
-        d = now + timedelta(days=i)
-        date_steps.append(d.strftime("%Y-%m-%dT00:00:00.000+09:00"))
+    # 날짜 스텝 (2일 간격)
+    date_steps = [
+        (now + timedelta(days=i)).strftime("%Y-%m-%dT00:00:00.000+09:00")
+        for i in range(0, days, 2)
+    ]
 
-    # 전 사업장 × 전 날짜 병렬 조회 (동시성 제한)
     sem = asyncio.Semaphore(20)
 
     async def _fetch(site, from_date):
@@ -463,21 +459,64 @@ async def get_my_reservations(employee_number: str, days: int = 7) -> str:
         for site in _sites_cache
         for from_date in date_steps
     ]
-    print(f"[Reservation MCP] 내 예약 조회: {len(_sites_cache)}사업장 × "
-          f"{len(date_steps)}스텝 = {len(tasks)}건 병렬 호출 (days={days})",
-          file=sys.stderr)
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    # 결과 합치기 (예약ID로 중복 제거)
     seen_ids = set()
-    my_reservations = []
+    my_list = []
     for res in results:
         if isinstance(res, list):
             for r in res:
                 rid = r.get("id")
                 if rid and rid not in seen_ids:
                     seen_ids.add(rid)
-                    my_reservations.append(r)
+                    my_list.append(r)
+    return my_list
+
+
+async def _get_my_reservation_ids(employee_number: str) -> set:
+    """내 예약 ID 집합 반환 (60초 TTL 캐시) — cancel_reservation 소유자 검증용"""
+    import time as _t
+    now = _t.time()
+    cached = _my_reservations_cache.get(employee_number)
+    if cached and (now - cached[1]) < _MY_RESERVATIONS_CACHE_TTL:
+        return cached[0]
+
+    raw = await _fetch_my_reservations_raw(employee_number, days=30)
+    if raw is None:
+        return set()  # 사용자 매핑 실패 — 빈 집합 반환하면 cancel 거부됨
+    ids = {r.get("id") for r in raw if r.get("id") is not None}
+    _my_reservations_cache[employee_number] = (ids, now)
+    return ids
+
+
+@mcp.tool()
+async def get_my_reservations(employee_number: str, days: int = 7) -> str:
+    """내 남은(향후) 예약 목록을 조회합니다.
+    전 사업장을 병렬 조회하여 본인 예약만 필터링합니다.
+
+    Args:
+        employee_number: 사번 (자동 주입됨)
+        days: 조회 기간 (기본 7일, 최대 30일). 사용자가 "한 달" 등 요청 시 30 지정.
+
+    Returns:
+        내 예약 목록 (사업장, 회의실, 시간)
+    """
+    # 사번 → GO user.id 매핑 (표시용 이름)
+    user_info = await _get_go_user_id(employee_number)
+    if not user_info:
+        return f"오류: 사번 '{employee_number}'에 대한 사용자 정보를 찾을 수 없습니다."
+
+    # 공통 헬퍼로 raw 예약 목록 조회
+    my_reservations = await _fetch_my_reservations_raw(employee_number, days=days)
+    if my_reservations is None:
+        return f"오류: 사번 '{employee_number}'에 대한 사용자 정보를 찾을 수 없습니다."
+
+    # cancel 검증용 캐시 동기화 (같은 턴 내 재호출 시 재사용)
+    import time as _t
+    _my_reservations_cache[employee_number] = (
+        {r.get("id") for r in my_reservations if r.get("id") is not None},
+        _t.time(),
+    )
 
     if not my_reservations:
         return f"{user_info['user_name']}님의 예약이 없습니다."
@@ -601,6 +640,9 @@ async def create_reservation(
         code = result.get("code", "?")
         return f"오류: 예약 등록 실패 (code={code}) — {msg}"
 
+    # 예약 성공 → 캐시 invalidate (새 예약 ID가 다음 cancel 시 인정되도록)
+    _my_reservations_cache.pop(employee_number, None)
+
     data = result["data"]
     item_name = data.get("itemName", "알 수 없음")
     res_id = data.get("id", "?")
@@ -635,8 +677,19 @@ async def cancel_reservation(
     if not user_info:
         return f"오류: 사번 '{employee_number}'에 대한 사용자 정보를 찾을 수 없습니다."
 
-    # 본인 예약인지 검증은 Worker 시스템 프롬프트에서 get_my_reservations 선행 호출로 보장
-    # (서비스 계정 세션이라 /my/reservation/remnant 사용 불가)
+    # 🔒 소유자 검증 (서버 강제, LLM 프롬프트 의존 X) —
+    # 서비스 계정이 모든 예약 접근 가능하므로 반드시 백엔드에서 userId 매칭 확인.
+    my_ids = await _get_my_reservation_ids(employee_number)
+    if reservation_id not in my_ids:
+        print(
+            f"[Reservation MCP] 🚫 소유자 검증 실패: {employee_number}({user_info['user_name']}) "
+            f"→ reservation_id={reservation_id} (본인 예약 아님)",
+            file=sys.stderr,
+        )
+        return (
+            f"오류: 본인이 등록한 예약만 취소할 수 있습니다. "
+            f"(예약ID {reservation_id}는 {user_info['user_name']}님의 예약 목록에 없습니다)"
+        )
 
     result = await _api_request("DELETE", "/api/asset/item/reservation",
                                 json={"ids": [str(reservation_id)]})
@@ -646,6 +699,9 @@ async def cancel_reservation(
     if result.get("code") != "200":
         msg = result.get("message", "알 수 없는 오류")
         return f"오류: 예약 취소 실패 — {msg}"
+
+    # 취소 성공 → 캐시 invalidate (다음 get_my_reservations에서 새로 조회)
+    _my_reservations_cache.pop(employee_number, None)
 
     cancelled = result["data"]
     if cancelled:
