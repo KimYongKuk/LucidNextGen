@@ -24,7 +24,9 @@ from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
 from openpyxl import Workbook, load_workbook
-from openpyxl.utils import column_index_from_string
+from openpyxl.utils import column_index_from_string, get_column_letter
+from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
+from openpyxl.chart import BarChart, LineChart, PieChart, Reference
 
 OUTPUT_DIR = Path(__file__).parent.parent.parent.parent / "data" / "xlsx_output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -36,15 +38,28 @@ _MAX_SHEET_NAME_LEN = 31
 # operations 최대 개수 (single-call 원칙 보호)
 _MAX_OPERATIONS = 100
 
-# 지원 op 목록
+# 지원 op 목록 (15종)
 _SUPPORTED_OPS = frozenset([
+    # 데이터
     "update_cells",
+    "apply_formula",
+    # 시트
     "add_sheet",
     "delete_sheet",
     "rename_sheet",
-    "apply_formula",
+    "copy_worksheet",
+    # 행·열
+    "insert_rows",
+    "insert_columns",
     "delete_rows",
     "delete_columns",
+    # 서식
+    "format_range",
+    "merge_cells",
+    "unmerge_cells",
+    # 차트·피벗
+    "create_chart",
+    "create_pivot_table",
 ])
 
 server = Server("xlsx-simple")
@@ -158,14 +173,27 @@ async def list_tools() -> List[Tool]:
                     "operations": {
                         "type": "array",
                         "description": (
-                            "적용할 작업 배열. 각 op 예시:\n"
+                            "적용할 작업 배열. 지원 op:\n"
+                            "[데이터]\n"
                             "- {op:'update_cells', sheet:'Sheet', start_cell:'A1', values:[['x','y'],[1,2]]}\n"
+                            "- {op:'apply_formula', sheet:'Sheet', cell:'C10', formula:'=SUM(C2:C9)'}\n"
+                            "[시트]\n"
                             "- {op:'add_sheet', name:'Summary', headers:['A','B'], rows:[[1,2]]}\n"
                             "- {op:'delete_sheet', name:'Sheet2'}\n"
                             "- {op:'rename_sheet', old_name:'Sheet1', new_name:'메인'}\n"
-                            "- {op:'apply_formula', sheet:'Sheet', cell:'C10', formula:'=SUM(C2:C9)'}\n"
+                            "- {op:'copy_worksheet', source:'Sheet1', target:'Sheet1_복사본'}  서식·수식·병합 모두 포함\n"
+                            "[행·열]\n"
+                            "- {op:'insert_rows', sheet:'Sheet', start_row:2, count:1}\n"
+                            "- {op:'insert_columns', sheet:'Sheet', start_col:'B', count:1}\n"
                             "- {op:'delete_rows', sheet:'Sheet', start_row:2, count:3}\n"
-                            "- {op:'delete_columns', sheet:'Sheet', start_col:'B', count:1}  (또는 start_col:2)"
+                            "- {op:'delete_columns', sheet:'Sheet', start_col:'B', count:1}\n"
+                            "[서식]\n"
+                            "- {op:'format_range', sheet:'Sheet', start_cell:'A1', end_cell:'D1', bold:true, bg_color:'FFFF00', font_color:'000000', alignment:'center', number_format:'#,##0', border_style:'thin'}\n"
+                            "- {op:'merge_cells', sheet:'Sheet', start_cell:'A1', end_cell:'D1'}\n"
+                            "- {op:'unmerge_cells', sheet:'Sheet', start_cell:'A1', end_cell:'D1'}\n"
+                            "[차트·피벗]\n"
+                            "- {op:'create_chart', sheet:'Sheet', chart_type:'bar'|'line'|'pie', data_range:'A1:B10', target_cell:'D2', title:'매출', x_axis:'월', y_axis:'금액'}\n"
+                            "- {op:'create_pivot_table', source_sheet:'Data', source_range:'A1:D100', target_sheet:'Pivot', rows:['지역'], values:[['매출','sum']], columns:[], agg_func:'sum'}\n"
                         ),
                         "items": {"type": "object"},
                     },
@@ -381,23 +409,244 @@ def _apply_op(wb: Workbook, op: Dict[str, Any]) -> str:
         count = op.get("count", 1)
         if sheet not in wb.sheetnames:
             raise ValueError(f"시트 없음: {sheet!r}")
-        # start_col: 문자(A,B,...) 또는 정수(1,2,...)
-        if isinstance(start_col, str):
-            try:
-                col_idx = column_index_from_string(start_col.upper())
-            except Exception:
-                raise ValueError(f"start_col 문자열이 유효하지 않습니다: {start_col!r}")
-        elif isinstance(start_col, int) and start_col >= 1:
-            col_idx = start_col
-        else:
-            raise ValueError(f"start_col은 'A' 같은 문자 또는 1 이상의 정수여야 합니다: {start_col!r}")
+        col_idx = _resolve_column(start_col)
         if not isinstance(count, int) or count < 1:
             raise ValueError(f"count는 1 이상의 정수여야 합니다: {count!r}")
         wb[sheet].delete_cols(col_idx, count)
         return f"delete_columns @ '{sheet}' {start_col}부터 {count}개"
 
+    if op_type == "copy_worksheet":
+        source = op.get("source", "")
+        target = op.get("target", "")
+        if source not in wb.sheetnames:
+            raise ValueError(f"원본 시트 없음: {source!r}")
+        _validate_sheet_name(target)
+        if target in wb.sheetnames:
+            raise ValueError(f"대상 시트 '{target}' 이미 존재")
+        new_ws = wb.copy_worksheet(wb[source])
+        new_ws.title = target
+        return f"copy_worksheet '{source}' → '{target}' (서식·수식 포함)"
+
+    if op_type == "insert_rows":
+        sheet = op.get("sheet", "")
+        start_row = op.get("start_row")
+        count = op.get("count", 1)
+        if sheet not in wb.sheetnames:
+            raise ValueError(f"시트 없음: {sheet!r}")
+        if not isinstance(start_row, int) or start_row < 1:
+            raise ValueError(f"start_row는 1 이상의 정수여야 합니다: {start_row!r}")
+        if not isinstance(count, int) or count < 1:
+            raise ValueError(f"count는 1 이상의 정수여야 합니다: {count!r}")
+        wb[sheet].insert_rows(start_row, count)
+        return f"insert_rows @ '{sheet}' {start_row}위치 {count}개"
+
+    if op_type == "insert_columns":
+        sheet = op.get("sheet", "")
+        start_col = op.get("start_col")
+        count = op.get("count", 1)
+        if sheet not in wb.sheetnames:
+            raise ValueError(f"시트 없음: {sheet!r}")
+        col_idx = _resolve_column(start_col)
+        if not isinstance(count, int) or count < 1:
+            raise ValueError(f"count는 1 이상의 정수여야 합니다: {count!r}")
+        wb[sheet].insert_cols(col_idx, count)
+        return f"insert_columns @ '{sheet}' {start_col}위치 {count}개"
+
+    if op_type == "format_range":
+        sheet = op.get("sheet", "")
+        start_cell = op.get("start_cell", "")
+        end_cell = op.get("end_cell") or start_cell
+        if sheet not in wb.sheetnames:
+            raise ValueError(f"시트 없음: {sheet!r}")
+        ws = wb[sheet]
+        cell_range = f"{start_cell}:{end_cell}"
+        font_kwargs = {}
+        if "bold" in op:
+            font_kwargs["bold"] = bool(op["bold"])
+        if "italic" in op:
+            font_kwargs["italic"] = bool(op["italic"])
+        if "underline" in op and op["underline"]:
+            font_kwargs["underline"] = "single"
+        if "font_size" in op:
+            font_kwargs["size"] = int(op["font_size"])
+        if "font_color" in op and op["font_color"]:
+            font_kwargs["color"] = _normalize_color(op["font_color"])
+        fill = None
+        if "bg_color" in op and op["bg_color"]:
+            fill = PatternFill(start_color=_normalize_color(op["bg_color"]),
+                               end_color=_normalize_color(op["bg_color"]),
+                               fill_type="solid")
+        border = None
+        if "border_style" in op and op["border_style"]:
+            side = Side(style=op["border_style"],
+                        color=_normalize_color(op.get("border_color", "000000")))
+            border = Border(left=side, right=side, top=side, bottom=side)
+        align = None
+        if "alignment" in op and op["alignment"]:
+            align = Alignment(horizontal=op["alignment"],
+                              wrap_text=bool(op.get("wrap_text", False)))
+        elif "wrap_text" in op:
+            align = Alignment(wrap_text=bool(op["wrap_text"]))
+        number_format = op.get("number_format")
+        for row in ws[cell_range]:
+            for cell in row:
+                if font_kwargs:
+                    cell.font = Font(**font_kwargs)
+                if fill is not None:
+                    cell.fill = fill
+                if border is not None:
+                    cell.border = border
+                if align is not None:
+                    cell.alignment = align
+                if number_format:
+                    cell.number_format = number_format
+        return f"format_range @ '{sheet}'!{cell_range}"
+
+    if op_type == "merge_cells":
+        sheet = op.get("sheet", "")
+        start_cell = op.get("start_cell", "")
+        end_cell = op.get("end_cell", "")
+        if sheet not in wb.sheetnames:
+            raise ValueError(f"시트 없음: {sheet!r}")
+        if not start_cell or not end_cell:
+            raise ValueError("start_cell, end_cell 모두 필요합니다.")
+        wb[sheet].merge_cells(f"{start_cell}:{end_cell}")
+        return f"merge_cells @ '{sheet}'!{start_cell}:{end_cell}"
+
+    if op_type == "unmerge_cells":
+        sheet = op.get("sheet", "")
+        start_cell = op.get("start_cell", "")
+        end_cell = op.get("end_cell", "")
+        if sheet not in wb.sheetnames:
+            raise ValueError(f"시트 없음: {sheet!r}")
+        if not start_cell or not end_cell:
+            raise ValueError("start_cell, end_cell 모두 필요합니다.")
+        wb[sheet].unmerge_cells(f"{start_cell}:{end_cell}")
+        return f"unmerge_cells @ '{sheet}'!{start_cell}:{end_cell}"
+
+    if op_type == "create_chart":
+        sheet = op.get("sheet", "")
+        chart_type = (op.get("chart_type", "") or "").lower()
+        data_range = op.get("data_range", "")
+        target_cell = op.get("target_cell", "")
+        title = op.get("title", "")
+        x_axis = op.get("x_axis", "")
+        y_axis = op.get("y_axis", "")
+        if sheet not in wb.sheetnames:
+            raise ValueError(f"시트 없음: {sheet!r}")
+        chart_map = {"bar": BarChart, "line": LineChart, "pie": PieChart}
+        if chart_type not in chart_map:
+            raise ValueError(f"지원하지 않는 chart_type: {chart_type!r} (지원: bar, line, pie)")
+        if not data_range or ":" not in data_range:
+            raise ValueError(f"data_range는 'A1:B10' 형식이어야 합니다: {data_range!r}")
+        if not target_cell:
+            raise ValueError("target_cell이 필요합니다 (차트 위치).")
+        ws = wb[sheet]
+        chart = chart_map[chart_type]()
+        if title:
+            chart.title = title
+        if chart_type != "pie":
+            if x_axis:
+                chart.x_axis.title = x_axis
+            if y_axis:
+                chart.y_axis.title = y_axis
+        # data_range를 Reference로 변환. 첫 행을 헤더/카테고리로 자동 인식.
+        ref = Reference(ws, range_string=f"{sheet}!{data_range}")
+        chart.add_data(ref, titles_from_data=True)
+        ws.add_chart(chart, target_cell)
+        return f"create_chart({chart_type}) @ '{sheet}'!{target_cell} from {data_range}"
+
+    if op_type == "create_pivot_table":
+        # openpyxl은 진짜 Excel PivotTable 객체 생성이 제한적이므로,
+        # pandas로 집계 계산 후 결과를 일반 시트로 삽입 (값+헤더 형태).
+        source_sheet = op.get("source_sheet", "")
+        source_range = op.get("source_range", "")
+        target_sheet = op.get("target_sheet", "")
+        rows_cfg = op.get("rows", [])
+        values_cfg = op.get("values", [])
+        columns_cfg = op.get("columns", []) or []
+        agg_func_default = op.get("agg_func", "sum")
+        if source_sheet not in wb.sheetnames:
+            raise ValueError(f"원본 시트 없음: {source_sheet!r}")
+        _validate_sheet_name(target_sheet)
+        if target_sheet in wb.sheetnames:
+            raise ValueError(f"대상 시트 '{target_sheet}' 이미 존재")
+        if not source_range or ":" not in source_range:
+            raise ValueError(f"source_range는 'A1:D100' 형식이어야 합니다: {source_range!r}")
+        if not rows_cfg or not values_cfg:
+            raise ValueError("rows와 values는 비어있을 수 없습니다.")
+        try:
+            import pandas as pd
+        except ImportError:
+            raise RuntimeError("pandas가 필요합니다 (create_pivot_table)")
+        src_ws = wb[source_sheet]
+        raw = list(src_ws[source_range])
+        if len(raw) < 2:
+            raise ValueError("source_range에 헤더 + 1행 이상의 데이터가 필요합니다.")
+        headers = [c.value for c in raw[0]]
+        data_rows = [[c.value for c in r] for r in raw[1:]]
+        df = pd.DataFrame(data_rows, columns=headers)
+        # values_cfg: [["col", "agg"]] or ["col"] → agg_func_default
+        vals: List[str] = []
+        aggs: Dict[str, Any] = {}
+        for v in values_cfg:
+            if isinstance(v, list) and len(v) >= 2:
+                col, agg = v[0], v[1]
+            elif isinstance(v, str):
+                col, agg = v, agg_func_default
+            else:
+                raise ValueError(f"values 항목 형식 오류: {v!r}")
+            vals.append(col)
+            aggs[col] = agg
+        pivot = pd.pivot_table(
+            df,
+            index=rows_cfg,
+            columns=columns_cfg if columns_cfg else None,
+            values=vals,
+            aggfunc=aggs,
+            fill_value=0,
+        )
+        # MultiIndex columns를 평탄화
+        if hasattr(pivot.columns, "to_flat_index"):
+            flat_cols = [" / ".join(str(x) for x in c) if isinstance(c, tuple) else str(c)
+                         for c in pivot.columns.to_flat_index()]
+        else:
+            flat_cols = [str(c) for c in pivot.columns]
+        pivot_reset = pivot.reset_index()
+        new_ws = wb.create_sheet(target_sheet)
+        new_ws.append(list(rows_cfg) + flat_cols)
+        for row in pivot_reset.itertuples(index=False):
+            new_ws.append(list(row))
+        return f"create_pivot_table '{source_sheet}' → '{target_sheet}' ({len(pivot_reset)}행)"
+
     # 도달 불가 (상단에서 이미 검증)
     raise ValueError(f"내부 오류: op 처리 누락 {op_type!r}")
+
+
+def _resolve_column(val) -> int:
+    """start_col: 문자('A', 'B') 또는 정수(1, 2) → 1-based int 인덱스."""
+    if isinstance(val, str):
+        try:
+            return column_index_from_string(val.upper())
+        except Exception:
+            raise ValueError(f"start_col 문자열이 유효하지 않습니다: {val!r}")
+    if isinstance(val, int) and val >= 1:
+        return val
+    raise ValueError(f"start_col은 'A' 같은 문자 또는 1 이상의 정수여야 합니다: {val!r}")
+
+
+def _normalize_color(color: str) -> str:
+    """#RRGGBB, RRGGBB, RGB → openpyxl의 8자리 AARRGGBB (alpha FF 고정)."""
+    if not isinstance(color, str):
+        raise ValueError(f"color는 문자열이어야 합니다: {color!r}")
+    s = color.strip().lstrip("#").upper()
+    if len(s) == 6:
+        return "FF" + s
+    if len(s) == 8:
+        return s
+    if len(s) == 3:
+        return "FF" + "".join(ch * 2 for ch in s)
+    raise ValueError(f"color 포맷이 올바르지 않습니다 (예: '#FFFF00'): {color!r}")
 
 
 def _handle_modify_xlsx(arguments: dict) -> List[TextContent]:

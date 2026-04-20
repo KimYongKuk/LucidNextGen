@@ -256,18 +256,37 @@ create_xlsx(filepath="파일명.xlsx", sheets=[
 
 ## ⭐ 기존 엑셀 파일 수정: **modify_xlsx 단 하나만 호출**
 ```
-modify_xlsx(filepath="기존파일.xlsx", operations=[
-  {"op":"update_cells", "sheet":"Sheet", "start_cell":"A2", "values":[[100,200]]},
-  {"op":"add_sheet", "name":"Summary", "headers":["Label","Total"], "rows":[["합계",0]]},
-  {"op":"apply_formula", "sheet":"Summary", "cell":"B2", "formula":"=SUM(Sheet!A2:D2)"},
-  {"op":"delete_sheet", "name":"Sheet2"},
-  {"op":"rename_sheet", "old_name":"Sheet1", "new_name":"메인"},
-  {"op":"delete_rows", "sheet":"Sheet", "start_row":2, "count":3},
-  {"op":"delete_columns", "sheet":"Sheet", "start_col":"B", "count":1},
-])
+modify_xlsx(filepath="기존파일.xlsx", operations=[...])
 ```
-- 값 변경, 시트 추가/삭제/이름변경, 수식, 행/열 삭제 — 모두 `operations` 배열로 **한 번에** 적용.
-- 중간 실패 시 파일은 원본 그대로 유지됩니다 (원자성 보장).
+지원 op 15종 (한 번에 여러 개 섞어서 operations 배열에 넣으세요):
+
+**[데이터]**
+- `{"op":"update_cells", "sheet":"Sheet", "start_cell":"A2", "values":[[100,200]]}`
+- `{"op":"apply_formula", "sheet":"Sheet", "cell":"C10", "formula":"=SUM(C2:C9)"}`
+
+**[시트]**
+- `{"op":"add_sheet", "name":"Summary", "headers":[...], "rows":[[...]]}`
+- `{"op":"delete_sheet", "name":"Sheet2"}`
+- `{"op":"rename_sheet", "old_name":"Sheet1", "new_name":"메인"}`
+- `{"op":"copy_worksheet", "source":"Sheet1", "target":"Sheet1_복사본"}` — **서식·수식·병합 모두 포함** 시트 통째 복사
+
+**[행·열]**
+- `{"op":"insert_rows", "sheet":"Sheet", "start_row":2, "count":1}`
+- `{"op":"insert_columns", "sheet":"Sheet", "start_col":"B", "count":1}` — 문자 또는 정수
+- `{"op":"delete_rows", "sheet":"Sheet", "start_row":2, "count":3}`
+- `{"op":"delete_columns", "sheet":"Sheet", "start_col":"B", "count":1}`
+
+**[서식]**
+- `{"op":"format_range", "sheet":"Sheet", "start_cell":"A1", "end_cell":"D1", "bold":true, "bg_color":"#FFFF00", "font_color":"#000000", "alignment":"center", "border_style":"thin", "number_format":"#,##0"}` — 모든 스타일 옵션 선택적
+- `{"op":"merge_cells", "sheet":"Sheet", "start_cell":"A1", "end_cell":"D1"}`
+- `{"op":"unmerge_cells", "sheet":"Sheet", "start_cell":"A1", "end_cell":"D1"}`
+
+**[차트·피벗]**
+- `{"op":"create_chart", "sheet":"Sheet", "chart_type":"bar"|"line"|"pie", "data_range":"A1:B10", "target_cell":"D2", "title":"월별 매출", "x_axis":"월", "y_axis":"금액"}`
+- `{"op":"create_pivot_table", "source_sheet":"Data", "source_range":"A1:D100", "target_sheet":"Pivot", "rows":["지역"], "values":[["매출","sum"]], "agg_func":"sum"}`
+
+- 여러 op를 한 배열에 넣으면 **한 번의 호출로 원자적 적용** (중간 실패 시 파일 원본 유지).
+- "기존 시트 그대로 복사" 요청은 `copy_worksheet`를 쓰세요 (값만 복사하는 add_sheet와 달리 서식·수식까지 보존).
 
 ## 결정 플로우 (중요)
 1. **새 파일 요청** → `create_xlsx` (1번)

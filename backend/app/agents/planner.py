@@ -42,6 +42,7 @@ Your job: decompose user's request into a JSON Task DAG that can be executed by 
 6. **Goal is one concrete sentence**: Korean, one line, immediately actionable by the worker. Not vague like "처리해줘".
 7. **Task IDs are t1, t2, t3, ...** in declaration order.
 8. **첨부파일은 분석 중간 단계 끼우지 말 것**: 사용자가 "등록해줘/업로드해줘/첨부해줘" 등 **쓰기 작업 + 파일 첨부**를 요청했을 때, 파일 내용 분석(user_files)을 **사전 태스크로 넣지 마세요**. 해당 쓰기 워커(it_support, mail 등)가 파일을 직접 첨부 파라미터로 전달합니다. 예외: 사용자가 명시적으로 "내 파일 내용 읽고 요약해줘/본문에 반영해줘"라고 요청한 경우만 user_files 사전 태스크 추가.
+9. **엑셀 파일 수정·편집 요청은 `xlsx` 단일 태스크(trivial=true)로 처리**: "업로드한 엑셀/기존 파일에 **시트 추가·복사·삭제·이름변경·값변경·서식·수식·병합·행열 삽입/삭제·차트·피벗**" 등 모든 xlsx 편집 요청은 **user_files 사전 태스크를 넣지 마세요**. XlsxWorker가 `get_workbook_metadata + read_data_from_excel + modify_xlsx`를 이미 보유하여 자체적으로 메타→읽기→수정을 처리합니다. **예외**: 사용자가 엑셀을 "요약해줘/분석해줘/요점만 알려줘" 등 **read-only 요약**을 요청한 경우에만 `user_files` 사용.
 
 ## AVAILABLE WORKERS (use the `worker` field value)
 
@@ -184,6 +185,22 @@ Output:
 반대로 짧은 거부 응답("아니", "노", "취소")일 때는:
 {{"is_trivial": true, "rationale": "이전 요청 취소 수락", "tasks": [{{"id":"t1","worker":"direct","goal":"취소 확인 응답","depends":[]}}]}}
 
+### Example 8 — 업로드한 엑셀 편집 (xlsx 단일 태스크)
+
+User: "업로드한 엑셀에 Summary 시트 추가하고 C열 합계 수식 넣어줘"
+Context: has_files=true (xlsx 파일 업로드됨)
+
+Output:
+{{
+  "is_trivial": true,
+  "rationale": "엑셀 편집(시트 추가 + 수식)은 xlsx worker 단독 처리. XlsxWorker가 get_workbook_metadata → read_data_from_excel → modify_xlsx 를 자체적으로 수행.",
+  "tasks": [
+    {{"id":"t1","worker":"xlsx","goal":"업로드 엑셀에 'Summary' 시트 추가 + C열 합계 수식(=SUM(C2:C9)) 입력","depends":[],"needs_confirm":false}}
+  ]
+}}
+
+**주의**: 엑셀 수정·편집 요청 시 `user_files` 사전 태스크(파일 내용 분석)를 넣지 마세요. XlsxWorker가 직접 읽고 수정합니다. 단, "엑셀 요약해줘/요점만 알려줘" 같은 read-only 요청은 `user_files` 사용이 맞습니다.
+
 """
 
 
@@ -194,6 +211,8 @@ PLANNER_USER_TEMPLATE = """## CONTEXT
 - User uploaded files present: {has_files}
 - Workspace mode: {has_workspace}
 - Workspace name: {workspace_name}
+- Workspace instructions (운영자 지정 — 존재 시 DAG 계획에 반영):
+{workspace_instructions}
 
 {conversation_history}
 
@@ -319,11 +338,13 @@ class Planner:
         # 사용자 메시지 — 매 요청마다 바뀌는 부분만 (cachePoint 밖)
         from datetime import datetime
         today = datetime.now().strftime("%Y-%m-%d (%a)")
+        ws_instructions = context.get("workspace_instructions") or ""
         user_content = PLANNER_USER_TEMPLATE.format(
             today=today,
             has_files=context.get("has_files", False),
             has_workspace=bool(context.get("workspace_id") or context.get("workspace_uuid")),
             workspace_name=context.get("workspace_name") or "N/A",
+            workspace_instructions=ws_instructions.strip() if ws_instructions else "N/A",
             conversation_history=self._format_history(message_history),
             message=message,
         )
