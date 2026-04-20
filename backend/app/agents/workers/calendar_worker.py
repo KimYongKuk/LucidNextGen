@@ -191,18 +191,23 @@ class CalendarWorker(BaseWorker):
 
         gosso_cookie = context.get("gosso_cookie") or ""
 
-        secured_tools = {
-            # 캘린더
+        # 캘린더 도구 — employee_number + gosso_cookie 모두 주입 (MCP 스키마가 gosso 지원)
+        calendar_gosso_tools = {
             "get_my_calendars", "get_user_public_calendars",
             "get_calendar_events", "get_event_detail",
             "create_event", "update_event", "delete_event",
-            # 예약
+        }
+        # 예약 도구 — employee_number만 주입 (MCP 스키마에 gosso_cookie 필드 없음 — 주입 시 pydantic validation error)
+        reservation_no_gosso_tools = {
             "get_my_reservations", "create_reservation", "cancel_reservation",
         }
+        secured_tools = calendar_gosso_tools | reservation_no_gosso_tools
 
         for tool in tools:
             if tool.name not in secured_tools:
                 continue
+
+            tool_supports_gosso = tool.name in calendar_gosso_tools
 
             original_ainvoke = getattr(tool, '_unwrapped_ainvoke', None) or tool.ainvoke
             object.__setattr__(tool, '_unwrapped_ainvoke', original_ainvoke)
@@ -210,17 +215,23 @@ class CalendarWorker(BaseWorker):
             async def secured_ainvoke(
                 input_data, config=None, *,
                 _original=original_ainvoke, _uid=user_id,
-                _gosso=gosso_cookie, _tname=tool.name, **kwargs
+                _gosso=gosso_cookie, _tname=tool.name,
+                _inject_gosso=tool_supports_gosso, **kwargs
             ):
                 if isinstance(input_data, dict):
                     if "args" in input_data and isinstance(input_data.get("args"), dict):
                         input_data["args"]["employee_number"] = _uid
-                        if _gosso:
+                        if _gosso and _inject_gosso:
                             input_data["args"]["gosso_cookie"] = _gosso
+                        elif not _inject_gosso:
+                            # 실수로 LLM이 gosso_cookie 넣었으면 제거 (pydantic error 방지)
+                            input_data["args"].pop("gosso_cookie", None)
                     else:
                         input_data["employee_number"] = _uid
-                        if _gosso:
+                        if _gosso and _inject_gosso:
                             input_data["gosso_cookie"] = _gosso
+                        elif not _inject_gosso:
+                            input_data.pop("gosso_cookie", None)
                 try:
                     return await _original(input_data, config, **kwargs)
                 except Exception as e:
