@@ -6,6 +6,7 @@
 ---
 
 ## [2026-04-21]
+- **수정** [Upload/ChromaDB] 암호화 파일 업로드 소프트 실패 + 사전 감지 — 비밀번호 보호 PDF / OLE2 Compound(암호화 Office) 파일이 ChromaDB 임베딩 실패로 전체 업로드 실패 처리되던 문제. `_detect_file_encryption()` 헬퍼로 업로드 시점 사전 감지(PyPDF2 `is_encrypted` + 매직 바이트 `\xd0\xcf\x11\xe0`), 감지되면 임베딩 단계를 스킵하고 `status=completed_disk_only`로 표시. 임베딩 중 예외 발생도 동일하게 soft-fail로 전환. 프론트(multimodal + workspace-settings)에서 이 상태를 ready + info 토스트로 처리 → VOC 첨부·다운로드는 정상, RAG 검색만 불가로 안내. `failed` 상태는 디스크 저장도 실패한 진짜 장애에만 남김 → [상세](docs/history/2026-04-21_암호화파일-업로드-소프트실패.md)
 - **수정** [Frontend/ChatHeader] 알림함·Agent Store·L&F WIKI 아이콘 운영자 전용으로 제한 — 개발 중이던 3개 기능이 운영 서버에 그대로 노출된 핫픽스. `isOperatorUser(userId)` 유틸 신규 추가(기본값 `A2304013`, `NEXT_PUBLIC_OPERATOR_USERS` 환경변수로 확장 가능), `chat-header.tsx`에서 해당 3개 Tooltip/Button 블록을 `{isOperator && (...)}`로 감쌈. 관리자(Shield)·데일리 브리핑(Newspaper)·테마 토글은 기존 로직 그대로 유지.
 
 ---

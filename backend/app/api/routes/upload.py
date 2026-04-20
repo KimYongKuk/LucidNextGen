@@ -32,6 +32,31 @@ logger = logging.getLogger(__name__)
 # In-memory status tracking (file_id -> dict)
 UPLOAD_STATUS = {}
 
+
+def _detect_file_encryption(file_content: bytes, filename: str) -> tuple[bool, str]:
+    """파일 암호화(비밀번호 보호) 여부 감지.
+    Returns: (is_encrypted, reason_if_encrypted)
+    감지 실패/예외 시 False 반환 (정상 임베딩 경로로 진행).
+    """
+    import io as _io
+    ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
+
+    try:
+        if ext == "pdf":
+            import PyPDF2
+            reader = PyPDF2.PdfReader(_io.BytesIO(file_content))
+            if reader.is_encrypted:
+                return True, "PDF 암호화 (비밀번호 보호)"
+        elif ext in ("docx", "xlsx", "xls", "pptx"):
+            # Office 암호화 파일은 OLE2 Compound Document 형식 (D0CF11E0)
+            # 일반 OOXML은 ZIP(PK) 형식
+            if file_content[:4] == b"\xd0\xcf\x11\xe0":
+                return True, "Office 파일 암호화 (OLE2 Compound)"
+    except Exception:
+        pass
+
+    return False, ""
+
 async def _process_upload_background(
     file_content: bytes,
     filename: str,
@@ -43,18 +68,40 @@ async def _process_upload_background(
     chunk_overlap: int | None,
     file_id: str,
 ):
-    """백그라운드에서 파일 업로드 처리"""
-    try:
+    """백그라운드에서 파일 업로드 처리.
+
+    Status 값:
+    - processing: 진행 중
+    - completed: 임베딩까지 성공 (RAG 검색 가능)
+    - completed_disk_only: 디스크 저장은 됐으나 임베딩 스킵/실패 (첨부는 가능, 검색 불가)
+    - failed: 처리 자체 실패 (디스크 저장도 미완)
+    """
+    UPLOAD_STATUS[file_id] = {
+        "status": "processing",
+        "filename": filename,
+        "message": "Processing started",
+        "progress": 0
+    }
+    logger.info(f"Starting background upload for {filename} (ID: {file_id})")
+
+    # 1) 사전 암호화 감지 → 임베딩 스킵
+    is_encrypted, enc_reason = _detect_file_encryption(file_content, filename)
+    if is_encrypted:
+        logger.warning(f"Encrypted file detected, skipping embedding: {filename} ({enc_reason})")
         UPLOAD_STATUS[file_id] = {
-            "status": "processing",
+            "status": "completed_disk_only",
             "filename": filename,
-            "message": "Processing started",
-            "progress": 0
+            "message": f"업로드 완료 (검색 인덱싱 건너뜀: {enc_reason})",
+            "warning": enc_reason,
+            "progress": 100,
         }
-        
-        logger.info(f"Starting background upload for {filename} (ID: {file_id})")
-        
-        # 실제 업로드 수행
+        await asyncio.sleep(600)
+        if file_id in UPLOAD_STATUS:
+            del UPLOAD_STATUS[file_id]
+        return
+
+    # 2) 정상 임베딩 시도
+    try:
         await chromadb.upload_file(
             file_content=file_content,
             filename=filename,
@@ -65,7 +112,6 @@ async def _process_upload_background(
             chunk_overlap=chunk_overlap,
             file_id=file_id
         )
-        
         UPLOAD_STATUS[file_id] = {
             "status": "completed",
             "filename": filename,
@@ -73,20 +119,22 @@ async def _process_upload_background(
             "progress": 100
         }
         logger.info(f"Background upload complete for {filename} (ID: {file_id})")
-        
-        # 10분 후 상태 정보 삭제 (메모리 관리)
-        await asyncio.sleep(600)
-        if file_id in UPLOAD_STATUS:
-            del UPLOAD_STATUS[file_id]
-            
     except Exception as e:
-        logger.error(f"Background upload failed for {filename} (ID: {file_id}): {e}")
+        # 임베딩 실패여도 디스크엔 이미 저장됨 → soft fail
+        err_msg = str(e)
+        logger.warning(f"Embedding failed (disk-only success) for {filename} (ID: {file_id}): {err_msg}")
         UPLOAD_STATUS[file_id] = {
-            "status": "failed",
+            "status": "completed_disk_only",
             "filename": filename,
-            "message": str(e),
-            "progress": 0
+            "message": f"업로드 완료 (검색 인덱싱 실패: {err_msg[:120]})",
+            "warning": err_msg[:200],
+            "progress": 100,
         }
+
+    # 10분 후 상태 정보 삭제 (메모리 관리)
+    await asyncio.sleep(600)
+    if file_id in UPLOAD_STATUS:
+        del UPLOAD_STATUS[file_id]
 
 @router.get("/v1/upload/status/{file_id}")
 async def get_upload_status(file_id: str):

@@ -176,26 +176,46 @@ async def _process_workspace_upload_background(
 
     채팅/Admin 업로드와 동일하게 메인 프로세스에서 직접 실행하여
     싱글톤 ChromaDBService(임베딩 모델)를 공유합니다.
+
+    Status 값:
+    - processing / completed / completed_disk_only / failed
     """
-    try:
+    from app.api.routes.upload import _detect_file_encryption
+
+    WORKSPACE_UPLOAD_STATUS[file_id] = {
+        "status": "processing",
+        "filename": filename,
+        "workspace_id": workspace_id,
+        "message": "Processing started",
+        "progress": 0
+    }
+    logger.info(f"Starting background upload for {filename} (ID: {file_id}) to workspace {workspace_id}")
+
+    # 1) 사전 암호화 감지
+    is_encrypted, enc_reason = _detect_file_encryption(file_content, filename)
+    if is_encrypted:
+        logger.warning(f"Encrypted file detected, skipping embedding: {filename} ({enc_reason})")
         WORKSPACE_UPLOAD_STATUS[file_id] = {
-            "status": "processing",
+            "status": "completed_disk_only",
             "filename": filename,
             "workspace_id": workspace_id,
-            "message": "Processing started",
-            "progress": 0
+            "message": f"업로드 완료 (검색 인덱싱 건너뜀: {enc_reason})",
+            "warning": enc_reason,
+            "progress": 100,
         }
+        await asyncio.sleep(600)
+        if file_id in WORKSPACE_UPLOAD_STATUS:
+            del WORKSPACE_UPLOAD_STATUS[file_id]
+        return
 
-        logger.info(f"Starting background upload for {filename} (ID: {file_id}) to workspace {workspace_id}")
-
-        # 직접 WorkspaceService 호출 (싱글톤 ChromaDBService 사용)
+    # 2) 정상 임베딩 시도
+    try:
         result = await service.upload_file_from_content(
             workspace_id=workspace_id,
             file_content=file_content,
             filename=filename,
             file_id=file_id
         )
-
         WORKSPACE_UPLOAD_STATUS[file_id] = {
             "status": "completed",
             "filename": filename,
@@ -205,23 +225,24 @@ async def _process_workspace_upload_background(
             "result": result
         }
         logger.info(f"Background upload complete for {filename} (ID: {file_id})")
-
-        # 10분 후 상태 정보 삭제 (메모리 관리)
-        await asyncio.sleep(600)
-        if file_id in WORKSPACE_UPLOAD_STATUS:
-            del WORKSPACE_UPLOAD_STATUS[file_id]
-
     except Exception as e:
-        logger.error(f"Background upload failed for {filename} (ID: {file_id}): {e}")
+        err_msg = str(e)
+        logger.warning(f"Embedding failed (disk-only success) for {filename} (ID: {file_id}): {err_msg}")
         import traceback
         traceback.print_exc()
         WORKSPACE_UPLOAD_STATUS[file_id] = {
-            "status": "failed",
+            "status": "completed_disk_only",
             "filename": filename,
             "workspace_id": workspace_id,
-            "message": str(e),
-            "progress": 0
+            "message": f"업로드 완료 (검색 인덱싱 실패: {err_msg[:120]})",
+            "warning": err_msg[:200],
+            "progress": 100,
         }
+
+    # 10분 후 상태 정보 삭제 (메모리 관리)
+    await asyncio.sleep(600)
+    if file_id in WORKSPACE_UPLOAD_STATUS:
+        del WORKSPACE_UPLOAD_STATUS[file_id]
 
 
 @router.get("/v1/workspaces/upload/status/{file_id}")

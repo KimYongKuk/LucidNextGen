@@ -32,12 +32,13 @@ export interface WorkspaceFile {
 }
 
 export interface UploadStatus {
-    status: 'pending' | 'processing' | 'completed' | 'failed' | 'unknown';
+    status: 'pending' | 'processing' | 'completed' | 'completed_disk_only' | 'failed' | 'unknown';
     filename: string;
     workspace_id?: string;  // UUID string
     message: string;
     progress: number;
     result?: any;
+    warning?: string;  // completed_disk_only일 때 인덱싱 스킵 사유
 }
 
 const BASE_URL = '/api/v1/workspaces';
@@ -129,8 +130,14 @@ export const workspaceApi = {
                 onProgress(status);
             }
 
-            if (status.status === 'completed') {
-                return status.result || { success: true, file_id: fileId };
+            if (status.status === 'completed' || status.status === 'completed_disk_only') {
+                // completed_disk_only: 암호화 등으로 인덱싱 스킵/실패했지만 파일 저장은 완료
+                // 워크스페이스 업로드에서는 result에 disk_only 플래그 포함시켜 호출자가 UX 결정 가능
+                const result = status.result || { success: true, file_id: fileId };
+                if (status.status === 'completed_disk_only') {
+                    return { ...result, disk_only: true, warning: status.warning || status.message };
+                }
+                return result;
             }
 
             if (status.status === 'failed') {

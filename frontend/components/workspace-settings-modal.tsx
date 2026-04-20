@@ -176,12 +176,13 @@ export function WorkspaceSettingsModal({
 
         try {
             const userId = getUserId() ?? "";
+            const diskOnlyFiles: string[] = [];
             // Upload files sequentially with polling
             for (let i = 0; i < fileList.length; i++) {
                 const file = fileList[i];
                 setUploadProgress(`Uploading ${file.name} (${i + 1}/${fileList.length})...`);
 
-                await workspaceApi.uploadFileWithPolling(
+                const result = await workspaceApi.uploadFileWithPolling(
                     workspace.uuid,
                     userId,
                     file,
@@ -192,8 +193,15 @@ export function WorkspaceSettingsModal({
                         }
                     }
                 );
+                if (result?.disk_only) {
+                    diskOnlyFiles.push(`${file.name} (${result.warning || "인덱싱 스킵"})`);
+                }
             }
-            toast.success("Files uploaded successfully");
+            if (diskOnlyFiles.length > 0) {
+                toast.info(`업로드 완료. 다음 파일은 검색 인덱싱이 건너뛰어졌습니다 (첨부·다운로드는 가능):\n${diskOnlyFiles.join("\n")}`);
+            } else {
+                toast.success("Files uploaded successfully");
+            }
             loadFiles(workspace.uuid);
         } catch (error) {
             console.error("Failed to upload files:", error);

@@ -310,7 +310,7 @@ function PureMultimodalInput({
 
               const statusData = await statusRes.json();
 
-              if (statusData.status === "completed") {
+              if (statusData.status === "completed" || statusData.status === "completed_disk_only") {
                 clearInterval(pollInterval);
                 pollIntervalsRef.current.delete(pollInterval);
                 setAttachments(prev =>
@@ -327,7 +327,12 @@ function PureMultimodalInput({
                 );
                 // 문서 파일 업로드 완료 알림 (세션 정리용)
                 onFileUploaded?.();
-                toast.success(`파일 처리 완료: ${statusData.filename}`);
+                if (statusData.status === "completed_disk_only") {
+                  // 암호화 등으로 인덱싱 실패 — 첨부·다운로드는 가능, RAG 검색만 불가
+                  toast.info(statusData.message || `업로드 완료 (검색 인덱싱 건너뜀): ${statusData.filename}`);
+                } else {
+                  toast.success(`파일 처리 완료: ${statusData.filename}`);
+                }
               } else if (statusData.status === "failed") {
                 clearInterval(pollInterval);
                 pollIntervalsRef.current.delete(pollInterval);
