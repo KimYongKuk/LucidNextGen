@@ -431,6 +431,14 @@ async def stream_a2a_response(
             # Orchestrator 이벤트 처리
             event_type = event.get("type") or event.get("event")
 
+            # Security Guard 차단 이벤트
+            if event_type == "security_blocked":
+                data = event.get("data", {}) if "data" in event else event
+                msg = data.get("message", "요청이 차단되었습니다.")
+                yield f"data: {json.dumps({'type': 'security_blocked', 'action': data.get('action'), 'threat_type': data.get('threat_type'), 'severity': data.get('severity'), 'message': msg, 'expires_at': data.get('expires_at')}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'content', 'chunk': msg}, ensure_ascii=False)}\n\n"
+                continue
+
             # A2A 전용 이벤트 처리
             if event_type == "intent_classified":
                 if event.get("is_fallback"):

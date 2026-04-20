@@ -68,6 +68,24 @@ async def chat_a2a_stream(
         collected_response = ""
 
         try:
+            # ── Security Guard: 기존 차단 사용자 조기 단절 ──
+            try:
+                from app.services.security_guard_service import (
+                    get_security_guard_service, SECURITY_GUARD_ENABLED
+                )
+                if SECURITY_GUARD_ENABLED and request.user_id and request.user_id != "anonymous":
+                    guard = get_security_guard_service()
+                    block_status = await guard.get_block_status(request.user_id)
+                    if block_status.blocked:
+                        blocked_msg = guard._build_blocked_message(block_status)
+                        print(f"[A2A_CHAT] Early block: user={request.user_id}, type={block_status.block_type}")
+                        yield f"data: {json.dumps({'type': 'security_blocked', 'block_type': block_status.block_type, 'message': blocked_msg, 'expires_at': block_status.expires_at.isoformat() if block_status.expires_at else None})}\n\n"
+                        yield f"data: {json.dumps({'type': 'content', 'content': blocked_msg})}\n\n"
+                        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                        return
+            except Exception as sec_e:
+                print(f"[A2A_CHAT] Security early-check error (non-fatal): {sec_e}")
+
             # 세마포어 대기
             semaphore_locked = BEDROCK_SEMAPHORE.locked()
             if semaphore_locked:

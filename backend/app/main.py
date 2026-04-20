@@ -249,7 +249,7 @@ async def validation_exception_handler(request, exc: RequestValidationError):
         }
     )
 
-from app.api.routes import chat, upload, auth, workspace, chat_a2a, feedback, report, board, openapi_compat, voc_wiki, outline_sync, outline_webhook, service_menu
+from app.api.routes import chat, upload, auth, workspace, chat_a2a, feedback, report, board, openapi_compat, voc_wiki, outline_sync, outline_webhook, service_menu, admin_security
 
 # 라우터 등록
 app.include_router(auth.router, prefix="/api", tags=["auth"])
@@ -265,6 +265,7 @@ app.include_router(voc_wiki.router, prefix="/api", tags=["voc-wiki"])
 app.include_router(outline_sync.router, prefix="/api", tags=["outline-sync"])
 app.include_router(outline_webhook.router, prefix="/api", tags=["outline-webhook"])
 app.include_router(service_menu.router, prefix="/api", tags=["service-menu"])
+app.include_router(admin_security.router, prefix="/api", tags=["admin-security"])  # 보안 관리
 
 @app.get("/")
 async def root():

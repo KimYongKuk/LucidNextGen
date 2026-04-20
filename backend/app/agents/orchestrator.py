@@ -57,12 +57,53 @@ class Orchestrator:
             SSE 이벤트 딕셔너리
         """
         start_time = time.time()
+        user_id = context.get("user_id", "anonymous")
+        session_id = context.get("session_id")
+        workspace_uuid = context.get("workspace_id")
+
+        # ============================================================
+        # Phase -1: Security Guard Check
+        # 악의적 입력 차단 (프롬프트 인젝션/jailbreak/데이터 탈취 등)
+        # ============================================================
+        try:
+            from app.services.security_guard_service import (
+                get_security_guard_service, SECURITY_GUARD_ENABLED
+            )
+            if SECURITY_GUARD_ENABLED:
+                guard = get_security_guard_service()
+                sec_result = await guard.check_request(
+                    user_id=user_id,
+                    session_id=session_id,
+                    message=message,
+                    workspace_id=workspace_uuid,
+                )
+                if not sec_result.allowed:
+                    print(f"[ORCHESTRATOR] Security block: user={user_id}, action={sec_result.action.value}, severity={sec_result.severity}")
+                    yield {
+                        "event": "security_blocked",
+                        "data": {
+                            "action": sec_result.action.value,
+                            "threat_type": sec_result.threat_type.value if sec_result.threat_type else None,
+                            "severity": sec_result.severity,
+                            "message": sec_result.user_message,
+                            "expires_at": sec_result.expires_at.isoformat() if sec_result.expires_at else None,
+                        }
+                    }
+                    yield {
+                        "event": "text",
+                        "data": sec_result.user_message or "요청이 차단되었습니다.",
+                    }
+                    yield {"event": "done", "data": {"elapsed": time.time() - start_time}}
+                    return
+        except Exception as e:
+            import traceback
+            print(f"[ORCHESTRATOR] Security check error (non-fatal): {e}")
+            traceback.print_exc()
 
         # ============================================================
         # Phase 0a: Load Global User Memory (모든 세션)
         # ============================================================
         user_memory_context = None
-        user_id = context.get("user_id", "anonymous")
         print(f"[ORCHESTRATOR] Phase 0a: user_id={user_id}")
         if user_id != "anonymous":
             try:

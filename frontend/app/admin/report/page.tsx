@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef } from "react"
 import Link from "next/link"
-import { ArrowLeft, Loader2 } from "lucide-react"
+import { ArrowLeft, Loader2, BarChart3, Shield } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { DateRangeSelector } from "@/components/dashboard/date-range-selector"
 import { UsageOverview } from "@/components/dashboard/usage-overview"
@@ -17,12 +17,15 @@ import { PerformanceSection } from "@/components/dashboard/performance-section"
 import { TokenUsage } from "@/components/dashboard/token-usage"
 import { UserRanking } from "@/components/dashboard/user-ranking"
 import { EmailSettings } from "@/components/dashboard/email-settings"
+import { SecurityTab } from "@/components/dashboard/security-tab"
 import { fetchAllReportData, type AllReportData } from "@/lib/api/report"
 
 export default function ReportPage() {
   const [data, setData] = useState<AllReportData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<"service" | "security">("service")
+  const [dateRange, setDateRange] = useState({ from: "", to: "" })
 
   // Intent detail modal state
   const [intentModal, setIntentModal] = useState<{ intentKey: string; intentName: string } | null>(null)
@@ -38,6 +41,7 @@ export default function ReportPage() {
 
   const handleRangeChange = useCallback(async (dateFrom: string, dateTo: string) => {
     dateRangeRef.current = { from: dateFrom, to: dateTo }
+    setDateRange({ from: dateFrom, to: dateTo })
     setLoading(true)
     setError(null)
     try {
@@ -84,37 +88,73 @@ export default function ReportPage() {
         </div>
       </header>
 
+      {/* Tabs */}
+      <div className="mx-auto max-w-7xl px-4 pt-6 sm:px-6 lg:px-8">
+        <div className="flex gap-1 border-b border-[#334155]">
+          <button
+            onClick={() => setActiveTab("service")}
+            className={`flex items-center gap-2 px-4 py-3 text-sm font-semibold transition-colors ${
+              activeTab === "service"
+                ? "border-b-2 border-[#3B82F6] text-[#F3F4F6]"
+                : "text-[#9CA3AF] hover:text-[#F3F4F6]"
+            }`}
+          >
+            <BarChart3 className="h-4 w-4" />
+            서비스 리포트
+          </button>
+          <button
+            onClick={() => setActiveTab("security")}
+            className={`flex items-center gap-2 px-4 py-3 text-sm font-semibold transition-colors ${
+              activeTab === "security"
+                ? "border-b-2 border-[#EF4444] text-[#F3F4F6]"
+                : "text-[#9CA3AF] hover:text-[#F3F4F6]"
+            }`}
+          >
+            <Shield className="h-4 w-4" />
+            보안 모니터링
+          </button>
+        </div>
+      </div>
+
       {/* Main Content */}
       <main className="mx-auto max-w-7xl space-y-10 px-4 py-8 sm:px-6 lg:px-8">
-        {loading && (
-          <div className="flex items-center justify-center py-20">
-            <Loader2 className="h-8 w-8 animate-spin text-[#3B82F6]" />
-            <span className="ml-3 text-[#9CA3AF]">데이터를 불러오는 중...</span>
-          </div>
-        )}
-
-        {error && !loading && (
-          <div className="rounded-xl border border-[#EF4444]/30 bg-[#EF4444]/10 p-6 text-center">
-            <p className="text-[#EF4444]">{error}</p>
-            <p className="mt-2 text-sm text-[#9CA3AF]">백엔드 서버가 실행 중인지 확인해주세요</p>
-          </div>
-        )}
-
-        {data && !loading && (
+        {activeTab === "service" && (
           <>
-            <UsageOverview data={data.overview} tokenData={data.tokenUsage} />
-            <UserRanking data={data.userRanking} onUserClick={handleUserClick} />
-            <IntentDistribution data={data.intents} onIntentClick={handleIntentClick} />
-            <QualityMetrics data={data.quality} />
-            <WorkspaceUsage data={data.workspaces} onWorkspaceClick={handleWorkspaceClick} />
-            <FilesGenerated data={data.artifacts} />
-            <PerformanceSection data={data.performance} />
-            <TokenUsage data={data.tokenUsage} />
+            {loading && (
+              <div className="flex items-center justify-center py-20">
+                <Loader2 className="h-8 w-8 animate-spin text-[#3B82F6]" />
+                <span className="ml-3 text-[#9CA3AF]">데이터를 불러오는 중...</span>
+              </div>
+            )}
+
+            {error && !loading && (
+              <div className="rounded-xl border border-[#EF4444]/30 bg-[#EF4444]/10 p-6 text-center">
+                <p className="text-[#EF4444]">{error}</p>
+                <p className="mt-2 text-sm text-[#9CA3AF]">백엔드 서버가 실행 중인지 확인해주세요</p>
+              </div>
+            )}
+
+            {data && !loading && (
+              <>
+                <UsageOverview data={data.overview} tokenData={data.tokenUsage} />
+                <UserRanking data={data.userRanking} onUserClick={handleUserClick} />
+                <IntentDistribution data={data.intents} onIntentClick={handleIntentClick} />
+                <QualityMetrics data={data.quality} />
+                <WorkspaceUsage data={data.workspaces} onWorkspaceClick={handleWorkspaceClick} />
+                <FilesGenerated data={data.artifacts} />
+                <PerformanceSection data={data.performance} />
+                <TokenUsage data={data.tokenUsage} />
+              </>
+            )}
+
+            {/* 이메일 설정은 데이터 로딩과 무관하게 항상 표시 */}
+            {!loading && <EmailSettings />}
           </>
         )}
 
-        {/* 이메일 설정은 데이터 로딩과 무관하게 항상 표시 */}
-        {!loading && <EmailSettings />}
+        {activeTab === "security" && dateRange.from && dateRange.to && (
+          <SecurityTab dateFrom={dateRange.from} dateTo={dateRange.to} adminId="admin" />
+        )}
       </main>
 
       {/* Intent Detail Modal */}

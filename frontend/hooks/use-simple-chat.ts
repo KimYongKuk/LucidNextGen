@@ -264,6 +264,26 @@ export function useSimpleChat({
                     currentToolStatus = '';
                   }
 
+                  // 보안 차단 이벤트 (Security Guard)
+                  if (data.type === 'security_blocked') {
+                    const blockMsg = data.message || '요청이 차단되었습니다.';
+                    console.warn('[SECURITY_BLOCKED]', {
+                      action: data.action,
+                      threat_type: data.threat_type,
+                      severity: data.severity,
+                      expires_at: data.expires_at,
+                    });
+                    allChunks.push(blockMsg);
+                    setMessages(prev => prev.map(msg =>
+                      msg.id === assistantMessageId
+                        ? {
+                          ...msg,
+                          parts: [{ type: 'text', text: blockMsg }],
+                        }
+                        : msg
+                    ));
+                  }
+
                   // 처리 시작 메시지
                   if (data.type === 'processing_start') {
                     // 대기 상태 메시지 제거

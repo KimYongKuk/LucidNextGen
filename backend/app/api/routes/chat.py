@@ -502,6 +502,24 @@ async def chat_stream(
         is_a2a_route = False  # A2A 경로 플래그 (finally에서 중복 저장 방지)
 
         try:
+            # ── Security Guard: 기존 차단 사용자 조기 단절 (MCP 로딩 전) ──
+            try:
+                from app.services.security_guard_service import (
+                    get_security_guard_service, SECURITY_GUARD_ENABLED
+                )
+                if SECURITY_GUARD_ENABLED and request.user_id and request.user_id != "anonymous":
+                    guard = get_security_guard_service()
+                    block_status = await guard.get_block_status(request.user_id)
+                    if block_status.blocked:
+                        blocked_msg = guard._build_blocked_message(block_status)
+                        print(f"[CHAT_STREAM] Early block: user={request.user_id}, type={block_status.block_type}")
+                        yield f"data: {json.dumps({'type': 'security_blocked', 'block_type': block_status.block_type, 'message': blocked_msg, 'expires_at': block_status.expires_at.isoformat() if block_status.expires_at else None})}\n\n"
+                        yield f"data: {json.dumps({'type': 'content', 'content': blocked_msg})}\n\n"
+                        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                        return
+            except Exception as sec_e:
+                print(f"[CHAT_STREAM] Security early-check error (non-fatal): {sec_e}")
+
             # 세마포어 대기 시작 알림
             semaphore_locked = BEDROCK_SEMAPHORE.locked()
             if semaphore_locked:
