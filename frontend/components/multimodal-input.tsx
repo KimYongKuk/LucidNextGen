@@ -184,13 +184,13 @@ function PureMultimodalInput({
     resetHeight,
   ]);
 
-  // 최대 파일 크기 (10MB)
-  const MAX_FILE_SIZE = 10 * 1024 * 1024;
+  // 최대 파일 크기 (50MB)
+  const MAX_FILE_SIZE = 50 * 1024 * 1024;
 
   const uploadFile = useCallback(async (file: File) => {
-    // 파일 크기 검증 (10MB)
+    // 파일 크기 검증 (50MB)
     if (file.size > MAX_FILE_SIZE) {
-      toast.error(`파일 크기가 10MB를 초과합니다: ${file.name} (${(file.size / (1024 * 1024)).toFixed(2)}MB)`);
+      toast.error(`파일 크기가 50MB를 초과합니다: ${file.name} (${(file.size / (1024 * 1024)).toFixed(2)}MB)`);
       return;
     }
 

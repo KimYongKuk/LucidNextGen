@@ -100,8 +100,8 @@ async def get_upload_status(file_id: str):
 
 # ... (upload_file and admin_upload_file remain mostly same, just ensure they use the updated _process_upload_background)
 
-# 최대 파일 크기 (10MB)
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+# 최대 파일 크기 (50MB)
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
 
 
 @router.post("/v1/upload/file")
@@ -121,11 +121,11 @@ async def upload_file(
     file_content = await file.read()
     file_size = len(file_content)
 
-    # 파일 크기 제한 (10MB)
+    # 파일 크기 제한 (50MB)
     if file_size > MAX_FILE_SIZE:
         raise HTTPException(
             status_code=400,
-            detail=f"파일 크기는 10MB를 초과할 수 없습니다. (현재: {file_size / (1024*1024):.2f}MB)"
+            detail=f"파일 크기는 50MB를 초과할 수 없습니다. (현재: {file_size / (1024*1024):.2f}MB)"
         )
 
     # 1-1. 업로드 원본 파일을 디스크에 보관 (user_uploads/{date}/{user_id}/)
@@ -207,13 +207,13 @@ async def admin_upload_file(
     file_content = await file.read()
     file_size = len(file_content)
 
-    # 파일 크기 제한 (10MB)
+    # 파일 크기 제한 (50MB)
     if file_size > MAX_FILE_SIZE:
         raise HTTPException(
             status_code=400,
-            detail=f"파일 크기는 10MB를 초과할 수 없습니다. (현재: {file_size / (1024*1024):.2f}MB)"
+            detail=f"파일 크기는 50MB를 초과할 수 없습니다. (현재: {file_size / (1024*1024):.2f}MB)"
         )
-    
+
     # 2. File ID 미리 생성
     file_id = str(uuid.uuid4())
     
@@ -264,12 +264,12 @@ async def upload_image(
                 detail=f"이미지 파일만 업로드 가능합니다. (현재: {file.content_type})"
             )
         
-        # 파일 크기 제한 (10MB)
+        # 파일 크기 제한 (50MB)
         file_content = await file.read()
-        if len(file_content) > 10 * 1024 * 1024:
+        if len(file_content) > MAX_FILE_SIZE:
             raise HTTPException(
                 status_code=400,
-                detail="이미지 크기는 10MB를 초과할 수 없습니다."
+                detail="이미지 크기는 50MB를 초과할 수 없습니다."
             )
         
         # Base64 인코딩

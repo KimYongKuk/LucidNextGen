@@ -74,6 +74,88 @@ READ_ONLY_TOOLS = frozenset([
 # Tool result 최대 길이 (개별 결과 안전망 — 극단적 대량 데이터 방어)
 TOOL_RESULT_MAX_CHARS = 8000
 
+# ============================================================================
+# 쓰기 도구 성공 응답 표준화
+# ----------------------------------------------------------------------------
+# 배경: excel-mcp-server는 성공 응답이 극히 짧음
+#   - create_workbook: "Created workbook at {path}"
+#   - write_data_to_excel: "Data written to {sheet_name}"  (20자 내외)
+# 짧고 모호한 응답이 ReAct 압축 및 GUARD 차단과 결합될 때, Sonnet이
+# "뭔가 잘못됐다"고 오인하여 AttributeError 등을 환각하는 사례 발생.
+# 모든 쓰기 성공 응답을 `✅ SUCCESS:` 고정 포맷으로 정규화하여 LLM이
+# 성공/실패를 모호함 없이 해석하도록 강제한다.
+# ============================================================================
+_ERROR_PREFIXES = ("Error:", "❌", "Failed:", "ValueError", "WorkbookError", "DataError", "ValidationError")
+
+
+def _is_error_response(text: str) -> bool:
+    """MCP 도구 응답이 명시적 에러인지 판별 (접두사 기반)"""
+    if not isinstance(text, str):
+        return False
+    stripped = text.lstrip()
+    return any(stripped.startswith(p) for p in _ERROR_PREFIXES)
+
+
+def _enrich_tool_result(tool_name: str, target_args: dict, result):
+    """Excel 쓰기 도구 성공 응답을 `✅ SUCCESS:` 표준 포맷으로 정규화.
+
+    - 에러 응답은 그대로 통과 (LLM이 재시도/안내 판단)
+    - 읽기 전용 도구는 그대로 통과 (데이터 내용이 중요)
+    - 쓰기 성공 응답에 파일명/수치/다음 단계 정보 주입
+    """
+    if not isinstance(result, str) or _is_error_response(result):
+        return result
+    if tool_name in READ_ONLY_TOOLS:
+        return result
+
+    filepath = target_args.get("filepath", "") or ""
+    filename = Path(filepath).name if filepath else "(파일명 미확인)"
+    sheet_name = target_args.get("sheet_name", "") or ""
+
+    if tool_name == "create_workbook":
+        return (
+            f"✅ SUCCESS: {result}\n"
+            f"- 파일명: {filename}\n"
+            f"- 기본 시트 'Sheet' 자동 생성됨 (빈 상태)\n"
+            f"NEXT STEP: write_data_to_excel(filepath='{filepath}', sheet_name='Sheet', data=[[헤더...],[행1...],...])를 반드시 호출하세요. "
+            f"create_workbook을 재호출하지 마세요."
+        )
+
+    if tool_name == "write_data_to_excel":
+        data = target_args.get("data", [])
+        rows = len(data) if isinstance(data, list) else 0
+        cols = len(data[0]) if rows > 0 and isinstance(data[0], list) else 0
+        return (
+            f"✅ SUCCESS: {result}\n"
+            f"- 파일: {filename}\n"
+            f"- 시트: '{sheet_name}'\n"
+            f"- 작성 범위: {rows}행 × {cols}열\n"
+            f"작업이 정상 완료되었습니다. 사용자에게 `**파일명:** {filename}` 형태로 안내하세요."
+        )
+
+    if tool_name == "apply_formula":
+        cell = target_args.get("cell", "")
+        formula = target_args.get("formula", "")
+        return (
+            f"✅ SUCCESS: {result}\n"
+            f"- 파일: {filename}, 시트: '{sheet_name}', 셀: {cell}\n"
+            f"- 수식: {formula[:100]}"
+        )
+
+    if tool_name in ("create_worksheet", "rename_worksheet", "copy_worksheet", "delete_worksheet"):
+        return f"✅ SUCCESS: {result}\n- 파일: {filename}"
+
+    if tool_name in ("merge_cells", "unmerge_cells", "format_range",
+                     "insert_rows", "insert_columns", "delete_sheet_rows", "delete_sheet_columns",
+                     "copy_range", "delete_range"):
+        return f"✅ SUCCESS: {result}\n- 파일: {filename}, 시트: '{sheet_name}'"
+
+    if tool_name in ("create_chart", "create_pivot_table", "create_table"):
+        return f"✅ SUCCESS: {result}\n- 파일: {filename}, 시트: '{sheet_name}'"
+
+    # 기타 쓰기 도구 — 접두사만 추가
+    return f"✅ SUCCESS: {result}"
+
 
 class XlsxWorker(BaseWorker):
     """
@@ -89,7 +171,9 @@ class XlsxWorker(BaseWorker):
     @property
     def tool_names(self) -> List[str]:
         return [
-            # Workbook management
+            # 합성 도구 — 신규 엑셀 파일 생성은 이 하나만 사용 (단일 호출 완결)
+            "create_xlsx",
+            # Workbook management (기존 파일 수정·편집용)
             "create_workbook",
             "create_worksheet",
             "get_workbook_metadata",
@@ -176,14 +260,15 @@ class XlsxWorker(BaseWorker):
 
 ## ⛔ 절대 규칙: 모든 요청에 반드시 도구를 호출하라
 도구 호출 없이 "적용했습니다" / "수정했습니다" / "변경했습니다"라고 응답하면 실제로 아무 변경도 안 됩니다.
-이것은 거짓말이며 사용자에게 심각한 혼란을 줍니다.
+첫 번째 응답에서 바로 도구를 호출하세요. 사전 안내("만들겠습니다") 금지.
 
-**특히 "수정해줘" / "바꿔줘" / "다시 해줘" 같은 수정 요청에 주의:**
-- 이전 대화에서 파일을 이미 만들었더라도, 수정 요청에는 반드시 새 도구 호출이 필요합니다.
-- 대화 요약에 이전 작업 내용이 있어도, 그것은 과거 기록일 뿐입니다. 지금 도구를 호출해야 합니다.
-- 먼저 read_data_from_excel로 현재 상태를 확인하고, 필요한 도구를 호출하세요.
-
-첫 번째 응답에서 바로 도구를 호출하세요. 사전 안내("만들겠습니다", "수정하겠습니다") 금지.
+## ⭐ 새 엑셀 파일 생성: **create_xlsx 단 하나의 도구만 호출**
+```
+create_xlsx(filepath="파일명.xlsx", headers=["A","B","C","D"], rows=[[1,2,3,4], [5,6,7,8], ...])
+```
+- 이 도구 하나로 파일 생성 + 데이터 쓰기 + 저장이 **한 번에** 완료됩니다.
+- `create_workbook`, `write_data_to_excel`을 따로 호출하지 마세요. (그렇게 하면 실패합니다)
+- 응답이 `✅ SUCCESS:`로 시작하면 완료. 사용자에게 `**파일명:** xxx.xlsx` 안내 후 종료.
 
 ## 파일
 {available_files}
@@ -193,17 +278,11 @@ class XlsxWorker(BaseWorker):
 - 검색 결과의 구체적 수치/통계를 엑셀 데이터에 반영
 - 사용자가 직접 데이터를 제공했거나, 기존 파일 수정인 경우에는 검색 불필요
 
-## 새 파일 생성 워크플로우 (반드시 이 순서 준수!)
-1. create_workbook → 파일 생성 (1번만 호출! 절대 반복 호출 금지)
-2. write_data_to_excel → 대화에서 데이터를 추출하여 기본 시트("Sheet")에 작성
-3. (선택) rename_worksheet, format_range 등 후처리
-**주의**: create_workbook 후 반드시 write_data_to_excel을 호출하라. create_workbook만 반복 호출하면 빈 파일만 생성됨!
-대화에서 데이터가 불명확하면, 최선의 추정으로 데이터를 구성하여 write_data_to_excel을 호출하라.
-
-## 기존 파일 읽기 워크플로우 (반드시 이 순서!)
-1. get_workbook_metadata → 시트명 목록 확인 (시트명을 추측하지 마라!)
-2. read_data_from_excel(sheet_name=확인된 시트명) → 데이터 읽기
-**주의**: 시트명이 "Sheet1"이라고 추측하지 마라. 반드시 get_workbook_metadata로 확인 후 사용!
+## 기존 파일 수정 워크플로우 (신규 생성이 아닌 경우만)
+- **수정 요청**("수정해줘", "바꿔줘", "다시 해줘"): 대화에 이전 파일 내용이 있어도 과거 기록일 뿐. 지금 도구를 호출해야 함.
+- 1. get_workbook_metadata → 시트명 확인 (추측 금지)
+- 2. read_data_from_excel(sheet_name=확인된 시트명) → 필요 시 현재 데이터 읽기
+- 3. write_data_to_excel / apply_formula / format_range 등으로 수정
 
 ## 규칙
 1. **경로**: 새 파일은 `{output_dir}/파일명.xlsx`, 기존 파일은 AVAILABLE FILES의 경로 사용
@@ -212,7 +291,13 @@ class XlsxWorker(BaseWorker):
 4. **기본 시트**: create_workbook은 "Sheet" 시트를 자동 생성함. 새 시트 만들지 말고 반드시 이 기본 시트에 먼저 작업! 이름 변경은 rename_worksheet 사용
 5. **파일명 안내**: 파일 생성/수정 후 반드시 "**파일명:** xxx.xlsx" 출력 (읽기/분석만 한 경우 출력 금지)
 6. **서식**: 사용자가 명시적으로 요청한 경우에만 format_range 사용
-7. **에러**: 도구가 "Error:"로 시작하는 결과를 2회 반환 시 사용자에게 안내. 성공 결과("Created workbook" 등)는 에러가 아님!
+7. **성공/에러 판정 (⚠️ 엄수)**:
+   - 도구 응답이 **`✅ SUCCESS:`** 로 시작하면 → **절대적 성공**. 재시도/재호출 금지. 사용자에게 파일명 안내하고 종료.
+   - 도구 응답이 **`Error:`** / `❌` / `Failed:` / `ValidationError` / `WorkbookError` 로 시작하면 → 에러. 2회 반복 시 사용자에게 안내.
+   - 그 외 응답(`Data written to ...`, `Created workbook at ...` 등)도 에러 접두사가 없으면 **성공**.
+   - 🚫 **절대 금지**: 도구가 성공 응답을 반환했는데 "서버 오류", "AttributeError", "내부 오류"라고 추측하여 응답하지 말 것. 응답이 짧더라도 에러 접두사가 없으면 성공이다.
+8. **생성 완료 후 행동**: `✅ SUCCESS:` 응답을 받으면 즉시 사용자에게 파일명을 안내하고 종료. 같은 도구를 재호출하지 말 것.
+9. **검증 과다 금지**: `create_workbook` + `write_data_to_excel` 이 모두 `✅ SUCCESS:`로 끝나면, 작업은 완료된 것입니다. `get_workbook_metadata`, `read_data_from_excel` 등으로 **재확인하지 마세요**. 이런 검증 호출은 사용자가 명시적으로 "확인해줘"라고 요청한 경우에만 수행합니다. 불필요한 검증은 LLM 자신을 혼란시키고 응답 지연만 늘립니다.
 
 ## 응답 형식
 - 한국어 응답, JSON/data 배열 노출 금지
@@ -337,6 +422,7 @@ Answer in Korean unless asked otherwise."""
         - 상대 경로를 XLSX_OUTPUT_DIR 기준으로 자동 해석
         """
         session_id = context.get("session_id", "")
+        user_id = context.get("user_id", "") or "unknown"
         allowed_dirs = [str(XLSX_OUTPUT_DIR.resolve())]
         if session_id:
             upload_dir = XLSX_UPLOAD_DIR / session_id
@@ -345,6 +431,38 @@ Answer in Korean unless asked otherwise."""
 
         # Per-request: upload 파일이 output으로 복사되면 이후 모든 도구가 output 경로 사용
         redirected_files: Dict[str, str] = {}
+
+        # create_workbook 중복 호출 차단용 (단일 파일 생성 후 재호출 시 GUARD)
+        # 신규 생성은 create_xlsx 합성 도구가 담당하므로 이 경로는 점점 덜 쓰임.
+        created_workbook: Dict[str, Optional[str]] = {"path": None}
+
+        # Circuit breaker: 파일 생성 성공 후 추가 xlsx 도구 호출 전부 차단.
+        # Sonnet 4.6이 성공 응답을 받고도 의심하여 재호출/다른 도구 시도하는 behavior 방어.
+        # 한 번 "xlsx 생성 완료" 상태가 되면, 이후 쓰기 도구 호출은 전부 동일한
+        # 확정 메시지로 short-circuit하여 LLM이 최종 text 응답을 생성하도록 강제.
+        creation_done: Dict[str, Any] = {"file": None}
+        XLSX_WRITE_TOOLS = frozenset([
+            "create_xlsx",
+            "create_workbook",
+            "write_data_to_excel",
+            "apply_formula",
+            "format_range",
+            "merge_cells",
+            "unmerge_cells",
+            "create_worksheet",
+            "rename_worksheet",
+            "copy_worksheet",
+            "delete_worksheet",
+            "create_chart",
+            "create_pivot_table",
+            "create_table",
+            "insert_rows",
+            "insert_columns",
+            "delete_sheet_rows",
+            "delete_sheet_columns",
+            "copy_range",
+            "delete_range",
+        ])
 
         # 보안 래핑 대상: Excel 전용 도구만 (tavily_search 등 외부 도구는 제외)
         # MCP 도구는 전역 캐시되므로, 외부 도구를 래핑하면 다른 Worker에도 영향
@@ -371,8 +489,25 @@ Answer in Korean unless asked otherwise."""
                 _output_dir=str(XLSX_OUTPUT_DIR),
                 _tname=tool.name,
                 _redirected=redirected_files,
+                _user_id_for_archive=user_id,
+                _created=created_workbook,
+                _done=creation_done,
+                _write_tools=XLSX_WRITE_TOOLS,
                 **kwargs,
             ):
+                # Circuit breaker: 이미 xlsx 파일 생성이 완료된 상태에서 xlsx 쓰기 도구가
+                # 또 호출되면, 실제 실행 없이 확정 성공 메시지로 short-circuit.
+                # LLM이 성공을 의심하여 재호출/다른 도구 시도하는 behavior를 코드로 차단.
+                if _done.get("file") and _tname in _write_tools:
+                    done_file = _done["file"]
+                    print(f"[XlsxWorker] [CIRCUIT_BREAKER] {_tname} 호출 무효화 → 이미 생성됨: {Path(done_file).name}")
+                    return (
+                        f"✅ SUCCESS: 파일 생성이 이미 완료되었습니다.\n"
+                        f"- 파일명: {Path(done_file).name}\n"
+                        f"STOP: 추가 도구 호출이 필요하지 않습니다. "
+                        f"즉시 사용자에게 `**파일명:** {Path(done_file).name}` 형태로 안내하고 응답을 종료하세요."
+                    )
+
                 resolved_filepath = None
 
                 if isinstance(input_data, dict):
@@ -397,22 +532,19 @@ Answer in Korean unless asked otherwise."""
                             validated, _tname, _redirected, _output_dir
                         )
 
-                        # create_workbook 시 기존 파일 덮어쓰기 방지
+                        # create_workbook 중복 호출 차단 + 덮어쓰기 전 archive 백업
                         if _tname == "create_workbook":
-                            validated = _deduplicate_filepath(validated)
-
-                            # 중복 호출 가드: 이미 이 세션에서 워크북을 생성했으면 안내 반환
-                            if hasattr(secured_ainvoke, "_created_workbook_path"):
-                                prev = secured_ainvoke._created_workbook_path
-                                msg = (
-                                    f"✅ 워크북이 이미 '{Path(prev).name}'에 생성되어 있습니다. "
-                                    f"create_workbook은 성공했습니다. "
-                                    f"다음 단계: write_data_to_excel(filepath='{prev}', sheet_name='Sheet', data=[[헤더...],[행1...],[행2...]]) "
-                                    f"를 호출하세요."
+                            if _created.get("path"):
+                                prev = _created["path"]
+                                raw_msg = f"Created workbook at {prev}"
+                                print(f"[XlsxWorker] [GUARD] create_workbook 중복 호출 → 기존 파일 재확인: {Path(prev).name}")
+                                return _enrich_tool_result(
+                                    "create_workbook",
+                                    {"filepath": prev},
+                                    raw_msg,
                                 )
-                                print(f"[XlsxWorker] [GUARD] create_workbook 중복 호출 차단 → 기존 파일: {Path(prev).name}")
-                                return msg
-                            secured_ainvoke._created_workbook_path = validated
+                            _archive_previous_version(validated, _user_id_for_archive)
+                            _created["path"] = validated
 
                         target["filepath"] = validated
                         resolved_filepath = validated
@@ -426,6 +558,14 @@ Answer in Korean unless asked otherwise."""
                         async with lock:
                             print(f"[XlsxWorker] [LOCK] {_tname}: acquired lock for {Path(resolved_filepath).name}")
                             result = await _original(input_data, config, **kwargs)
+                            # create_workbook 성공 시 기본 시트명을 'Sheet'로 통일
+                            # (excel-mcp는 'Sheet1'로 만들지만 프롬프트는 'Sheet' 사용)
+                            if (
+                                _tname == "create_workbook"
+                                and isinstance(result, str)
+                                and not _is_error_response(result)
+                            ):
+                                _normalize_default_sheet_name(resolved_filepath)
                             print(f"[XlsxWorker] [LOCK] {_tname}: released lock for {Path(resolved_filepath).name}")
                     else:
                         result = await _original(input_data, config, **kwargs)
@@ -433,13 +573,23 @@ Answer in Korean unless asked otherwise."""
                     print(f"[XlsxWorker] [ERROR] {_tname}: {type(e).__name__}: {e}")
                     raise
 
-                # create_workbook 성공 시 다음 단계 안내 주입
-                if _tname == "create_workbook" and isinstance(result, str) and "Created" in result:
-                    result = (
-                        f"{result}\n\n"
-                        f"✅ 워크북 생성 완료. 이제 반드시 write_data_to_excel을 호출하여 "
-                        f"데이터를 입력하세요. sheet_name='Sheet' 사용."
-                    )
+                # 모든 쓰기 도구 성공 응답을 `✅ SUCCESS:` 표준 포맷으로 정규화
+                # (근본 문제: excel-mcp의 터스한 응답이 LLM 환각 유발 → 구조적 방어)
+                if isinstance(input_data, dict):
+                    target_args = input_data.get("args", input_data) if "args" in input_data else input_data
+                    if isinstance(target_args, dict):
+                        result = _enrich_tool_result(_tname, target_args, result)
+
+                # Circuit breaker 플래그 설정: create_xlsx 또는 write_data_to_excel이 성공하면
+                # 이후 xlsx 도구 호출을 전부 short-circuit 대상으로 만듦.
+                if (
+                    _tname in ("create_xlsx", "write_data_to_excel")
+                    and isinstance(result, str)
+                    and not _is_error_response(result)
+                    and resolved_filepath
+                ):
+                    _done["file"] = resolved_filepath
+                    print(f"[XlsxWorker] [DONE] xlsx 생성 완료 플래그 설정 → {Path(resolved_filepath).name}")
 
                 # 긴 도구 결과 잘라서 토큰 폭증 방지 (Approach A)
                 return _truncate_tool_result(result, _tname)
@@ -619,9 +769,63 @@ def _truncate_tool_result(
     return truncated + notice
 
 
+def _normalize_default_sheet_name(filepath: str) -> bool:
+    """`create_workbook` 직후 기본 시트 'Sheet1'을 'Sheet'로 rename.
+
+    근본 원인 (2026-04-20 3차 회고):
+      - `excel_mcp.workbook.create_workbook`의 sheet_name 기본값은 `"Sheet1"`
+      - 프롬프트/LLM은 `sheet_name='Sheet'`를 사용 (기존 컨벤션)
+      - write_data_to_excel이 'Sheet' 시트를 찾지 못해 **새로 생성** → 'Sheet1'(빈) + 'Sheet'(데이터) 공존
+      - LLM이 get_workbook_metadata로 확인 시 시트 2개 보여서 "이상함" 감지 → 환각
+
+    해결: create_workbook 직후 내부적으로 시트명을 'Sheet'로 통일.
+    LLM은 시트명 변환을 몰라도 되고, write_data는 정상 동작.
+    """
+    try:
+        import openpyxl
+        p = Path(filepath)
+        if not p.exists():
+            return False
+        wb = openpyxl.load_workbook(str(p))
+        renamed = False
+        if "Sheet1" in wb.sheetnames and "Sheet" not in wb.sheetnames:
+            wb["Sheet1"].title = "Sheet"
+            wb.save(str(p))
+            renamed = True
+            print(f"[XlsxWorker] [NORMALIZE_SHEET] '{p.name}': Sheet1 → Sheet")
+        wb.close()
+        return renamed
+    except Exception as e:
+        print(f"[XlsxWorker] [NORMALIZE_SHEET] 실패 (계속 진행): {e}")
+        return False
+
+
+def _archive_previous_version(filepath: str, user_id: str) -> None:
+    """`create_workbook`이 기존 파일을 덮어쓰기 전에 이전 버전을 archive로 백업.
+
+    이렇게 해야 DEDUP 제거 후에도 이전 파일이 복구 가능하다.
+    archive_file은 날짜/사용자별 디렉토리에 copy하므로 덮어쓰기 발생 시에도
+    같은 날 여러 번 생성된 파일은 마지막 버전만 archive에 남는 제약은 있음.
+    (완벽한 version history 요구 시 별도 스키마 필요 — 현재 범위 밖)
+    """
+    try:
+        p = Path(filepath)
+        if not p.exists():
+            return
+        from app.utils.file_archive import archive_file
+        archived = archive_file(str(p), user_id, file_type="xlsx")
+        if archived:
+            print(f"[XlsxWorker] [ARCHIVE_BEFORE_OVERWRITE] '{p.name}' → {archived}")
+    except Exception as e:
+        print(f"[XlsxWorker] [ARCHIVE_BEFORE_OVERWRITE] 백업 실패 (계속 진행): {e}")
+
+
 def _deduplicate_filepath(filepath: str) -> str:
     """
-    파일이 이미 존재하면 _1, _2 등 접미사를 붙여 중복 방지
+    [DEPRECATED 2026-04-20] — DEDUP이 LLM mental model을 파괴하여 제거됨.
+    함수 자체는 향후 다른 용도를 위해 유지.
+
+    파일이 이미 존재하면 _1, _2 등 접미사를 붙여 중복 방지.
 
     예: 매출보고서.xlsx → 매출보고서_1.xlsx → 매출보고서_2.xlsx
     """

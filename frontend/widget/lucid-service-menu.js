@@ -209,6 +209,11 @@
       a.href = item.url;
       a.target = '_blank';
       a.rel = 'noopener noreferrer';
+      a.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        window.open(item.url, '_blank', 'noopener,noreferrer');
+      });
       a.innerHTML =
         '<span class="lucid-sm-icon">' + getIcon(item.icon) + '</span>' +
         '<span>' + item.name + '</span>' +
@@ -266,6 +271,10 @@
 
   function openMenu() {
     isOpen = true;
+    // 루시드 챗봇이 열려있으면 닫기
+    if (global.LucidChat && typeof global.LucidChat.close === 'function') {
+      global.LucidChat.close();
+    }
     var gridIcon = button.querySelector('.lucid-sm-icon-grid');
     var closeIcon = button.querySelector('.lucid-sm-icon-close');
     gridIcon.style.display = 'none';

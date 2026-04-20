@@ -17,8 +17,8 @@ from app.services.workspace_service import WorkspaceService, get_workspace_servi
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# 최대 파일 크기 (10MB)
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+# 최대 파일 크기 (50MB)
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
 
 # In-memory status tracking (file_id -> dict)
 WORKSPACE_UPLOAD_STATUS = {}
@@ -256,11 +256,11 @@ async def upload_workspace_file(
         file_content = await file.read()
         file_size = len(file_content)
 
-        # 파일 크기 제한 (10MB)
+        # 파일 크기 제한 (50MB)
         if file_size > MAX_FILE_SIZE:
             raise HTTPException(
                 status_code=400,
-                detail=f"파일 크기는 10MB를 초과할 수 없습니다. (현재: {file_size / (1024*1024):.2f}MB)"
+                detail=f"파일 크기는 50MB를 초과할 수 없습니다. (현재: {file_size / (1024*1024):.2f}MB)"
             )
 
         # 2. File ID 미리 생성

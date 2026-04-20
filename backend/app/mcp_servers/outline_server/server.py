@@ -79,13 +79,15 @@ def _truncate(text: str, max_len: int = DOC_BODY_MAX_LENGTH) -> str:
 
 def _format_document_summary(doc: dict) -> dict:
     """문서 요약 정보 포맷"""
+    created_by_obj = doc.get("createdBy") or {}
     return {
         "id": doc.get("id", ""),
         "title": doc.get("title", "제목 없음"),
         "url": doc.get("url", ""),
         "updatedAt": doc.get("updatedAt", ""),
         "createdAt": doc.get("createdAt", ""),
-        "createdBy": doc.get("createdBy", {}).get("name", ""),
+        "createdBy": created_by_obj.get("name", ""),
+        "createdById": created_by_obj.get("id", ""),
         "collectionId": doc.get("collectionId", ""),
         "parentDocumentId": doc.get("parentDocumentId"),
         "revision": doc.get("revision", 0),
@@ -415,6 +417,7 @@ async def get_document(document_id: str) -> str:
     if not doc:
         return json.dumps({"error": "문서를 찾을 수 없습니다."}, ensure_ascii=False)
 
+    created_by_obj = doc.get("createdBy") or {}
     return json.dumps({
         "id": doc.get("id", ""),
         "title": doc.get("title", "제목 없음"),
@@ -422,7 +425,8 @@ async def get_document(document_id: str) -> str:
         "text": _truncate(doc.get("text", "")),
         "updatedAt": doc.get("updatedAt", ""),
         "createdAt": doc.get("createdAt", ""),
-        "createdBy": doc.get("createdBy", {}).get("name", ""),
+        "createdBy": created_by_obj.get("name", ""),
+        "createdById": created_by_obj.get("id", ""),
         "collectionId": doc.get("collectionId", ""),
         "parentDocumentId": doc.get("parentDocumentId"),
         "revision": doc.get("revision", 0),

@@ -39,6 +39,8 @@ import { Badge } from "@/components/ui/badge";
 
 import { workspaceApi, type Workspace, type WorkspaceFile, type UploadStatus } from "@/lib/api/workspaces";
 import { getUserId } from "@/lib/utils";
+import { WorkspaceAgentsTab } from "@/components/workspace-agents-tab";
+import { getWorkspaceAgentIds } from "@/lib/agent-store/workspace-agents";
 
 interface WorkspaceSettingsModalProps {
     open: boolean;
@@ -55,9 +57,10 @@ export function WorkspaceSettingsModal({
     onSaved,
     onDeleted,
 }: WorkspaceSettingsModalProps) {
-    const [activeTab, setActiveTab] = useState<"general" | "knowledge">("general");
+    const [activeTab, setActiveTab] = useState<"general" | "knowledge" | "agents">("general");
     const [isLoading, setIsLoading] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
+    const [attachedAgentCount, setAttachedAgentCount] = useState(0);
 
     // Radix UI bug workaround: nested AlertDialog inside Dialog can leave
     // pointer-events: none stuck on document.body after close
@@ -92,6 +95,7 @@ export function WorkspaceSettingsModal({
                 setDescription(workspace.description || "");
                 setInstructions(workspace.instructions || "");
                 loadFiles(workspace.uuid);
+                setAttachedAgentCount(getWorkspaceAgentIds(workspace.uuid).length);
             } else {
                 // Reset for create mode
                 setName("");
@@ -99,6 +103,7 @@ export function WorkspaceSettingsModal({
                 setInstructions("");
                 setFiles([]);
                 setActiveTab("general");
+                setAttachedAgentCount(0);
             }
         }
     }, [open, workspace]);
@@ -303,12 +308,41 @@ export function WorkspaceSettingsModal({
                                     </TooltipContent>
                                 )}
                             </Tooltip>
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <div className="w-full">
+                                        <Button
+                                            variant={activeTab === "agents" ? "secondary" : "ghost"}
+                                            className="justify-start w-full"
+                                            onClick={() => setActiveTab("agents")}
+                                            disabled={!workspace}
+                                        >
+                                            Agents
+                                            {attachedAgentCount > 0 && (
+                                                <Badge variant="secondary" className="ml-auto text-xs">
+                                                    {attachedAgentCount}
+                                                </Badge>
+                                            )}
+                                        </Button>
+                                    </div>
+                                </TooltipTrigger>
+                                {!workspace && (
+                                    <TooltipContent side="right">
+                                        <p>Save workspace first to attach agents</p>
+                                    </TooltipContent>
+                                )}
+                            </Tooltip>
                         </TooltipProvider>
                     </div>
 
                     {/* Content Area */}
                     <div className="flex-1 p-6 overflow-y-auto">
-                        {activeTab === "general" ? (
+                        {activeTab === "agents" && workspace ? (
+                            <WorkspaceAgentsTab
+                                workspaceUuid={workspace.uuid}
+                                onCountChange={setAttachedAgentCount}
+                            />
+                        ) : activeTab === "general" ? (
                             <div className="space-y-6">
                                 <div className="space-y-2">
                                     <Label htmlFor="name">Workspace Name</Label>

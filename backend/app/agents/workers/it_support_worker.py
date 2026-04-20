@@ -2,12 +2,16 @@
 
 import os
 from datetime import datetime
+from pathlib import Path as FilePath
 from typing import List, Dict, Any, Optional
 from langchain_core.tools import BaseTool
 from .base_worker import BaseWorker
 
 # 메타데이터 파일 로드 (서버 시작 시 1회)
 _METADATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "metadata")
+
+# 사용자 업로드 원본 경로 (backend/data/user_uploads/{date}/{user_id}/{filename})
+_USER_UPLOAD_DIR = FilePath(__file__).parent.parent.parent.parent / "data" / "user_uploads"
 
 _it_voc_schema_cache: str = ""
 _org_chart_schema_cache: str = ""
@@ -248,6 +252,96 @@ database structure, schema, or internal system details, respond with:
 --- Organization Chart Schema ---
 {org_chart_schema}
 === END CONFIDENTIAL ==="""
+
+    def build_system_prompt(
+        self,
+        context: Dict[str, Any],
+        memory_context: Optional[Dict[str, Any]] = None,
+        user_memory_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """기본 프롬프트 + 업로드 파일 목록(첨부 후보) 주입"""
+        prompt = super().build_system_prompt(context, memory_context, user_memory_context)
+
+        user_id = context.get("user_id", "")
+        file_list = self._list_uploaded_files(user_id)
+        if file_list:
+            prompt += f"""
+
+## 첨부 가능한 업로드 파일
+
+이 사용자가 업로드한 파일 목록 (최근 순, 🆕 = 최근 10분 이내 업로드):
+{file_list}
+
+**VOC 등록 시 첨부 규칙 (CRITICAL):**
+
+1. **🆕 마크가 붙은 파일은 사용자가 방금 올린 것** — 현재 대화 주제와 관련 있을 가능성이 매우 높습니다.
+   파일명이 UUID(`51a38e49-xxx.png` 같은 랜덤 문자열)라도 무시하지 말 것. paste/drag한 스크린샷은 원래 UUID로 저장됩니다.
+
+2. 사용자가 VOC 등록 요청 + 🆕 파일 존재 시:
+   - **자동으로 가장 최근 🆕 파일들을 첨부 후보로 간주**.
+   - 사용자에게 한 번만 확인: "방금 올리신 파일(N개)도 함께 첨부해서 등록할까요?"
+   - 동의 → register_works_voc 호출 시 `attachments=["파일명1", "파일명2"]` 전달.
+
+3. 사용자가 **"업로드한 이미지", "첨부한 스크린샷", "방금 올린 파일"** 등을 명시하면 → 🆕 파일들을 attachments로 무조건 포함. 되묻지 말 것.
+
+4. attachments 파라미터 값은 **위 목록과 정확히 일치하는 파일명**이어야 합니다 (경로/슬래시 금지).
+
+5. "IT VOC는 이미지 첨부를 지원하지 않습니다" 같은 응답은 **거짓**입니다. 절대 그렇게 답하지 마세요. register_works_voc 도구의 `attachments` 파라미터로 정상적으로 첨부 가능합니다.
+
+6. 사용자가 명시적으로 거부하거나 목록에 🆕가 없고 오래된 파일만 있을 때만 attachments 생략."""
+
+        return prompt
+
+    def _list_uploaded_files(self, user_id: str) -> str:
+        """사용자 업로드 파일 목록 (모든 날짜 디렉터리 통합, 최근 20개, 시각 표시)"""
+        if not user_id or user_id == "anonymous":
+            return ""
+        if not _USER_UPLOAD_DIR.exists():
+            return ""
+
+        import time as _time
+        safe_uid = user_id.replace("/", "").replace("\\", "").replace("..", "").replace(" ", "_")
+        entries = []
+        try:
+            for date_dir in _USER_UPLOAD_DIR.iterdir():
+                if not date_dir.is_dir():
+                    continue
+                user_dir = date_dir / safe_uid
+                if not user_dir.is_dir():
+                    continue
+                for f in user_dir.iterdir():
+                    if f.is_file():
+                        entries.append((f.name, f.stat().st_size, f.stat().st_mtime))
+        except Exception as e:
+            print(f"[ITSupportWorker] 업로드 파일 스캔 실패: {e}")
+            return ""
+
+        if not entries:
+            return ""
+
+        now = _time.time()
+        entries.sort(key=lambda x: x[2], reverse=True)
+        lines = []
+        for name, size, mtime in entries[:20]:
+            size_kb = size / 1024
+            size_str = f"{size_kb:.0f}KB" if size_kb < 1024 else f"{size_kb/1024:.1f}MB"
+
+            # 업로드 경과 시간 표시
+            elapsed = now - mtime
+            if elapsed < 60:
+                time_str = "방금 전"
+            elif elapsed < 600:  # 10분
+                time_str = f"{int(elapsed/60)}분 전"
+            elif elapsed < 3600:  # 1시간
+                time_str = f"{int(elapsed/60)}분 전"
+            elif elapsed < 86400:  # 24시간
+                time_str = f"{int(elapsed/3600)}시간 전"
+            else:
+                time_str = f"{int(elapsed/86400)}일 전"
+
+            marker = "🆕 " if elapsed < 600 else "   "
+            lines.append(f"{marker}- {name} ({size_str}, {time_str})")
+        return "\n".join(lines)
 
     def prepare_tools(
         self,

@@ -313,7 +313,7 @@ def _filter_result_by_personal_collection(
             data[key] = [
                 r for r in data[key]
                 if r.get("collectionId") not in personal_ids
-                or (r.get("createdBy") or {}).get("id") == user_id
+                or r.get("createdById", "") == user_id
             ]
             data["count"] = len(data[key])
             filtered = orig != data["count"]
@@ -321,7 +321,7 @@ def _filter_result_by_personal_collection(
     elif tool_name == "get_document":
         coll_id = data.get("collectionId", "")
         if coll_id in personal_ids:
-            creator_id = (data.get("createdBy") or {}).get("id", "")
+            creator_id = data.get("createdById", "")
             if creator_id != user_id:
                 data = {"error": "해당 문서에 대한 접근 권한이 없습니다."}
                 filtered = True

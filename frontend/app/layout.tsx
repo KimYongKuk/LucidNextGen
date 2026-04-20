@@ -6,6 +6,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { OnboardingProvider } from "@/components/onboarding/onboarding-provider";
 import { WhatsNewProvider } from "@/components/whats-new/whats-new-provider";
 import { NoticeToastProvider } from "@/components/notice-toast/notice-toast-provider";
+import { NotificationInboxProvider } from "@/components/notification-inbox/notification-inbox-provider";
 import { LunchboxRain } from "@/components/easter-egg/lunchbox-rain";
 
 import "./globals.css";
@@ -128,13 +129,15 @@ export default function RootLayout({
         >
           <OnboardingProvider>
             <WhatsNewProvider>
-              <Suspense>
-                <NoticeToastProvider>
-                  <Toaster position="top-center" />
-                  <LunchboxRain />
-                  {children}
-                </NoticeToastProvider>
-              </Suspense>
+              <NotificationInboxProvider>
+                <Suspense>
+                  <NoticeToastProvider>
+                    <Toaster position="top-center" />
+                    <LunchboxRain />
+                    {children}
+                  </NoticeToastProvider>
+                </Suspense>
+              </NotificationInboxProvider>
             </WhatsNewProvider>
           </OnboardingProvider>
         </ThemeProvider>

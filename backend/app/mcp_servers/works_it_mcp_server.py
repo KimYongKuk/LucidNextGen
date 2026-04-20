@@ -11,6 +11,8 @@ import os
 import asyncpg
 import re
 import httpx
+import mimetypes
+from pathlib import Path as FilePath
 from typing import Optional
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
@@ -57,6 +59,12 @@ SYSTEM_CODE_TO_DEPTS = {
 # 팀원/NULL은 제외하고 파트장/책임 직위만 배정 대상
 # 주의: "직책"(duty, 파트장/팀원)과 "직위"(position, 책임/선임)는 별개 필드
 ASSIGNEE_ALLOWED_POSITIONS = ("파트장", "책임")
+
+# 업로드 원본 디렉터리 (backend/data/user_uploads/{date}/{user_id}/{filename})
+USER_UPLOAD_DIR = FilePath(__file__).parent.parent.parent / "data" / "user_uploads"
+
+# Works 첨부 필드 ID (앱릿 934 / 1445 동일 구조 확인됨 — 다를 경우 env var로 override)
+WORKS_ATTACHMENT_FIELD = os.getenv("WORKS_ATTACHMENT_FIELD", "_14v07o8vj")
 
 # 전역 연결 풀
 _db_pool: Optional[asyncpg.Pool] = None
@@ -231,6 +239,144 @@ async def _transition_status(doc_id: int, action_id: int, cookies: dict) -> bool
     except Exception as e:
         print(f"[IT VOC MCP] 상태전환 오류 doc={doc_id} action={action_id}: {e}", file=sys.stderr)
         return False
+
+
+def _resolve_attachment_path(filename: str, user_id: str) -> Optional[FilePath]:
+    """업로드된 파일명을 USER_UPLOAD_DIR 하위 실제 경로로 resolve.
+
+    보안:
+    - 경로 구분자(/ \) 포함 금지
+    - .. 포함 금지
+    - USER_UPLOAD_DIR 하위 user_id 디렉터리 스코프로만 탐색
+    - 여러 날짜에 동일 파일명 존재 시 최근 mtime 우선
+    """
+    if not filename or not user_id:
+        return None
+    if any(sep in filename for sep in ("/", "\\")) or ".." in filename:
+        print(f"[IT VOC MCP] 첨부 경로 거부(탈출 시도): {filename}", file=sys.stderr)
+        return None
+
+    safe_uid = user_id.replace("/", "").replace("\\", "").replace("..", "").replace(" ", "_")
+    if not USER_UPLOAD_DIR.exists():
+        return None
+
+    candidates = []
+    for date_dir in USER_UPLOAD_DIR.iterdir():
+        if not date_dir.is_dir():
+            continue
+        user_dir = date_dir / safe_uid
+        if not user_dir.is_dir():
+            continue
+        cand = user_dir / filename
+        if cand.is_file():
+            candidates.append(cand)
+
+    if not candidates:
+        print(f"[IT VOC MCP] 첨부 파일 미발견: {filename} (user={safe_uid})", file=sys.stderr)
+        return None
+
+    # 최근 수정 파일 우선
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    resolved = candidates[0].resolve()
+    if not str(resolved).startswith(str(USER_UPLOAD_DIR.resolve())):
+        print(f"[IT VOC MCP] 첨부 경로 거부(범위 이탈): {resolved}", file=sys.stderr)
+        return None
+    return resolved
+
+
+def _dbg_log(msg: str):
+    """MCP stderr가 부모 프로세스에 안 찍힐 때를 대비한 파일 로그.
+    backend/data/logs/works_it_debug.log 에 append. 문제 해결 후 제거 가능.
+    """
+    try:
+        from datetime import datetime
+        log_dir = FilePath(__file__).parent.parent.parent / "data" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(log_dir / "works_it_debug.log", "a", encoding="utf-8") as f:
+            f.write(f"[{ts}] {msg}\n")
+    except Exception:
+        pass
+
+
+async def _upload_file_to_works(cookies: dict, file_path: FilePath) -> Optional[dict]:
+    """WORKS 내부 파일 업로드 API 호출.
+    Returns: {id, path, name, hostId} or None on failure.
+    """
+    gosso = cookies.get("GOSSOcookie") or cookies.get("gossocookie") or ""
+    file_name = file_path.name
+    mime, _ = mimetypes.guess_type(str(file_path))
+    if not mime:
+        mime = "application/octet-stream"
+
+    _dbg_log(f"UPLOAD START: file={file_name}, size={file_path.stat().st_size}B, mime={mime}, gosso_len={len(gosso)}, cookie_keys={list(cookies.keys())}, applet={WORKS_APPLET_ID}")
+
+    try:
+        with open(file_path, "rb") as f:
+            content = f.read()
+
+        async with httpx.AsyncClient(
+            base_url=LFON_BASE_URL, timeout=120, verify=False, follow_redirects=True,
+            cookies=cookies,
+        ) as client:
+            resp = await client.post(
+                f"/api/file?GOSSOcookie={gosso}",
+                files={"file": (file_name, content, mime)},
+                headers={
+                    "X-Requested-With": "XMLHttpRequest",
+                    "TimeZoneOffset": "540",
+                    "Referer": f"{LFON_BASE_URL}/app/works/applet/{WORKS_APPLET_ID}/doc/new/0",
+                },
+            )
+
+            _dbg_log(f"UPLOAD RESPONSE: status={resp.status_code}, headers={dict(resp.headers)}, body={resp.text[:800]}")
+
+            if resp.status_code != 200:
+                msg = f"파일 업로드 실패: {file_name} status={resp.status_code} body={resp.text[:300]}"
+                print(f"[IT VOC MCP] {msg}", file=sys.stderr)
+                _dbg_log(msg)
+                return None
+
+            try:
+                data = resp.json()
+            except Exception as je:
+                _dbg_log(f"JSON parse failed: {je} / raw: {resp.text[:300]}")
+                print(f"[IT VOC MCP] 파일 업로드 응답 JSON 파싱 실패: {je}", file=sys.stderr)
+                return None
+
+            # 응답이 배열로 감싸진 경우 첫 항목 사용
+            if isinstance(data, list) and data:
+                data = data[0]
+            if not isinstance(data, dict):
+                msg = f"파일 업로드 응답 형식 이상: {str(data)[:200]}"
+                print(f"[IT VOC MCP] {msg}", file=sys.stderr)
+                _dbg_log(msg)
+                return None
+
+            # 실제 응답 구조: {code, message, data: {hostId, fileName, filePath, ...}}
+            # VOC body의 _14v07o8vj 필드 포맷은 {id, path, name, hostId}이므로 매핑 필요
+            inner = data.get("data") if isinstance(data.get("data"), dict) else data
+
+            meta = {
+                "id": inner.get("id"),  # 신규 업로드 시엔 보통 None
+                "path": inner.get("filePath") or inner.get("path"),
+                "name": inner.get("fileName") or inner.get("name") or file_name,
+                "hostId": inner.get("hostId"),
+            }
+            if not meta["path"] or not meta["hostId"]:
+                msg = f"파일 업로드 응답 필드 누락: {meta} / full response keys={list(data.keys())}, inner keys={list(inner.keys()) if isinstance(inner, dict) else '?'}"
+                print(f"[IT VOC MCP] {msg}", file=sys.stderr)
+                _dbg_log(msg)
+                return None
+            print(f"[IT VOC MCP] 파일 업로드 성공: {file_name} → {meta['path']}", file=sys.stderr)
+            _dbg_log(f"UPLOAD SUCCESS: {file_name} → {meta}")
+            return meta
+    except Exception as e:
+        import traceback
+        msg = f"파일 업로드 오류: {file_name}: {e}\n{traceback.format_exc()}"
+        print(f"[IT VOC MCP] {msg}", file=sys.stderr)
+        _dbg_log(msg)
+        return None
 
 
 # SAP RFC Bridge 설정
@@ -490,6 +636,7 @@ async def register_works_voc(
     title: str,
     details: str,
     system_name: str = "",
+    attachments: Optional[list[str]] = None,
     employee_number: str = "auto",
 ) -> str:
     """WORKS 서비스데스크(앱릿 934)에 IT 지원 요청(VOC)을 등록합니다.
@@ -499,12 +646,13 @@ async def register_works_voc(
     title: 요청 요약 (1줄, 간결하게)
     details: 요청 상세 내용
     system_name: 관련 시스템명 (SAP, LFON, DLP, DRM, VPN, 네트워크, HW, SW, HR, EHS, MES, NAS, AD 등. 판단 불가 시 빈 문자열)
+    attachments: 첨부할 파일명 리스트 (현재 세션에 업로드된 파일명만. 경로 금지, 파일명만). 없으면 생략.
     employee_number: 시스템이 자동 주입. 호출 시 생략하거나 아무 값이나 넣으세요.
     """
     from datetime import datetime, timezone, timedelta
     KST = timezone(timedelta(hours=9))
 
-    print(f"\n[IT VOC MCP] WORKS VOC 등록 요청: employee={employee_number}, system={system_name}, title={title[:50]}", file=sys.stderr)
+    print(f"\n[IT VOC MCP] WORKS VOC 등록 요청: employee={employee_number}, system={system_name}, title={title[:50]}, attachments={attachments or []}", file=sys.stderr)
 
     # 1. 요청자 정보 조회
     requester = await _get_user_full_info(employee_number)
@@ -591,7 +739,30 @@ async def register_works_voc(
     if not cookies:
         # SSO 실패 시 OpenAPI 폴백 (담당자 없이)
         print("[IT VOC MCP] SSO 실패 → OpenAPI 폴백", file=sys.stderr)
+        if attachments:
+            print("[IT VOC MCP] OpenAPI 폴백은 첨부파일 미지원 — 첨부 생략됨", file=sys.stderr)
         return await _register_via_openapi(requester, title, details, system_name, system_code)
+
+    # 6-1. 첨부파일 선업로드 (/api/file) → metadata 수집
+    attachment_metas = []
+    attachment_warnings = []
+    if attachments:
+        # user_uploads 경로 스코프는 employee_number 기준
+        for fname in attachments:
+            path = _resolve_attachment_path(fname, employee_number)
+            if not path:
+                attachment_warnings.append(f"'{fname}' (파일을 찾을 수 없음)")
+                continue
+            meta = await _upload_file_to_works(cookies, path)
+            if meta:
+                attachment_metas.append(meta)
+            else:
+                attachment_warnings.append(f"'{fname}' (업로드 실패)")
+
+        if attachment_metas:
+            values[WORKS_ATTACHMENT_FIELD] = attachment_metas
+            payload[WORKS_ATTACHMENT_FIELD] = attachment_metas
+            print(f"[IT VOC MCP] 첨부 {len(attachment_metas)}개 embed 완료", file=sys.stderr)
 
     try:
         async with httpx.AsyncClient(
@@ -652,12 +823,20 @@ async def register_works_voc(
                 else:
                     print(f"[IT VOC MCP] doc_id를 응답에서 찾을 수 없음 (상태 전환 생략)", file=sys.stderr)
 
+                attach_line = ""
+                if attachment_metas:
+                    names = ", ".join(m["name"] for m in attachment_metas)
+                    attach_line = f"- 첨부파일: {names} ({len(attachment_metas)}개)\n"
+                if attachment_warnings:
+                    attach_line += f"- 첨부 제외: {', '.join(attachment_warnings)}\n"
+
                 return (
                     f"WORKS 서비스데스크에 등록이 완료되었습니다.\n"
                     f"- 요청자: {requester['name']} ({requester['dept_name']})\n"
                     f"- 제목: {title}\n"
                     f"- 시스템: {system_name or '기타'}\n"
                     f"- 담당부서: {'/'.join(dept_names_for_assign)} ({len(assignee_objs)}명 배정)\n"
+                    f"{attach_line}"
                     f"LFON WORKS에서 진행 상황을 확인하실 수 있습니다.\n"
                     f"\n{debug_keys}"
                 )

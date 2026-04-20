@@ -10,7 +10,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, ChevronRight, Sparkles } from "lucide-react";
+import { ChevronLeft, ChevronRight, Megaphone } from "lucide-react";
 import { OnboardingProgress } from "@/components/onboarding/onboarding-progress";
 import { WhatsNewSlide } from "./whats-new-slide";
 import { useWhatsNew } from "./whats-new-provider";
@@ -117,9 +117,9 @@ export function WhatsNewModal() {
         <DialogHeader className="flex-shrink-0 p-4 pb-0 md:p-6">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-blue-500" />
+              <Megaphone className="h-5 w-5 text-blue-500" />
               <DialogTitle className="text-lg font-semibold md:text-xl">
-                새 기능
+                공지사항
               </DialogTitle>
             </div>
           </div>

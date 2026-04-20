@@ -827,13 +827,38 @@ class ChromaDBService:
 
         return docs
 
-    def has_session_files(self, session_id: str) -> bool:
-        """세션에 업로드된 파일이 있는지 확인"""
+    def has_session_files(self, session_id: str, user_id: Optional[str] = None) -> bool:
+        """세션에 업로드된 파일이 있는지 확인.
+
+        ChromaDB 세션 컬렉션(문서 임베딩용)과 디스크 업로드(이미지 포함) 둘 다 체크.
+        - /api/upload/file: ChromaDB + 디스크
+        - /api/upload/image: 디스크만 (base64 반환 구조) → ChromaDB만 보면 누락됨
+        """
+        # 1) ChromaDB 세션 컬렉션 체크 (일반 파일)
         try:
             collection = self.get_collection("anonymous", session_id)
-            return collection.count() > 0
+            if collection.count() > 0:
+                return True
         except Exception:
-            return False
+            pass
+
+        # 2) 디스크 업로드 체크 (paste/drag 이미지, user_uploads/{date}/{user_id}/)
+        if user_id and user_id != "anonymous":
+            try:
+                from pathlib import Path as _FilePath
+                upload_root = _FilePath(__file__).parent.parent.parent / "data" / "user_uploads"
+                if upload_root.exists():
+                    safe_uid = user_id.replace("/", "").replace("\\", "").replace("..", "").replace(" ", "_")
+                    for date_dir in upload_root.iterdir():
+                        if not date_dir.is_dir():
+                            continue
+                        user_dir = date_dir / safe_uid
+                        if user_dir.is_dir() and any(user_dir.iterdir()):
+                            return True
+            except Exception:
+                pass
+
+        return False
 
     def get_session_file_names(self, session_id: str) -> List[str]:
         """세션에 업로드된 파일명 목록 반환 (중복 제거)"""

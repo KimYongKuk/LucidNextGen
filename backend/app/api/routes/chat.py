@@ -539,10 +539,11 @@ async def chat_stream(
                 yield f"data: {json.dumps({'type': 'processing_start'})}\n\n"
 
                 # 1. 파일 존재 여부 확인 (프롬프트 컨텍스트용)
+                # ChromaDB 세션 컬렉션 + 디스크 업로드(paste/drag 이미지) 둘 다 체크
                 has_files = False
                 if request.session_id:
                     check_start = time.time()
-                    has_files = chromadb.has_session_files(request.session_id)
+                    has_files = chromadb.has_session_files(request.session_id, request.user_id)
                     check_time = int((time.time() - check_start) * 1000)
                     print(f"[CHAT_STREAM] File check: {has_files} ({check_time}ms)")
 

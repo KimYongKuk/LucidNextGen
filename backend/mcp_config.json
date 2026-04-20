@@ -141,7 +141,16 @@
       "command": "C:\\Users\\Administrator\\AppData\\Local\\Programs\\Python\\Python313\\Scripts\\excel-mcp-server.exe",
       "args": ["stdio"],
       "transport": "stdio",
-      "description": "Excel(XLSX) 파일 생성/읽기/수정/서식/차트/피벗테이블",
+      "description": "Excel(XLSX) 파일 생성/읽기/수정/서식/차트/피벗테이블 (수정·편집 전용 — 신규 생성은 xlsx_simple 사용)",
+      "enabled": true
+    },
+    "xlsx_simple": {
+      "command": "python",
+      "args": [
+        "app/mcp_servers/xlsx_simple/server.py"
+      ],
+      "transport": "stdio",
+      "description": "엑셀(.xlsx) 파일을 단번에 생성하는 합성 도구 (신규 생성 전용, 단일 호출)",
       "enabled": true
     },
     "calendar_server": {

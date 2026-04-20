@@ -8,12 +8,13 @@ import { SidebarToggle } from "@/components/sidebar-toggle";
 import { Button } from "@/components/ui/button";
 import { PlusIcon } from "./icons";
 import { useSidebar } from "./ui/sidebar";
-import { Bell, Folder, Globe, HelpCircle, Moon, Sun, Shield, X } from "lucide-react";
+import { Bell, BookOpen, Folder, HelpCircle, Moon, Newspaper, Store, Sun, Shield, X } from "lucide-react";
 import Link from "next/link";
 import { getUserId, isAdminUser } from "@/lib/utils";
 import { useOnboarding } from "@/components/onboarding/onboarding-provider";
 import { useWhatsNew } from "@/components/whats-new/whats-new-provider";
 import { useNotifications } from "@/components/notice-toast/notice-toast-provider";
+import { useInbox } from "@/components/notification-inbox/notification-inbox-provider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import type { Workspace } from "@/lib/api/workspaces";
 
@@ -30,8 +31,10 @@ function PureChatHeader({
   const { open } = useSidebar();
   const { theme, setTheme } = useTheme();
   const { openOnboarding } = useOnboarding();
-  const { openWhatsNew, hasUnseenAnnouncements } = useWhatsNew();
+  const { hasUnseenAnnouncements } = useWhatsNew();
   const { openNotifications, hasData: hasNotifications } = useNotifications();
+  const { openInbox, unreadTotal } = useInbox();
+  const wikiUrl = process.env.NEXT_PUBLIC_WIKI_URL || "https://wiki.lnf.co.kr";
   const [isAdmin, setIsAdmin] = useState(false);
   useEffect(() => {
     setIsAdmin(isAdminUser(getUserId()));
@@ -116,12 +119,12 @@ function PureChatHeader({
               variant="ghost"
               size="icon"
             >
-              <Bell className="h-4 w-4" />
+              <Newspaper className="h-4 w-4" />
               <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-orange-500" />
-              <span className="sr-only">알림</span>
+              <span className="sr-only">데일리 브리핑</span>
             </Button>
           </TooltipTrigger>
-          <TooltipContent>실시간 알림</TooltipContent>
+          <TooltipContent>데일리 브리핑</TooltipContent>
         </Tooltip>
       )}
 
@@ -129,15 +132,49 @@ function PureChatHeader({
         <TooltipTrigger asChild>
           <Button
             className="relative order-5 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
-            onClick={openWhatsNew}
+            onClick={openInbox}
             variant="ghost"
             size="icon"
           >
-            <Globe className="h-4 w-4" />
-            {hasUnseenAnnouncements && (
+            <Bell className="h-4 w-4" />
+            {(unreadTotal > 0 || hasUnseenAnnouncements) && (
               <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-blue-500" />
             )}
-            <span className="sr-only">L&F WIKI</span>
+            <span className="sr-only">알림함</span>
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>알림함</TooltipContent>
+      </Tooltip>
+
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            asChild
+            className="order-6 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
+            variant="ghost"
+            size="icon"
+          >
+            <Link href="/agent-store">
+              <Store className="h-4 w-4" />
+              <span className="sr-only">Agent Store</span>
+            </Link>
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Agent Store</TooltipContent>
+      </Tooltip>
+
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            asChild
+            className="order-6 h-8 w-8 p-0 md:h-fit md:w-fit md:px-2"
+            variant="ghost"
+            size="icon"
+          >
+            <a href={wikiUrl} target="_blank" rel="noopener noreferrer">
+              <BookOpen className="h-4 w-4" />
+              <span className="sr-only">L&F WIKI</span>
+            </a>
           </Button>
         </TooltipTrigger>
         <TooltipContent>L&F WIKI</TooltipContent>
