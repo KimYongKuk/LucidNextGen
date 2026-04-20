@@ -1,0 +1,412 @@
+"use client";
+
+import { useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { motion } from "framer-motion";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import {
+  ArrowLeft,
+  BookOpen,
+  CalendarClock,
+  Check,
+  CheckCircle2,
+  Clock,
+  Cpu,
+  Database,
+  Download,
+  FileBarChart,
+  Hourglass,
+  Loader2,
+  MapPin,
+  MessageCircle,
+  MessageSquare,
+  Newspaper,
+  Play,
+  Receipt,
+  Shield,
+  Sparkles,
+  Tag,
+  TrendingUp,
+  User,
+  XCircle,
+  type LucideIcon,
+} from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { toast } from "sonner";
+import type { Agent, Capability, ExecutionHistory, Visibility } from "@/lib/agent-store/types";
+import {
+  CAPABILITY_COLORS,
+  CAPABILITY_HINTS,
+  CAPABILITY_LABELS,
+  STATUS_COLORS,
+  STATUS_LABELS,
+  VISIBILITY_HINTS,
+  VISIBILITY_LABELS,
+  getPrimaryCapabilityColor,
+} from "@/lib/agent-store/types";
+
+const iconMap: Record<string, LucideIcon> = {
+  MapPin,
+  FileBarChart,
+  BookOpen,
+  Receipt,
+  Database,
+  MessageCircle,
+  Shield,
+  TrendingUp,
+  Sparkles,
+  Newspaper,
+};
+
+const capabilityIconMap: Record<Capability, LucideIcon> = {
+  chat: MessageSquare,
+  run: Play,
+  scheduled: CalendarClock,
+  async: Hourglass,
+};
+
+interface AgentDetailContentProps {
+  agent: Agent;
+}
+
+export function AgentDetailContent({ agent: initialAgent }: AgentDetailContentProps) {
+  const router = useRouter();
+  const [agent, setAgent] = useState<Agent>(initialAgent);
+
+  const Icon = iconMap[agent.icon] ?? Sparkles;
+  const iconColor = getPrimaryCapabilityColor(agent.capabilities);
+  const isChat = agent.capabilities.includes("chat");
+  const disabled = agent.status !== "active";
+
+  const handleToggleInstall = () => {
+    setAgent((prev) => {
+      const next = !prev.isInstalled;
+      toast.success(next ? `'${prev.name}' 설치 완료` : `'${prev.name}' 제거`);
+      return {
+        ...prev,
+        isInstalled: next,
+        installCount: Math.max(0, prev.installCount + (next ? 1 : -1)),
+      };
+    });
+  };
+
+  const handleRun = () => {
+    toast.info("실제 실행 로직은 백엔드 연동 후 활성화됩니다.");
+  };
+
+  const runLabel = !agent.isInstalled
+    ? "설치 후 사용 가능"
+    : isChat
+      ? "대화 시작"
+      : "실행하기";
+
+  const RunIcon = isChat ? MessageSquare : Play;
+
+  return (
+    <TooltipProvider delayDuration={200}>
+      <div className="min-h-screen bg-background text-foreground">
+        <div className="mx-auto flex max-w-4xl flex-col gap-6 px-4 py-8 sm:px-6 lg:px-8">
+          <div>
+            <Button asChild variant="ghost" size="sm">
+              <Link href="/agent-store">
+                <ArrowLeft className="mr-1 h-4 w-4" />
+                Agent Store
+              </Link>
+            </Button>
+          </div>
+
+          <motion.header
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.25 }}
+            className="flex flex-col gap-5 border-b border-border pb-6"
+          >
+            <div className="flex items-start gap-4">
+              <div
+                className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl"
+                style={{ backgroundColor: `${iconColor}20` }}
+              >
+                <Icon className="h-8 w-8" style={{ color: iconColor }} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <VisibilityBadge visibility={agent.visibility} />
+                  <StatusChip status={agent.status} />
+                  <span className="font-mono text-xs text-muted-foreground">v{agent.version}</span>
+                </div>
+                <h1 className="text-2xl font-bold text-balance sm:text-3xl">{agent.name}</h1>
+                <p className="mt-2 text-sm leading-relaxed text-muted-foreground sm:text-base">
+                  {agent.description}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {agent.capabilities.map((cap) => (
+                <CapabilityPill key={cap} capability={cap} />
+              ))}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground">
+              <span className="flex items-center gap-1.5">
+                <User className="h-4 w-4" />
+                {agent.author.department} · {agent.author.name}
+              </span>
+              <span className="flex items-center gap-1.5">
+                <Cpu className="h-4 w-4" />
+                {agent.platform}
+              </span>
+              <span className="flex items-center gap-1.5">
+                <Download className="h-4 w-4" />
+                {agent.installCount.toLocaleString()}명 사용
+              </span>
+            </div>
+
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Button
+                type="button"
+                size="lg"
+                variant={agent.isInstalled ? "outline" : "default"}
+                onClick={handleToggleInstall}
+                disabled={disabled && !agent.isInstalled}
+                className="sm:w-44"
+              >
+                {agent.isInstalled ? (
+                  <>
+                    <Check className="mr-1.5 h-4 w-4" />
+                    설치됨 (제거)
+                  </>
+                ) : (
+                  <>
+                    <Download className="mr-1.5 h-4 w-4" />
+                    설치
+                  </>
+                )}
+              </Button>
+              <Button
+                type="button"
+                size="lg"
+                className="flex-1"
+                disabled={disabled || !agent.isInstalled}
+                onClick={handleRun}
+                style={{
+                  backgroundColor: disabled || !agent.isInstalled ? undefined : iconColor,
+                }}
+              >
+                <RunIcon className="mr-1.5 h-4 w-4" />
+                {runLabel}
+              </Button>
+            </div>
+          </motion.header>
+
+          <section>
+            <h2 className="mb-4 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              <BookOpen className="h-4 w-4" />
+              README
+            </h2>
+            <article className="prose prose-sm dark:prose-invert max-w-none">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  h2: ({ children }) => (
+                    <h2 className="mb-3 mt-6 text-xl font-bold text-foreground first:mt-0">
+                      {children}
+                    </h2>
+                  ),
+                  h3: ({ children }) => (
+                    <h3 className="mb-2 mt-4 text-base font-semibold text-foreground">{children}</h3>
+                  ),
+                  p: ({ children }) => (
+                    <p className="mb-3 text-sm leading-relaxed text-foreground/90">{children}</p>
+                  ),
+                  ul: ({ children }) => (
+                    <ul className="mb-3 list-inside list-disc space-y-1 text-sm text-foreground/90">
+                      {children}
+                    </ul>
+                  ),
+                  ol: ({ children }) => (
+                    <ol className="mb-3 list-inside list-decimal space-y-1 text-sm text-foreground/90">
+                      {children}
+                    </ol>
+                  ),
+                  li: ({ children }) => <li>{children}</li>,
+                  blockquote: ({ children }) => (
+                    <blockquote className="my-3 border-l-4 border-primary/50 bg-muted/30 py-2 pl-4 text-sm italic text-muted-foreground">
+                      {children}
+                    </blockquote>
+                  ),
+                  code: ({ children }) => (
+                    <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">
+                      {children}
+                    </code>
+                  ),
+                  hr: () => <hr className="my-6 border-border" />,
+                }}
+              >
+                {agent.fullDescription}
+              </ReactMarkdown>
+            </article>
+          </section>
+
+          {agent.tags && agent.tags.length > 0 ? (
+            <section>
+              <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                <Tag className="h-4 w-4" />
+                태그
+              </h2>
+              <div className="flex flex-wrap gap-1.5">
+                {agent.tags.map((tag) => (
+                  <Badge key={tag} variant="secondary" className="text-xs font-normal">
+                    #{tag}
+                  </Badge>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          {agent.parameters && agent.parameters.length > 0 ? (
+            <section>
+              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                입력 파라미터
+              </h2>
+              <div className="space-y-2">
+                {agent.parameters.map((p) => (
+                  <div
+                    key={p.name}
+                    className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3"
+                  >
+                    <code className="rounded bg-primary/15 px-2 py-0.5 font-mono text-xs text-primary">
+                      {p.name}
+                    </code>
+                    <div className="flex-1">
+                      <p className="text-sm text-foreground">{p.description}</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        타입: {p.type} {p.required ? "· 필수" : ""}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          <section>
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              최근 실행 이력
+            </h2>
+            {agent.executionHistory.length > 0 ? (
+              <div className="space-y-2">
+                {agent.executionHistory.slice(0, 10).map((h) => (
+                  <HistoryItem key={h.id} history={h} />
+                ))}
+              </div>
+            ) : (
+              <p className="rounded-lg bg-muted/30 py-6 text-center text-sm text-muted-foreground">
+                실행 이력이 없습니다
+              </p>
+            )}
+          </section>
+
+          <section className="rounded-lg border border-border bg-muted/20 p-4">
+            <h2 className="mb-2 text-sm font-semibold text-foreground">작성자 정보</h2>
+            <p className="text-sm text-muted-foreground">
+              <strong className="font-medium text-foreground">{agent.author.name}</strong> · {agent.author.department} ({agent.author.userId})
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              문의 및 개선 요청은 작성자에게 직접 연락해주세요.
+            </p>
+          </section>
+        </div>
+      </div>
+    </TooltipProvider>
+  );
+}
+
+function CapabilityPill({ capability }: { capability: Capability }) {
+  const Icon = capabilityIconMap[capability];
+  const color = CAPABILITY_COLORS[capability];
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium"
+          style={{
+            backgroundColor: `${color}15`,
+            color,
+            borderColor: `${color}40`,
+          }}
+        >
+          <Icon className="h-3.5 w-3.5" />
+          {CAPABILITY_LABELS[capability]}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{CAPABILITY_HINTS[capability]}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function VisibilityBadge({ visibility }: { visibility: Visibility }) {
+  const cls: Record<Visibility, string> = {
+    private: "border-zinc-400/40 bg-zinc-500/10 text-zinc-500 dark:text-zinc-400",
+    team: "border-violet-400/40 bg-violet-500/10 text-violet-600 dark:text-violet-400",
+    public: "border-emerald-400/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+  };
+  return (
+    <Badge
+      variant="outline"
+      className={`text-xs font-medium ${cls[visibility]}`}
+      title={VISIBILITY_HINTS[visibility]}
+    >
+      {VISIBILITY_LABELS[visibility]}
+    </Badge>
+  );
+}
+
+function StatusChip({ status }: { status: Agent["status"] }) {
+  return (
+    <span className="flex items-center gap-1.5 text-xs">
+      <span
+        className="h-2 w-2 rounded-full"
+        style={{ backgroundColor: STATUS_COLORS[status] }}
+      />
+      <span style={{ color: STATUS_COLORS[status] }}>{STATUS_LABELS[status]}</span>
+    </span>
+  );
+}
+
+function HistoryItem({ history }: { history: ExecutionHistory }) {
+  const cfg = {
+    success: { Icon: CheckCircle2, color: "#10B981" },
+    failed: { Icon: XCircle, color: "#EF4444" },
+    running: { Icon: Loader2, color: "#3B82F6" },
+  } as const;
+  const { Icon, color } = cfg[history.status];
+
+  return (
+    <div className="flex items-center gap-3 rounded-lg border border-border bg-muted/20 px-4 py-3">
+      <Icon
+        className={`h-4 w-4 ${history.status === "running" ? "animate-spin" : ""}`}
+        style={{ color }}
+      />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 text-sm">
+          <User className="h-3 w-3 text-muted-foreground" />
+          <span className="truncate">{history.user}</span>
+        </div>
+      </div>
+      <div className="text-right">
+        <div className="flex items-center gap-1 text-xs text-muted-foreground">
+          <Clock className="h-3 w-3" />
+          {history.timestamp}
+        </div>
+        {history.duration ? (
+          <p className="mt-0.5 text-xs text-muted-foreground">{history.duration}</p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
