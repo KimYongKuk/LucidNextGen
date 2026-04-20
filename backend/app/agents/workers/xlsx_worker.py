@@ -288,11 +288,16 @@ modify_xlsx(filepath="기존파일.xlsx", operations=[...])
 - 여러 op를 한 배열에 넣으면 **한 번의 호출로 원자적 적용** (중간 실패 시 파일 원본 유지).
 - "기존 시트 그대로 복사" 요청은 `copy_worksheet`를 쓰세요 (값만 복사하는 add_sheet와 달리 서식·수식까지 보존).
 
-## 결정 플로우 (중요)
+## 결정 플로우 (중요 — 순서대로 판정)
 1. **새 파일 요청** → `create_xlsx` (1번)
 2. **대화에 이전 테이블 데이터가 있는 수정 요청** → `create_xlsx`로 새로 생성 (덮어쓰기). 읽기 단계 불필요.
-3. **업로드된 파일 수정 (대화에 데이터 없음)** → (a) `get_workbook_metadata` → (b) `read_data_from_excel` → (c) `modify_xlsx`
-4. **서식·수식만 추가** → `modify_xlsx` 사용
+3. **시트 복사/백업/복제** (예: "시트 그대로 복사", "시트 복제", "같은 내용 시트 하나 더") →
+   (a) `get_workbook_metadata`로 원본 시트명 확인 → (b) **바로** `modify_xlsx(operations=[{"op":"copy_worksheet", "source":..., "target":...}])`.
+   **`read_data_from_excel` 호출 금지** — `copy_worksheet`가 내부에서 값·서식·수식·병합까지 전부 복사합니다.
+4. **시트 관리 전용** (추가/삭제/이름변경, 행/열 삽입·삭제, 서식, 수식, 병합, 차트, 피벗) → 데이터 내용을 참조하지 않는 경우:
+   (a) `get_workbook_metadata`로 시트명 확인 → (b) 바로 `modify_xlsx`. read_data_from_excel 스킵.
+5. **기존 값을 참조해야 하는 수정** (예: "C열 합계 수식", "현재 값의 10% 추가") →
+   (a) `get_workbook_metadata` → (b) `read_data_from_excel` → (c) `modify_xlsx`
 
 ## 파일
 {available_files}
@@ -814,9 +819,15 @@ def _truncate_tool_result(
     original_len = len(text)
     truncated = text[:max_chars].rstrip()
 
-    notice = f"\n\n... ⚠️ 결과가 길어 처음 {max_chars:,}자만 표시합니다 (전체 {original_len:,}자)."
+    notice = (
+        f"\n\n(참고: 응답이 길어 프리뷰는 {max_chars:,}자까지만 표시됩니다. 전체 데이터는 {original_len:,}자로 "
+        f"파일에 정상적으로 존재합니다. 이는 오류가 아닙니다.)"
+    )
     if tool_name == "read_data_from_excel":
-        notice += " 전체 데이터에 수식을 적용하려면 apply_formula를 사용하세요."
+        notice += (
+            " modify_xlsx 도구는 이 제약 없이 파일 전체를 직접 처리하므로, 필요한 operations를 "
+            "그대로 호출하세요."
+        )
 
     print(f"[XlsxWorker] [TRUNCATE] {tool_name}: {original_len:,}자 → {max_chars:,}자로 잘림")
     return truncated + notice
