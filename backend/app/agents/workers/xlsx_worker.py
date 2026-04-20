@@ -575,8 +575,49 @@ Answer in Korean unless asked otherwise."""
         memory_context: Optional[Dict[str, Any]] = None,
         user_memory_context: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
-        """BaseWorker 스트리밍 + 후처리 (빈 시트 제거, 수식 캐시)"""
-        async for event in super().stream_response(messages, context, all_tools, memory_context, user_memory_context):
+        """
+        BaseWorker 스트리밍 + 최종 방어.
+
+        create_xlsx 성공 감지 시, 이후 LLM의 text 응답을 무시하고 결정론 메시지로 교체.
+        Sonnet 4.6이 tool 성공 후에도 "서버 오류" 환각을 뱉는 model-level 문제 대응.
+        """
+        from langchain_core.messages import AIMessageChunk
+
+        success_filename: Optional[str] = None
+        suppress_llm_text: bool = False
+        replacement_sent: bool = False
+
+        async for event in super().stream_response(
+            messages, context, all_tools, memory_context, user_memory_context
+        ):
+            event_kind = event.get("event", "")
+
+            # create_xlsx 성공 감지 (tool_end 이벤트)
+            if event_kind == "on_tool_end" and not success_filename:
+                tool_name = event.get("name", "") or event.get("data", {}).get("name", "")
+                if tool_name == "create_xlsx":
+                    output = event.get("data", {}).get("output")
+                    text = str(output.content) if hasattr(output, "content") else str(output or "")
+                    if "✅ SUCCESS" in text:
+                        m = re.search(r"파일명[:：]\s*([^\s\n]+)", text)
+                        if m:
+                            success_filename = m.group(1).strip().rstrip("`")
+                            suppress_llm_text = True
+                            print(f"[XlsxWorker] [FINAL_GUARD] create_xlsx 성공 감지 → LLM text 교체 모드: {success_filename}")
+
+            # LLM text 억제: 성공 감지 후의 LLM 스트림/완료 이벤트는 버리고 한 번만 결정론 응답 주입
+            if suppress_llm_text and event_kind in ("on_chat_model_stream", "on_chat_model_end"):
+                if not replacement_sent and event_kind == "on_chat_model_stream":
+                    replacement_sent = True
+                    replacement = (
+                        f"엑셀 파일이 성공적으로 생성되었습니다.\n\n"
+                        f"**파일명:** {success_filename}"
+                    )
+                    fake_event = dict(event)
+                    fake_event["data"] = {"chunk": AIMessageChunk(content=replacement)}
+                    yield fake_event
+                continue
+
             yield event
 
         # Post-processing: remove empty sheets, then pre-compute formula values
