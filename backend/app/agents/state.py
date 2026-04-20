@@ -1,5 +1,6 @@
 """A2A 에이전트 공유 상태 정의"""
 
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import TypedDict, List, Dict, Any, Optional, Annotated
 from langchain_core.messages import BaseMessage
@@ -93,8 +94,12 @@ class AgentState(TypedDict):
     metadata: Dict[str, Any]
 
 
-class RequestContext(TypedDict):
-    """요청 컨텍스트 (chat.py에서 전달)"""
+class RequestContext(TypedDict, total=False):
+    """요청 컨텍스트 (chat.py에서 전달)
+
+    total=False: 모든 필드가 optional. Planner-Executor 경로에서는 task_goal이 추가되고,
+    기존 경로는 task_goal 없이 동작 (하위 호환).
+    """
     session_id: Optional[str]
     user_id: str
     workspace_id: Optional[str]  # UUID string
@@ -108,3 +113,118 @@ class RequestContext(TypedDict):
     has_session_xlsx: bool  # 세션에 xlsx 파일이 업로드되었는지 여부 (인텐트 분류용)
     chat_mode: str
     gosso_cookie: Optional[str]  # 사용자 LFON GOSSOcookie (캘린더 API 사용자 인증용)
+
+    # Planner-Executor 경로 전용 필드 (PLANNER_ENABLED=true일 때만 주입)
+    task_goal: Optional[str]             # 현재 워커가 처리할 sub-task 목표 (한 줄)
+    task_id: Optional[str]                # 현재 task의 id (블랙보드 참조용)
+    task_dependencies: Optional[Dict[str, str]]  # 선행 task 결과 맵 {task_id: result}
+
+
+# ============================================================
+# Planner-Executor 아키텍처 전용 타입 (2026-04-20 도입)
+# ============================================================
+
+class TaskStatus(str, Enum):
+    """Task 실행 상태"""
+    PENDING = "pending"                   # 아직 시작 안 함
+    RUNNING = "running"                   # 실행 중
+    DONE = "done"                         # 성공 완료
+    FAILED = "failed"                     # 실행 실패
+    SKIPPED = "skipped"                   # 의존 task 실패/거부로 건너뜀
+    AWAITING_CONFIRM = "awaiting_confirm" # 사용자 승인 대기 중
+
+
+@dataclass
+class Task:
+    """단일 sub-task 정의 (Planner 출력 단위, Executor 실행 단위)
+
+    Planner가 사용자 요청을 분해하여 생성. Executor가 depends를 기반으로
+    위상정렬하여 병렬/순차 실행.
+    """
+    id: str                          # "t1", "t2" ... (Plan 내 유일)
+    worker: str                      # INTENT_TO_WORKER 매핑에 사용될 intent 값 (예: "mail", "calendar")
+    goal: str                        # 워커가 받을 목표 (한 줄, 구체적)
+    depends: List[str] = field(default_factory=list)  # 선행 task id 목록
+    needs_confirm: bool = False      # 쓰기 작업 등 사용자 승인 필요 여부
+
+    # 실행 결과 (Executor가 채움)
+    status: TaskStatus = TaskStatus.PENDING
+    result: Optional[str] = None     # 성공 시 워커 출력 텍스트
+    error: Optional[str] = None      # 실패 시 에러 메시지
+    started_at: Optional[float] = None
+    completed_at: Optional[float] = None
+
+    def is_ready(self, completed_task_ids: set) -> bool:
+        """모든 선행 task가 완료되었으면 실행 가능"""
+        return all(dep in completed_task_ids for dep in self.depends)
+
+    def elapsed_ms(self) -> Optional[int]:
+        """실행 소요 시간 (밀리초)"""
+        if self.started_at is None or self.completed_at is None:
+            return None
+        return int((self.completed_at - self.started_at) * 1000)
+
+
+@dataclass
+class Plan:
+    """Planner의 출력 — 사용자 요청을 분해한 Task DAG
+
+    is_trivial=True면 단일 task의 단순 요청 (기존 경로와 동등).
+    Executor는 tasks를 위상정렬하여 depends 만족된 것부터 실행.
+    """
+    tasks: List[Task] = field(default_factory=list)
+    rationale: str = ""              # Planner가 왜 이렇게 쪼갰는지 (디버그/로그용)
+    is_trivial: bool = False         # True면 단일 단순 task → 기존 경로 우회 가능
+
+    def get_task(self, task_id: str) -> Optional[Task]:
+        for t in self.tasks:
+            if t.id == task_id:
+                return t
+        return None
+
+    def get_ready_tasks(self, completed_ids: set) -> List[Task]:
+        """실행 준비된 PENDING task들 반환 (병렬 실행 후보)"""
+        return [t for t in self.tasks
+                if t.status == TaskStatus.PENDING and t.is_ready(completed_ids)]
+
+    def validate(self) -> Optional[str]:
+        """DAG 유효성 검증. 문제 시 에러 메시지 반환, OK면 None.
+
+        - task id 중복 검사
+        - 존재하지 않는 depends 참조 검사
+        - 순환 의존성 검사 (DFS)
+        """
+        ids = [t.id for t in self.tasks]
+        if len(ids) != len(set(ids)):
+            return f"Duplicate task ids: {ids}"
+
+        id_set = set(ids)
+        for t in self.tasks:
+            for dep in t.depends:
+                if dep not in id_set:
+                    return f"Task '{t.id}' depends on unknown task '{dep}'"
+
+        # 순환 감지 (DFS white/gray/black)
+        WHITE, GRAY, BLACK = 0, 1, 2
+        color = {tid: WHITE for tid in id_set}
+        task_map = {t.id: t for t in self.tasks}
+
+        def visit(tid: str) -> Optional[str]:
+            if color[tid] == GRAY:
+                return f"Cycle detected at task '{tid}'"
+            if color[tid] == BLACK:
+                return None
+            color[tid] = GRAY
+            for dep in task_map[tid].depends:
+                err = visit(dep)
+                if err:
+                    return err
+            color[tid] = BLACK
+            return None
+
+        for tid in id_set:
+            err = visit(tid)
+            if err:
+                return err
+
+        return None

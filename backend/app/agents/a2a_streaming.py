@@ -449,6 +449,28 @@ async def stream_a2a_response(
                 yield f"data: {json.dumps({'type': 'timing', 'step': 'orchestrator', 'timing': event})}\n\n"
                 continue
 
+            # Planner-Executor CoT 이벤트 — task 실행 중 LLM 생각/내레이션 노출
+            if event_type == "task_thinking":
+                # Level 1: 워커 LLM의 pre-tool reasoning 텍스트
+                tid = event.get("task_id", "?")
+                content = event.get("content", "")
+                if content:
+                    yield f"data: {json.dumps({'type': 'task_thinking', 'task_id': tid, 'content': content}, ensure_ascii=False)}\n\n"
+                continue
+
+            if event_type == "task_narration":
+                # Level 2: Haiku narrator가 생성한 도구 호출 내레이션
+                tid = event.get("_task_id") or event.get("task_id") or "?"
+                content = event.get("content", "")
+                if content:
+                    yield f"data: {json.dumps({'type': 'tool_status', 'tool': event.get('tool', ''), 'message': content, 'task_id': tid}, ensure_ascii=False)}\n\n"
+                continue
+
+            # Executor가 emit하는 task 진행 이벤트들 (프론트 UI 업데이트용)
+            if event_type in ("task_started", "task_completed", "task_failed", "task_skipped", "task_awaiting_confirm", "executor_done"):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                continue
+
             # 토큰 사용량 수집
             if event_type == "token_usage":
                 total_input_tokens += event.get("input_tokens", 0)

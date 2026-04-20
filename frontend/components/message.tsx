@@ -15,6 +15,7 @@ import { DocumentToolResult } from "./document";
 import { DocumentPreview } from "./document-preview";
 import { MessageContent } from "./elements/message";
 import { Response } from "./elements/response";
+import { TaskCoTTimeline } from "./task-cot-timeline";
 import {
   Tool,
   ToolContent,
@@ -143,6 +144,14 @@ const PurePreviewMessage = ({
                 />
               ))}
             </div>
+          )}
+
+          {/* Planner-Executor CoT 타임라인 (assistant 메시지만) */}
+          {message.role === "assistant" && message.taskCoTs && Object.keys(message.taskCoTs).length > 0 && (
+            <TaskCoTTimeline
+              taskCoTs={message.taskCoTs}
+              isDone={!isLoading}
+            />
           )}
 
           {message.parts?.map((part, index) => {
@@ -385,6 +394,10 @@ export const PreviewMessage = memo(
       return false;
     }
     if (!equal(prevProps.message.parts, nextProps.message.parts)) {
+      return false;
+    }
+    // Planner-Executor CoT 타임라인 변경 시 리렌더 (task_thinking/narration stream)
+    if (!equal((prevProps.message as any).taskCoTs, (nextProps.message as any).taskCoTs)) {
       return false;
     }
     if (!equal(prevProps.vote, nextProps.vote)) {

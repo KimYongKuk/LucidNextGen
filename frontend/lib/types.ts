@@ -115,6 +115,29 @@ export type CustomUIDataTypes = {
   "corp-sources": { sources: CorpSource[] };
 };
 
+// Planner-Executor CoT 이벤트 (병렬 task 실행 중 LLM 생각/내레이션 시각화용)
+export type TaskCoTStatus =
+  | 'started'
+  | 'completed'
+  | 'failed'
+  | 'skipped'
+  | 'awaiting_confirm';
+
+export type TaskCoTEvent =
+  | { kind: 'thinking'; content: string; ts: number }
+  | { kind: 'narration'; tool: string; content: string; ts: number };
+
+export type TaskCoT = {
+  task_id: string;
+  worker: string;
+  goal: string;
+  events: TaskCoTEvent[];
+  status: TaskCoTStatus;
+  elapsed_ms?: number;
+  result_preview?: string;
+  error?: string;
+};
+
 export type ChatMessage = UIMessage<
   MessageMetadata,
   CustomUIDataTypes,
@@ -125,6 +148,7 @@ export type ChatMessage = UIMessage<
   corpSources?: CorpSource[]; // History에서 복원된 사내 문서 출처
   createdAt?: Date;
   workerName?: string; // Intent 분류 결과 워커 이름 (아티팩트 감지 조건부 실행용)
+  taskCoTs?: Record<string, TaskCoT>; // Planner-Executor 경로 CoT 타임라인 (task_id별)
 };
 
 export type Attachment = {

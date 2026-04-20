@@ -1,5 +1,6 @@
 """Orchestrator Agent - A2A 아키텍처의 핵심 라우터"""
 
+import asyncio
 import json
 import re
 import time
@@ -105,8 +106,45 @@ class Orchestrator:
         print(f"\n[ORCHESTRATOR] ===== A2A Pipeline Start =====")
         print(f"[ORCHESTRATOR] Message: {message[:50]}...")
 
+        # Phase 1.0: Planner-Executor 경로 (PLANNER_ENABLED=true 시)
+        # 복합 요청은 신 경로(Planner→Executor→Synthesizer),
+        # trivial은 classifier 스킵 지름길 (Planner의 worker 직접 사용),
+        # 예외 발생 시에만 레거시 classifier 경로 폴백
+        trivial_shortcut = None
+        from app.agents.planner import is_planner_enabled as _planner_enabled
+        if _planner_enabled():
+            used_new_path = False
+            async for ev in self._run_planner_executor(
+                message, context, all_tools,
+                memory_context, user_memory_context,
+                message_history,
+            ):
+                if ev is None:
+                    # sentinel: 완전 폴백 (Planner 실패/예외)
+                    break
+                if isinstance(ev, dict) and ev.get("_trivial_shortcut"):
+                    trivial_shortcut = ev
+                    break
+                used_new_path = True
+                yield ev
+            if used_new_path:
+                return  # 신 경로 완료 — 레거시 경로 스킵
+
         previous_intent = context.get("previous_intent")
-        primary_intent, fallback_intent = await self.classifier.classify(message, context, message_history, previous_intent)
+
+        if trivial_shortcut:
+            # Planner가 이미 worker 결정했으므로 classifier 호출 생략
+            tw = trivial_shortcut.get("worker_value", "direct")
+            matched = None
+            for _i in Intent:
+                if _i.value == tw:
+                    matched = _i
+                    break
+            primary_intent = matched or Intent.DIRECT
+            fallback_intent = None
+            print(f"[ORCHESTRATOR] classifier 스킵 (trivial shortcut) → intent={primary_intent.value}")
+        else:
+            primary_intent, fallback_intent = await self.classifier.classify(message, context, message_history, previous_intent)
         intent = primary_intent
 
         # outline_embed 모드: 기본적으로 OUTLINE, 단순 인사/잡담만 DIRECT
@@ -416,6 +454,102 @@ class Orchestrator:
         if workspace_fallback_time:
             timing_event["workspace_fallback_ms"] = workspace_fallback_time
         yield timing_event
+
+    @staticmethod
+    async def _run_planner_executor(
+        message: str,
+        context: RequestContext,
+        all_tools,
+        memory_context,
+        user_memory_context,
+        message_history=None,
+    ):
+        """Planner → Executor → Synthesizer 신 경로 실행
+
+        Yields 신 경로 이벤트들. 끝나기 전에 `None`을 yield하면 호출자는 레거시 경로로 폴백.
+
+        폴백 조건:
+        - Planner 실패 (PlannerFallback 등)
+        - plan.is_trivial=True (단순 요청은 레거시 경로가 효율적)
+        """
+        from app.agents.planner import get_planner, PlannerFallback
+        from app.agents.executor import get_executor
+        from app.agents.synthesizer import get_synthesizer
+        from app.agents.blackboard import Blackboard
+
+        pipeline_start = time.time()
+
+        # Planner 호출 (message_history 포함 — 짧은 수락 응답 맥락 복원용)
+        try:
+            planner = get_planner()
+            plan = await planner.plan(message, context, message_history=message_history)
+        except PlannerFallback as e:
+            print(f"[ORCHESTRATOR] Planner fallback → 레거시 경로 사용: {e}")
+            yield None  # fallback signal
+            return
+        except Exception as e:
+            print(f"[ORCHESTRATOR] Planner unexpected error → 레거시 경로 사용: {type(e).__name__}: {e}")
+            yield None
+            return
+
+        plan_ms = int((time.time() - pipeline_start) * 1000)
+
+        if plan.is_trivial:
+            # Planner가 이미 worker를 결정했으므로 classifier 생략 신호
+            trivial_worker = plan.tasks[0].worker if plan.tasks else "direct"
+            trivial_goal = plan.tasks[0].goal if plan.tasks else ""
+            print(f"[ORCHESTRATOR] Planner is_trivial=true → classifier 스킵, worker={trivial_worker} ({plan_ms}ms)")
+            yield {
+                "_trivial_shortcut": True,
+                "worker_value": trivial_worker,
+                "goal": trivial_goal,
+                "plan_ms": plan_ms,
+            }
+            return
+
+        print(f"[ORCHESTRATOR] Planner completed ({plan_ms}ms) — {len(plan.tasks)} tasks, 신 경로 진입")
+
+        # intent_classified 이벤트 (프론트 호환)
+        yield {
+            "type": "intent_classified",
+            "intent": "planner",
+            "worker": "Planner-Executor",
+            "timing_ms": plan_ms,
+            "plan_tasks": len(plan.tasks),
+            "plan_rationale": plan.rationale,
+        }
+
+        # Executor 실행
+        executor = get_executor()
+        blackboard = Blackboard()
+        executor_start = time.time()
+
+        async for event in executor.execute(
+            plan, context, all_tools, blackboard,
+            memory_context, user_memory_context,
+        ):
+            yield event
+
+        executor_ms = int((time.time() - executor_start) * 1000)
+
+        # Synthesizer 실행 — Blackboard 결과를 최종 응답으로 합성
+        synthesizer_start = time.time()
+        synthesizer = get_synthesizer()
+        async for event in synthesizer.synthesize(message, plan, blackboard, context):
+            yield event
+
+        synthesizer_ms = int((time.time() - synthesizer_start) * 1000)
+
+        total_ms = int((time.time() - pipeline_start) * 1000)
+        print(f"[ORCHESTRATOR] Planner-Executor 완료 — plan={plan_ms}ms, exec={executor_ms}ms, synth={synthesizer_ms}ms, total={total_ms}ms")
+
+        yield {
+            "type": "orchestrator_timing",
+            "classify_ms": plan_ms,
+            "executor_ms": executor_ms,
+            "synthesizer_ms": synthesizer_ms,
+            "total_ms": total_ms,
+        }
 
     @staticmethod
     def _extract_text(event: Dict[str, Any]) -> str:

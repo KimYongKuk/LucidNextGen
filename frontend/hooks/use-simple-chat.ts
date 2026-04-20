@@ -328,6 +328,125 @@ export function useSimpleChat({
                     workerName = data.worker;
                   }
 
+                  // Planner-Executor CoT 이벤트 처리 — taskCoTs 누적
+                  const mergeTaskCoT = (taskId: string, updater: (prev: any) => any) => {
+                    setMessages(prev => prev.map(msg => {
+                      if (msg.id !== assistantMessageId) return msg;
+                      const prevCoTs = (msg as any).taskCoTs || {};
+                      const existing = prevCoTs[taskId] || {
+                        task_id: taskId,
+                        worker: '',
+                        goal: '',
+                        events: [],
+                        status: 'started',
+                      };
+                      return { ...msg, taskCoTs: { ...prevCoTs, [taskId]: updater(existing) } };
+                    }));
+                  };
+
+                  if (data.type === 'task_started' && data.task_id) {
+                    mergeTaskCoT(data.task_id, (prev) => ({
+                      ...prev,
+                      worker: data.worker || prev.worker,
+                      goal: data.goal || prev.goal,
+                      status: 'started',
+                    }));
+                  }
+
+                  if (data.type === 'task_thinking' && data.task_id && data.content) {
+                    // pre-tool reasoning chunk 누적
+                    mergeTaskCoT(data.task_id, (prev) => {
+                      // 마지막 이벤트가 thinking이면 이어붙이기 (chunk 병합으로 이벤트 수 억제)
+                      const events = [...prev.events];
+                      const last = events[events.length - 1];
+                      if (last && last.kind === 'thinking') {
+                        events[events.length - 1] = {
+                          ...last,
+                          content: last.content + data.content,
+                        };
+                      } else {
+                        events.push({ kind: 'thinking', content: data.content, ts: Date.now() });
+                      }
+                      return { ...prev, events };
+                    });
+                  }
+
+                  // executor_done 이벤트 수신 시 — 모든 thinking 이벤트 정제
+                  // (HTML 코멘트 마커 제거, 과도 공백 축약)
+                  if (data.type === 'executor_done') {
+                    setMessages(prev => prev.map(msg => {
+                      if (msg.id !== assistantMessageId) return msg;
+                      const prevCoTs = (msg as any).taskCoTs || {};
+                      const cleanedCoTs: any = {};
+                      for (const [tid, cot] of Object.entries(prevCoTs)) {
+                        const c: any = cot;
+                        cleanedCoTs[tid] = {
+                          ...c,
+                          events: (c.events || []).map((ev: any) => {
+                            if (ev.kind !== 'thinking') return ev;
+                            // <!--FOLLOW_UP:...-->, <!--HANDOFF:...-->, <!--NO_RESULTS--> 등 마커 제거
+                            let cleaned = ev.content.replace(/<!--[A-Z_]+:?[^>]*-->/g, '');
+                            // 3줄 이상 연속 공백 → 2줄로 축약
+                            cleaned = cleaned.replace(/\n{3,}/g, '\n\n').trim();
+                            return { ...ev, content: cleaned };
+                          }).filter((ev: any) => {
+                            // 내용이 완전히 빈 thinking 이벤트는 제거
+                            if (ev.kind === 'thinking') return ev.content.trim().length > 0;
+                            return true;
+                          }),
+                        };
+                      }
+                      return { ...msg, taskCoTs: cleanedCoTs };
+                    }));
+                  }
+
+                  if (data.type === 'tool_status' && data.task_id) {
+                    // task_narration으로 온 tool_status (Haiku 내레이션)
+                    mergeTaskCoT(data.task_id, (prev) => ({
+                      ...prev,
+                      events: [
+                        ...prev.events,
+                        { kind: 'narration', tool: data.tool || '', content: data.message || '', ts: Date.now() },
+                      ],
+                    }));
+                    // 기존 전역 tool_status도 그대로 표시 (inline __TOOL_STATUS__ 마커) → 계속 아래 기존 핸들러 흘러가도록
+                  }
+
+                  if (data.type === 'task_completed' && data.task_id) {
+                    mergeTaskCoT(data.task_id, (prev) => ({
+                      ...prev,
+                      status: 'completed',
+                      elapsed_ms: data.elapsed_ms,
+                      result_preview: data.result_preview,
+                    }));
+                  }
+
+                  if (data.type === 'task_failed' && data.task_id) {
+                    mergeTaskCoT(data.task_id, (prev) => ({
+                      ...prev,
+                      status: 'failed',
+                      elapsed_ms: data.elapsed_ms,
+                      error: data.error,
+                    }));
+                  }
+
+                  if (data.type === 'task_skipped' && data.task_id) {
+                    mergeTaskCoT(data.task_id, (prev) => ({
+                      ...prev,
+                      status: 'skipped',
+                      error: data.reason,
+                    }));
+                  }
+
+                  if (data.type === 'task_awaiting_confirm' && data.task_id) {
+                    mergeTaskCoT(data.task_id, (prev) => ({
+                      ...prev,
+                      worker: data.worker || prev.worker,
+                      goal: data.goal || prev.goal,
+                      status: 'awaiting_confirm',
+                    }));
+                  }
+
                   // Follow-up suggestions 처리
                   if (data.type === 'follow_up_suggestions' && data.suggestions) {
                     setFollowUpSuggestions(data.suggestions);
