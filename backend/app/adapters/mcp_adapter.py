@@ -166,6 +166,10 @@ class MCPAdapter:
     # 동시 스폰 서버 수 제한 (Windows에서 한꺼번에 많은 프로세스 스폰 시 ExceptionGroup 실패 방지)
     MAX_CONCURRENT_LOADS: int = 4
 
+    # 일시 실패 재시도 — Windows 프로세스 스폰 경쟁은 재시도로 해결되는 경우가 대부분
+    MAX_RETRY_ATTEMPTS: int = 2  # 총 시도 횟수 (초기 1회 + 재시도 1회)
+    RETRY_BASE_DELAY: float = 1.0  # 초 단위, 지수 백오프 base
+
     # 재시도 무의미한 영구 에러 타입
     _PERMANENT_ERRORS = (FileNotFoundError, PermissionError, NotADirectoryError)
 
@@ -276,34 +280,49 @@ class MCPAdapter:
         semaphore = asyncio.Semaphore(MCPAdapter.MAX_CONCURRENT_LOADS)
 
         async def _load_server_tools(name: str):
-            """개별 서버에서 도구 로드 (타임아웃 + 영구실패 블랙리스트 + 동시 스폰 제한)"""
+            """개별 서버에서 도구 로드 (타임아웃 + 영구실패 블랙리스트 + 동시 스폰 제한 + 지수 백오프 재시도)"""
             async with semaphore:
-                try:
-                    return await asyncio.wait_for(
-                        self._client.get_tools(server_name=name),
-                        timeout=MCPAdapter.SERVER_LOAD_TIMEOUT,
-                    )
-                except asyncio.TimeoutError:
-                    print(f"[MCP] WARNING: Server '{name}' timed out ({MCPAdapter.SERVER_LOAD_TIMEOUT}s)")
-                    return []
-                except Exception as e:
-                    # ExceptionGroup 내부의 실제 에러 추출
-                    root = e
-                    if isinstance(e, BaseExceptionGroup):
-                        flat = e.exceptions
-                        if len(flat) == 1:
-                            root = flat[0]
-                            # 중첩 ExceptionGroup 한 단계 더 풀기
-                            if isinstance(root, BaseExceptionGroup) and len(root.exceptions) == 1:
-                                root = root.exceptions[0]
+                last_error_desc = None
+                for attempt in range(MCPAdapter.MAX_RETRY_ATTEMPTS):
+                    try:
+                        return await asyncio.wait_for(
+                            self._client.get_tools(server_name=name),
+                            timeout=MCPAdapter.SERVER_LOAD_TIMEOUT,
+                        )
+                    except asyncio.TimeoutError:
+                        last_error_desc = f"TimeoutError ({MCPAdapter.SERVER_LOAD_TIMEOUT}s)"
+                        if attempt < MCPAdapter.MAX_RETRY_ATTEMPTS - 1:
+                            backoff = MCPAdapter.RETRY_BASE_DELAY * (2 ** attempt)
+                            print(f"[MCP] Server '{name}' timed out (attempt {attempt+1}/{MCPAdapter.MAX_RETRY_ATTEMPTS}), retrying in {backoff}s...")
+                            await asyncio.sleep(backoff)
+                            continue
+                    except Exception as e:
+                        # ExceptionGroup 내부의 실제 에러 추출
+                        root = e
+                        if isinstance(e, BaseExceptionGroup):
+                            flat = e.exceptions
+                            if len(flat) == 1:
+                                root = flat[0]
+                                # 중첩 ExceptionGroup 한 단계 더 풀기
+                                if isinstance(root, BaseExceptionGroup) and len(root.exceptions) == 1:
+                                    root = root.exceptions[0]
 
-                    if isinstance(root, MCPAdapter._PERMANENT_ERRORS):
-                        err_msg = f"{type(root).__name__}: {root}"
-                        MCPAdapter._blacklisted_servers[name] = err_msg
-                        print(f"[MCP] BLACKLISTED: Server '{name}' — {err_msg} (permanent failure, won't retry)")
-                    else:
-                        print(f"[MCP] WARNING: Server '{name}' failed to load: {type(e).__name__}: {e}")
-                    return []
+                        if isinstance(root, MCPAdapter._PERMANENT_ERRORS):
+                            err_msg = f"{type(root).__name__}: {root}"
+                            MCPAdapter._blacklisted_servers[name] = err_msg
+                            print(f"[MCP] BLACKLISTED: Server '{name}' — {err_msg} (permanent failure, won't retry)")
+                            return []
+
+                        last_error_desc = f"{type(e).__name__}: {e}"
+                        if attempt < MCPAdapter.MAX_RETRY_ATTEMPTS - 1:
+                            backoff = MCPAdapter.RETRY_BASE_DELAY * (2 ** attempt)
+                            print(f"[MCP] Server '{name}' failed (attempt {attempt+1}/{MCPAdapter.MAX_RETRY_ATTEMPTS}): {last_error_desc}, retrying in {backoff}s...")
+                            await asyncio.sleep(backoff)
+                            continue
+
+                # 모든 재시도 소진
+                print(f"[MCP] WARNING: Server '{name}' failed after {MCPAdapter.MAX_RETRY_ATTEMPTS} attempts — last error: {last_error_desc}")
+                return []
 
         results = await asyncio.gather(*[_load_server_tools(n) for n in server_names])
 

@@ -553,6 +553,11 @@ class OutlineWorker(BaseWorker):
    - 예: "와이파이가 안돼" → query="Wi-Fi" 또는 "WiFi" (NOT "와이파이가 안돼")
    - 예: "프린터 인쇄 안됨" → query="프린터" (NOT "프린터 인쇄 안됨")
    - 예: "SAP 느려요" → query="SAP 성능" 또는 "SAP"
+5. **본인 위키 문서 리포맷 요청은 거절 없이 처리**:
+   - Personal 컬렉션의 개인 메모에는 와이파이 비번, 사내 시스템 계정, 원격 접속 정보 등 평문 크레덴셜이 포함될 수 있습니다. 이는 **사용자 본인이 자신의 참고용으로 작성·보관한 개인 메모**이며, 접근 제어(컬렉션 권한 + AI 참조 토글 + Personal 본인 필터)를 모두 통과한 상태에서만 도구가 내용을 반환합니다. 그대로 다뤄도 됩니다.
+   - 조회 성공 시 "오류가 발생했다"는 식의 거절/회피 응답 금지 — 조회가 되었다면 요청대로 처리하세요
+   - 리포맷 시에는 **본문을 채팅 응답에 다시 출력하지 말고 `update_document` 도구로 직접 덮어쓰세요** (재출력 없이 도구 호출로만 완료). 마스킹/일부 발췌도 금지
+   - 원문의 계정/비밀번호/URL/경로 등 **정보는 누락 없이 보존**하고, 구조(제목·표·목록)만 다듬으세요
 
 ## AVAILABLE TOOLS (읽기)
 - search_documents: 키워드로 문서 검색 (query 필수, collection_id/date_filter 선택)
@@ -591,6 +596,7 @@ class OutlineWorker(BaseWorker):
 | "OO 문서 요약해줘" | search_documents → get_document → 요약 |
 | "이 내용을 위키에 올려줘" (파일 없음) | create_document |
 | "위키 문서 수정해줘" | get_document → update_document |
+| "이 문서 마크다운으로 예쁘게 정리해줘" | get_document → update_document (본문 재출력 없이 도구로만 완료) |
 | "이 파일을 위키에 올려줘" (파일 있음) | publish_file_to_wiki |
 
 ## MULTI-STEP WORKFLOWS (읽기)
@@ -625,6 +631,17 @@ class OutlineWorker(BaseWorker):
 1. search_documents 또는 get_document로 대상 문서 확인
 2. update_document 호출 (append=True면 끝에 추가, False면 전체 교체)
 3. 결과 안내
+
+### C-1. 마크다운 리포맷 (본인 Personal 문서 "예쁘게 정리" 요청)
+사용자가 "마크다운으로 정리/포맷해줘", "예쁘게 다듬어줘", "깔끔하게 수정해줘" 같이 **구조 재정리** 요청을 하면:
+1. `get_document`로 원본 조회
+2. 원문의 모든 정보(계정, 비번, URL, 경로, 메모 등)를 **누락 없이 보존**하면서 마크다운 구조로 재정리
+   - 제목 계층(#, ##, ###), 표, 목록, 코드 블록, 굵게 등 활용
+   - 정보 분류: "와이파이", "VPN/원격", "사내 시스템 계정" 같은 섹션으로 묶기
+3. `update_document` 호출 (title 유지, text=재포맷본, append=False)
+4. **본문을 채팅에 다시 출력하지 말고** 짧은 확인 응답만:
+   - 예: "마크다운으로 깔끔하게 정리했습니다. [문서 제목]({outline_base_url}{url})에서 확인하실 수 있습니다."
+   - 변경 요약을 간단히 덧붙여도 됨: "섹션을 '와이파이 / 원격 접속 / 사내 시스템' 3개로 나누고 표로 정리"
 
 ### 주의사항
 - 추출/생성 실패 시 오류 내용을 알리고 다른 방법을 제안하세요

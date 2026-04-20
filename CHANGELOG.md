@@ -5,7 +5,14 @@
 
 ---
 
+## [2026-04-20]
+- **수정** [OutlineWorker] 본인 Personal 위키 문서 리포맷 거절 회피 — Sonnet이 `get_document`로 본인 Personal 문서(와이파이 비번·사내 계정 등 평문 크레덴셜 포함) 본문을 정상 수신하고도 안전 거절로 "문서 조회 오류" 위장 응답하던 문제. 시스템 프롬프트에 "본인 Personal 문서는 접근 제어를 모두 통과했으므로 그대로 처리", "리포맷 시 본문 재출력 없이 `update_document`로만 완료" 규칙 추가 → [상세](docs/history/2026-04-20_OutlineWorker-Personal-리포맷.md)
+- **수정** [MCP Adapter] 일시 실패 서버 지수 백오프 재시도 — Windows 프로세스 스폰 경쟁으로 `calendar_server, reservation_server` 등 다수 서버가 한꺼번에 transient fail → 도구 누락으로 CalendarWorker가 4개 도구만 받는 장애 발생. `_load_server_tools`에 `MAX_RETRY_ATTEMPTS=2` + `RETRY_BASE_DELAY=1.0s` 지수 백오프 재시도 추가. 영구 에러(`FileNotFoundError` 등)는 기존대로 블랙리스트 직행 → [상세](docs/history/2026-04-20_MCP-스폰-재시도.md)
+
+---
+
 ## [2026-04-17]
+- **추가** [AgentStore/Workspace/Inbox] AI Hub 격상 1차 FE 구현 — Agent Store 페이지(`/agent-store` + README 상세), Workspace 설정에 "Agents" 탭(P1 · localStorage 매핑), 헤더 알림 아이콘 3분할(📰 데일리 브리핑 / 🔔 알림함 드로어 / 📖 WIKI 외부링크), WhatsNew "새 기능"→"공지사항" 리브랜딩, capability 다중 태그 체계(💬⚡📅⏳) 확정 → [상세](docs/history/2026-04-17_AgentStore_Workspace_Inbox.md)
 - **수정** [Frontend/Sidebar] 워크스페이스 컨텍스트 유지 — 워크스페이스 내 채팅 클릭 시 `/chat/[id]`로 이동하면서 `workspace_id` 쿼리가 사라져 사이드바가 전체 리스트로 되돌아가던 버그. `SidebarHistoryItem` Link에 workspace_id 쿼리 포함 + `Chat` 마운트 시 `replaceState`로 URL 동기화 → [상세](docs/history/2026-04-17_워크스페이스-컨텍스트-유지.md)
 - **수정** [SAP RFC Bridge] 다중 시스템 지원 (DEV+PRD) — `SAPConnectionPool`을 시스템별 dict 구조로 전환, `.env`를 `SAP_DEV_*`/`SAP_PRD_*` 접두사 분리, `/rfc/call`·`/rfc/ping`·`/rfc/password-init`에 `system` 필드 추가, `reset_sap_password` MCP 도구와 ITSupportWorker 시스템 프롬프트에 dev/prd 선택 로직 반영, PRD IP 172.16.3.147로 보정 → [상세](docs/history/2026-04-17_SAP-RFC-Bridge-다중시스템.md)
 - **수정** [PDF] `create_document_pdf` italic 폰트 미등록 버그 — `Undefined font: malgungothicI` 오류로 subtitle 포함 PDF 생성 실패 → MalgunGothic에 `I`/`BI` 스타일을 regular/bold로 폴백 등록, 2차 증상(LLM이 docx 성공에도 "전체 도구 오류" 오응답)도 함께 해소 → [상세](docs/history/2026-04-17_PDF-italic-font-fix.md)
