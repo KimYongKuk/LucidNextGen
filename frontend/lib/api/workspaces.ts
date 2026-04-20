@@ -7,6 +7,7 @@ export interface Workspace {
     name: string;
     description?: string;
     instructions?: string;
+    is_public?: boolean;
     created_at: string;
     updated_at: string;
 }
@@ -16,12 +17,14 @@ export interface WorkspaceCreate {
     name: string;
     description?: string;
     instructions?: string;
+    is_public?: boolean;
 }
 
 export interface WorkspaceUpdate {
     name?: string;
     description?: string;
     instructions?: string;
+    is_public?: boolean;
 }
 
 export interface WorkspaceFile {
@@ -46,6 +49,11 @@ const BASE_URL = '/api/v1/workspaces';
 export const workspaceApi = {
     list: async (userId: string): Promise<Workspace[]> => {
         const response = await fetchWithErrorHandlers(`${BASE_URL}?user_id=${userId}`);
+        return response.json();
+    },
+
+    listPublic: async (): Promise<Workspace[]> => {
+        const response = await fetchWithErrorHandlers(`${BASE_URL}/public`);
         return response.json();
     },
 

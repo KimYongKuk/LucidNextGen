@@ -5,6 +5,7 @@
 워크스페이스 생성, 조회, 수정, 삭제 및 파일 관리 엔드포인트를 제공합니다.
 """
 import logging
+import os
 import uuid
 import asyncio
 from typing import List, Optional
@@ -20,6 +21,19 @@ logger = logging.getLogger(__name__)
 # 최대 파일 크기 (50MB)
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
 
+# 공용 워크스페이스를 생성/전환할 수 있는 운영자 사번 (기본 A2304013)
+# 프론트엔드의 NEXT_PUBLIC_OPERATOR_USERS와 동일한 의미를 백엔드에서 강제함
+_OPERATOR_USERS = [
+    u.strip()
+    for u in os.getenv("OPERATOR_USER_IDS", "A2304013").split(",")
+    if u.strip()
+]
+
+
+def _is_operator(user_id: Optional[str]) -> bool:
+    return bool(user_id) and user_id in _OPERATOR_USERS
+
+
 # In-memory status tracking (file_id -> dict)
 WORKSPACE_UPLOAD_STATUS = {}
 
@@ -32,11 +46,13 @@ class WorkspaceCreate(BaseModel):
     name: str
     description: Optional[str] = None
     instructions: Optional[str] = None
+    is_public: Optional[bool] = False
 
 class WorkspaceUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     instructions: Optional[str] = None
+    is_public: Optional[bool] = None
 
 class WorkspaceResponse(BaseModel):
     id: int
@@ -45,6 +61,7 @@ class WorkspaceResponse(BaseModel):
     name: str
     description: Optional[str] = None
     instructions: Optional[str] = None
+    is_public: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -81,21 +98,34 @@ async def list_workspaces(
     user_id: str = Query(..., description="User ID"),
     service: WorkspaceService = Depends(get_workspace_service)
 ):
-    """사용자의 모든 워크스페이스 목록 조회"""
+    """사용자의 모든 워크스페이스 목록 조회 (본인 소유만)"""
     return service.get_workspaces(user_id)
+
+@router.get("/v1/workspaces/public", response_model=List[WorkspaceResponse])
+async def list_public_workspaces(
+    service: WorkspaceService = Depends(get_workspace_service)
+):
+    """공용 워크스페이스 목록 조회 (모든 사용자에게 노출)"""
+    return service.get_public_workspaces()
 
 @router.post("/v1/workspaces", response_model=WorkspaceResponse)
 async def create_workspace(
     workspace: WorkspaceCreate,
     service: WorkspaceService = Depends(get_workspace_service)
 ):
-    """새 워크스페이스 생성"""
+    """새 워크스페이스 생성 (is_public=True 는 운영자만)"""
     try:
+        is_public = bool(workspace.is_public) and _is_operator(workspace.user_id)
+        if workspace.is_public and not is_public:
+            logger.warning(
+                f"Non-operator user {workspace.user_id} attempted to create public workspace; forcing is_public=False"
+            )
         return service.create_workspace(
             user_id=workspace.user_id,
             name=workspace.name,
             description=workspace.description,
-            instructions=workspace.instructions
+            instructions=workspace.instructions,
+            is_public=is_public,
         )
     except Exception as e:
         logger.error(f"Failed to create workspace: {e}")
@@ -107,11 +137,11 @@ async def get_workspace(
     user_id: str = Query(..., description="User ID for ownership verification"),
     service: WorkspaceService = Depends(get_workspace_service)
 ):
-    """UUID로 워크스페이스 조회 (소유권 검증)"""
+    """UUID로 워크스페이스 조회 (소유자 또는 공용 워크스페이스면 허용)"""
     workspace = service.get_workspace_by_uuid(workspace_uuid)
     if not workspace:
         raise HTTPException(status_code=404, detail="Workspace not found")
-    if workspace["user_id"] != user_id:
+    if workspace["user_id"] != user_id and not workspace.get("is_public"):
         raise HTTPException(status_code=403, detail="Access denied")
     return workspace
 
@@ -122,7 +152,7 @@ async def update_workspace(
     user_id: str = Query(..., description="User ID for ownership verification"),
     service: WorkspaceService = Depends(get_workspace_service)
 ):
-    """워크스페이스 메타데이터 업데이트 (소유권 검증)"""
+    """워크스페이스 메타데이터 업데이트 (소유자만, is_public 전환은 운영자만)"""
     # 소유권 검증
     workspace = service.get_workspace_by_uuid(workspace_uuid)
     if not workspace:
@@ -130,11 +160,17 @@ async def update_workspace(
     if workspace["user_id"] != user_id:
         raise HTTPException(status_code=403, detail="Access denied")
 
+    # is_public 전환은 운영자만 허용
+    is_public = update_data.is_public
+    if is_public is not None and not _is_operator(user_id):
+        raise HTTPException(status_code=403, detail="Only operators can toggle public workspace")
+
     success = service.update_workspace(
         workspace_id=workspace["id"],
         name=update_data.name,
         description=update_data.description,
-        instructions=update_data.instructions
+        instructions=update_data.instructions,
+        is_public=is_public,
     )
     if not success:
         raise HTTPException(status_code=404, detail="Workspace not found or no changes made")
@@ -338,12 +374,11 @@ async def list_workspace_files(
     user_id: str = Query(..., description="User ID for ownership verification"),
     service: WorkspaceService = Depends(get_workspace_service)
 ):
-    """워크스페이스의 파일 목록 조회 (소유권 검증)"""
-    # 소유권 검증
+    """워크스페이스의 파일 목록 조회 (소유자 또는 공용 워크스페이스면 허용)"""
     workspace = service.get_workspace_by_uuid(workspace_uuid)
     if not workspace:
         raise HTTPException(status_code=404, detail="Workspace not found")
-    if workspace["user_id"] != user_id:
+    if workspace["user_id"] != user_id and not workspace.get("is_public"):
         raise HTTPException(status_code=403, detail="Access denied")
 
     return service.list_files(workspace["id"])

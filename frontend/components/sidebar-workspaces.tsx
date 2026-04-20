@@ -3,7 +3,7 @@
 import { useState } from "react";
 import useSWR from "swr";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Plus, Settings, Folder, ChevronRight, ChevronDown } from "lucide-react";
+import { Plus, Settings, Folder, Globe, ChevronRight, ChevronDown } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -29,19 +29,30 @@ export function SidebarWorkspaces() {
     const searchParams = useSearchParams();
     const currentWorkspaceId = searchParams.get("workspace_id");
 
-    const [isOpen, setIsOpen] = useState(true);
+    const [isMyOpen, setIsMyOpen] = useState(true);
+    const [isPublicOpen, setIsPublicOpen] = useState(true);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | null>(null);
 
     const userId = getUserId() ?? "";
 
-    const { data: workspaces, mutate } = useSWR<Workspace[]>(
+    const { data: myWorkspaces, mutate: mutateMy } = useSWR<Workspace[]>(
         userId ? `/api/v1/workspaces?user_id=${userId}` : null,
         () => workspaceApi.list(userId)
     );
 
+    const { data: publicWorkspaces, mutate: mutatePublic } = useSWR<Workspace[]>(
+        `/api/v1/workspaces/public`,
+        () => workspaceApi.listPublic()
+    );
+
+    const refreshAll = () => {
+        mutateMy();
+        mutatePublic();
+    };
+
     const handleCreateClick = (e: React.MouseEvent) => {
-        e.stopPropagation(); // Prevent toggling collapsible
+        e.stopPropagation();
         setSelectedWorkspace(null);
         setIsModalOpen(true);
     };
@@ -54,19 +65,19 @@ export function SidebarWorkspaces() {
     };
 
     const handleWorkspaceClick = (workspace: Workspace) => {
-        // Navigate to new chat with workspace context (using UUID for security)
         router.push(`/?workspace_id=${workspace.uuid}`);
         router.refresh();
     };
 
     return (
         <>
-            <Collapsible open={isOpen} onOpenChange={setIsOpen} className="group/collapsible">
+            {/* 내 워크스페이스 */}
+            <Collapsible open={isMyOpen} onOpenChange={setIsMyOpen} className="group/collapsible">
                 <SidebarGroup>
                     <SidebarGroupLabel className="group/label flex items-center justify-between pr-0">
                         <CollapsibleTrigger className="flex flex-1 items-center gap-2 text-sm font-medium">
-                            {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                            My Workspace
+                            {isMyOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                            내 워크스페이스
                         </CollapsibleTrigger>
                         <Button
                             variant="ghost"
@@ -81,14 +92,18 @@ export function SidebarWorkspaces() {
                     <CollapsibleContent>
                         <SidebarGroupContent>
                             <SidebarMenu>
-                                {workspaces?.map((workspace) => (
+                                {myWorkspaces?.map((workspace) => (
                                     <SidebarMenuItem key={workspace.uuid}>
                                         <SidebarMenuButton
                                             isActive={currentWorkspaceId === workspace.uuid}
                                             onClick={() => handleWorkspaceClick(workspace)}
                                             className="group/item"
                                         >
-                                            <Folder className="h-4 w-4 text-muted-foreground" />
+                                            {workspace.is_public ? (
+                                                <Globe className="h-4 w-4 text-muted-foreground" />
+                                            ) : (
+                                                <Folder className="h-4 w-4 text-muted-foreground" />
+                                            )}
                                             <span>{workspace.name}</span>
                                         </SidebarMenuButton>
                                         <SidebarMenuAction
@@ -101,9 +116,9 @@ export function SidebarWorkspaces() {
                                     </SidebarMenuItem>
                                 ))}
 
-                                {(!workspaces || workspaces.length === 0) && (
+                                {(!myWorkspaces || myWorkspaces.length === 0) && (
                                     <div className="px-4 py-2 text-xs text-muted-foreground">
-                                        No workspaces yet. Click + to create one.
+                                        워크스페이스가 없습니다. + 버튼으로 생성하세요.
                                     </div>
                                 )}
                             </SidebarMenu>
@@ -112,14 +127,50 @@ export function SidebarWorkspaces() {
                 </SidebarGroup>
             </Collapsible>
 
+            {/* 공용 워크스페이스 (항상 노출) */}
+            <Collapsible open={isPublicOpen} onOpenChange={setIsPublicOpen} className="group/collapsible">
+                <SidebarGroup>
+                    <SidebarGroupLabel className="group/label flex items-center justify-between pr-0">
+                        <CollapsibleTrigger className="flex flex-1 items-center gap-2 text-sm font-medium">
+                            {isPublicOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                            공용 워크스페이스
+                        </CollapsibleTrigger>
+                    </SidebarGroupLabel>
+                    <CollapsibleContent>
+                        <SidebarGroupContent>
+                            <SidebarMenu>
+                                {publicWorkspaces?.map((workspace) => (
+                                    <SidebarMenuItem key={`public-${workspace.uuid}`}>
+                                        <SidebarMenuButton
+                                            isActive={currentWorkspaceId === workspace.uuid}
+                                            onClick={() => handleWorkspaceClick(workspace)}
+                                            className="group/item"
+                                        >
+                                            <Globe className="h-4 w-4 text-muted-foreground" />
+                                            <span>{workspace.name}</span>
+                                        </SidebarMenuButton>
+                                    </SidebarMenuItem>
+                                ))}
+
+                                {(!publicWorkspaces || publicWorkspaces.length === 0) && (
+                                    <div className="px-4 py-2 text-xs text-muted-foreground">
+                                        공개된 워크스페이스가 없습니다.
+                                    </div>
+                                )}
+                            </SidebarMenu>
+                        </SidebarGroupContent>
+                    </CollapsibleContent>
+                </SidebarGroup>
+            </Collapsible>
+
+
             <WorkspaceSettingsModal
                 open={isModalOpen}
                 onOpenChange={setIsModalOpen}
                 workspace={selectedWorkspace}
-                onSaved={() => mutate()}
+                onSaved={refreshAll}
                 onDeleted={(deletedUuid) => {
-                    mutate();
-                    // 현재 선택된 워크스페이스가 삭제된 경우 메인 화면으로 이동
+                    refreshAll();
                     if (currentWorkspaceId === deletedUuid) {
                         router.push("/");
                     }

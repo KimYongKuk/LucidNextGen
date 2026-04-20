@@ -38,7 +38,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 
 import { workspaceApi, type Workspace, type WorkspaceFile, type UploadStatus } from "@/lib/api/workspaces";
-import { getUserId } from "@/lib/utils";
+import { getUserId, isOperatorUser } from "@/lib/utils";
 import { WorkspaceAgentsTab } from "@/components/workspace-agents-tab";
 import { getWorkspaceAgentIds } from "@/lib/agent-store/workspace-agents";
 
@@ -78,6 +78,10 @@ export function WorkspaceSettingsModal({
     const [name, setName] = useState("");
     const [description, setDescription] = useState("");
     const [instructions, setInstructions] = useState("");
+    const [isPublic, setIsPublic] = useState(false);
+
+    const currentUserId = getUserId() ?? "";
+    const canTogglePublic = isOperatorUser(currentUserId);
 
     // Alert Dialog State
     const [fileToDelete, setFileToDelete] = useState<string | null>(null);
@@ -94,6 +98,7 @@ export function WorkspaceSettingsModal({
                 setName(workspace.name);
                 setDescription(workspace.description || "");
                 setInstructions(workspace.instructions || "");
+                setIsPublic(!!workspace.is_public);
                 loadFiles(workspace.uuid);
                 setAttachedAgentCount(getWorkspaceAgentIds(workspace.uuid).length);
             } else {
@@ -101,6 +106,7 @@ export function WorkspaceSettingsModal({
                 setName("");
                 setDescription("");
                 setInstructions("");
+                setIsPublic(false);
                 setFiles([]);
                 setActiveTab("general");
                 setAttachedAgentCount(0);
@@ -130,12 +136,16 @@ export function WorkspaceSettingsModal({
             const userId = getUserId() ?? "";
 
             if (workspace) {
-                // Update
-                await workspaceApi.update(workspace.uuid, userId, {
+                // Update — is_public 은 운영자 전용 필드라 가능한 경우에만 전송
+                const updatePayload: Parameters<typeof workspaceApi.update>[2] = {
                     name,
                     description,
                     instructions,
-                });
+                };
+                if (canTogglePublic && isPublic !== !!workspace.is_public) {
+                    updatePayload.is_public = isPublic;
+                }
+                await workspaceApi.update(workspace.uuid, userId, updatePayload);
                 // Invalidate workspace cache to update Chat component
                 mutate(`/api/v1/workspaces/${workspace.uuid}`);
                 toast.success("Workspace updated successfully");
@@ -146,6 +156,7 @@ export function WorkspaceSettingsModal({
                     name,
                     description,
                     instructions,
+                    ...(canTogglePublic && isPublic ? { is_public: true } : {}),
                 });
                 toast.success("Workspace created successfully");
             }
@@ -390,6 +401,27 @@ export function WorkspaceSettingsModal({
                                         These instructions will be injected into the AI's system prompt.
                                     </p>
                                 </div>
+
+                                {canTogglePublic && (
+                                    <div className="rounded-md border p-4 space-y-2">
+                                        <div className="flex items-center justify-between">
+                                            <Label htmlFor="is-public" className="text-sm font-medium cursor-pointer">
+                                                공용 워크스페이스로 공개
+                                            </Label>
+                                            <input
+                                                id="is-public"
+                                                type="checkbox"
+                                                className="h-4 w-4 cursor-pointer accent-primary"
+                                                checked={isPublic}
+                                                onChange={(e) => setIsPublic(e.target.checked)}
+                                            />
+                                        </div>
+                                        <p className="text-xs text-muted-foreground">
+                                            활성화 시 모든 사용자에게 지식베이스·시스템 프롬프트·에이전트가 공유됩니다.
+                                            파일 업로드/수정/삭제는 여전히 운영자만 가능하며, 사용자별 세션·채팅·메모리는 격리됩니다.
+                                        </p>
+                                    </div>
+                                )}
 
                                 {workspace && (
                                     <div className="pt-4 border-t flex justify-end">

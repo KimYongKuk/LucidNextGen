@@ -42,29 +42,39 @@ class WorkspaceService:
     def _get_collection_name(self, workspace_uuid: str) -> str:
         return f"workspace_{workspace_uuid}"
 
-    def create_workspace(self, user_id: str, name: str, description: str = None, instructions: str = None) -> Dict:
+    def create_workspace(self, user_id: str, name: str, description: str = None, instructions: str = None, is_public: bool = False) -> Dict:
         """워크스페이스 생성"""
         workspace_uuid = str(uuid.uuid4())
-        
+
         with self.db.get_cursor() as cursor:
             cursor.execute("""
-                INSERT INTO workspaces (uuid, user_id, name, description, instructions)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (workspace_uuid, user_id, name, description, instructions))
+                INSERT INTO workspaces (uuid, user_id, name, description, instructions, is_public)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (workspace_uuid, user_id, name, description, instructions, 1 if is_public else 0))
             workspace_id = cursor.lastrowid
-            
+
             # Return created workspace
             cursor.execute("SELECT * FROM workspaces WHERE id = %s", (workspace_id,))
             return cursor.fetchone()
 
     def get_workspaces(self, user_id: str) -> List[Dict]:
-        """사용자의 모든 워크스페이스 목록 조회"""
+        """사용자의 모든 워크스페이스 목록 조회 (본인 소유만)"""
         with self.db.get_cursor() as cursor:
             cursor.execute("""
                 SELECT * FROM workspaces
                 WHERE user_id = %s
                 ORDER BY updated_at DESC
             """, (user_id,))
+            return cursor.fetchall()
+
+    def get_public_workspaces(self) -> List[Dict]:
+        """공용 워크스페이스 목록 조회 (모든 사용자에게 노출)"""
+        with self.db.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT * FROM workspaces
+                WHERE is_public = 1
+                ORDER BY updated_at DESC
+            """)
             return cursor.fetchall()
 
     def get_all_workspaces(self) -> List[Dict]:
@@ -101,11 +111,11 @@ class WorkspaceService:
         except Exception:
             return False
 
-    def update_workspace(self, workspace_id: int, name: str = None, description: str = None, instructions: str = None) -> bool:
+    def update_workspace(self, workspace_id: int, name: str = None, description: str = None, instructions: str = None, is_public: Optional[bool] = None) -> bool:
         """워크스페이스 메타데이터 업데이트"""
         fields = []
         params = []
-        
+
         if name is not None:
             fields.append("name = %s")
             params.append(name)
@@ -115,7 +125,10 @@ class WorkspaceService:
         if instructions is not None:
             fields.append("instructions = %s")
             params.append(instructions)
-            
+        if is_public is not None:
+            fields.append("is_public = %s")
+            params.append(1 if is_public else 0)
+
         if not fields:
             return False
             
