@@ -217,13 +217,7 @@ async def _api_request_with_cookies(
 
 
 async def _api_request(method: str, path: str, gosso_cookie: str = "", **kwargs) -> Optional[Any]:
-    """LFON API 호출 (사용자 GOSSOcookie 우선, 읽기만 서비스 계정 폴백).
-
-    쓰기 작업(POST/PUT/DELETE/PATCH)은 서비스 계정 폴백 금지 —
-    서비스 계정은 타인 캘린더에 쓰기 불가하여 무의미한 실패만 남김.
-    사용자 세션 만료 시 명확한 AUTH_EXPIRED 신호를 호출자에게 전달.
-    """
-    is_write = method.upper() in ("POST", "PUT", "DELETE", "PATCH")
+    """LFON API 호출 (사용자 GOSSOcookie 우선, 서비스 계정 폴백)"""
 
     # 1) 사용자 GOSSOcookie가 있으면 우선 사용
     if gosso_cookie:
@@ -235,21 +229,10 @@ async def _api_request(method: str, path: str, gosso_cookie: str = "", **kwargs)
         )
         if result is not None:
             return result
-        # 쓰기는 폴백 무의미 — 본인 인증 필수
-        if is_write:
-            print(f"[Calendar MCP] 사용자 GOSSOcookie 만료/실패 — 쓰기 작업이므로 서비스 계정 폴백 생략: {method} {path}",
-                  file=sys.stderr)
-            return {"__auth_expired__": True, "method": method, "path": path}
-        print(f"[Calendar MCP] 사용자 GOSSOcookie 만료/실패 → 서비스 계정 폴백(읽기): {method} {path}",
+        print(f"[Calendar MCP] 사용자 GOSSOcookie 만료/실패 → 서비스 계정 폴백: {method} {path}",
               file=sys.stderr)
 
-    # 2) 서비스 계정 폴백 (읽기 전용)
-    if is_write and not gosso_cookie:
-        # gosso가 아예 없는 쓰기 요청도 거부 (본인 세션 필수)
-        print(f"[Calendar MCP] 쓰기 작업에 사용자 GOSSOcookie 없음 — 거부: {method} {path}",
-              file=sys.stderr)
-        return {"__auth_expired__": True, "method": method, "path": path, "reason": "no_gosso"}
-
+    # 2) 서비스 계정 폴백 (기존 동작)
     return await _api_request_with_cookies(
         method, path,
         cookies=await _sso_login(),
@@ -928,13 +911,6 @@ async def create_event(
     if not result:
         return "오류: 일정 등록에 실패했습니다. 서버에 연결할 수 없습니다."
 
-    # 세션 만료 감지 (쓰기 작업 시 본인 gosso 필수)
-    if isinstance(result, dict) and result.get("__auth_expired__"):
-        return (
-            "오류: 로그인 세션이 만료되어 일정을 등록할 수 없습니다. "
-            "그룹웨어에서 한번 로그인하시거나, 새로고침 후 다시 시도해 주세요."
-        )
-
     # 에러 응답 확인
     if isinstance(result, dict) and result.get("code") and str(result["code"]) != "200":
         msg = result.get("message", "알 수 없는 오류")
@@ -1115,12 +1091,6 @@ async def update_event(
     if not result:
         return "오류: 일정 수정에 실패했습니다."
 
-    if isinstance(result, dict) and result.get("__auth_expired__"):
-        return (
-            "오류: 로그인 세션이 만료되어 일정을 수정할 수 없습니다. "
-            "그룹웨어에서 한번 로그인하시거나, 새로고침 후 다시 시도해 주세요."
-        )
-
     if isinstance(result, dict) and result.get("code") and str(result["code"]) != "200":
         msg = result.get("message", "알 수 없는 오류")
         return f"오류: 일정 수정 실패 — {msg}"
@@ -1195,12 +1165,6 @@ async def delete_event(
 
     if not result:
         return "오류: 일정 삭제에 실패했습니다. 서버에 연결할 수 없습니다."
-
-    if isinstance(result, dict) and result.get("__auth_expired__"):
-        return (
-            "오류: 로그인 세션이 만료되어 일정을 삭제할 수 없습니다. "
-            "그룹웨어에서 한번 로그인하시거나, 새로고침 후 다시 시도해 주세요."
-        )
 
     if isinstance(result, dict) and result.get("code") and str(result["code"]) != "200":
         msg = result.get("message", "알 수 없는 오류")
