@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
-import { jwtVerify } from 'jose'
+import { jwtVerify, SignJWT } from 'jose'
 
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8000'
 const SECRET_KEY = new TextEncoder().encode(
@@ -20,6 +20,18 @@ async function getEmpnoFromToken(token: string): Promise<string | null> {
   } catch {
     return null
   }
+}
+
+/**
+ * SSO 복호화된 empno로 JWT auth_token 생성
+ * 백엔드의 auth.py::_create_token()과 동일한 payload 구조 (HS256, 24h)
+ */
+async function createAuthToken(empno: string): Promise<string> {
+  return await new SignJWT({ empno })
+    .setProtectedHeader({ alg: JWT_ALGORITHM })
+    .setIssuedAt()
+    .setExpirationTime('24h')
+    .sign(SECRET_KEY)
 }
 
 export default async function proxy(request: NextRequest) {
@@ -54,6 +66,16 @@ export default async function proxy(request: NextRequest) {
         sameSite: 'lax',
         path: '/',
         maxAge: 60 * 60 * 24 // 24시간
+      })
+
+      // auth_token JWT 발급 — 백엔드 채팅 엔드포인트가 이 쿠키로 인증
+      const authToken = await createAuthToken(decrypted_empno)
+      redirectResponse.cookies.set('auth_token', authToken, {
+        httpOnly: true,
+        secure: false,
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 60 * 60 * 24
       })
 
       // gosso 파라미터: GOSSOcookie 평문 전달 → 그대로 쿠키 저장
