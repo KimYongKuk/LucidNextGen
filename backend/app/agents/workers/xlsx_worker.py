@@ -50,16 +50,51 @@ _file_locks: Dict[str, asyncio.Lock] = {}
 
 
 # ============================================================================
-# 세션별 작업 파일 추적
+# 세션별 작업 파일 추적 (디스크 영속화)
 # ----------------------------------------------------------------------------
 # "한 세션 내 연속 작업" 시나리오 (생성 → 수정 → 수정)를 지원하기 위해
 # create_xlsx/modify_xlsx 성공 시 그 파일을 이 세션의 "작업 파일"로 등록.
 # `_list_available_files`가 업로드 파일 + 이 세션 작업 파일만 노출하여
 # 다른 세션의 output이 컨텍스트를 오염시키지 않도록 한다.
-# process-level(휘발성) — 서버 재시작 시 초기화되지만, 일반적인 세션
-# 수명 내에서는 안정적으로 유지됨.
+#
+# 영속화: in-memory dict + JSON 인덱스 파일 (data/xlsx_session_index.json).
+# 모듈 import 시 JSON 로드 → dict 복원. register 시 JSON atomic write.
+# 백엔드 재시작 후에도 세션-파일 연결 유지.
 # ============================================================================
 _session_output_files: Dict[str, "set[str]"] = {}
+_SESSION_INDEX_PATH = _BACKEND_DATA / "xlsx_session_index.json"
+
+
+def _load_session_index() -> None:
+    """모듈 import 시 디스크에서 dict 복원."""
+    global _session_output_files
+    try:
+        if _SESSION_INDEX_PATH.exists():
+            import json
+            with open(_SESSION_INDEX_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                _session_output_files = {
+                    sid: set(paths) if isinstance(paths, list) else set()
+                    for sid, paths in data.items()
+                }
+                print(f"[XlsxWorker] [SESSION_INDEX] 디스크에서 로드: {len(_session_output_files)} 세션")
+    except Exception as e:
+        print(f"[XlsxWorker] [SESSION_INDEX] 로드 실패 (무시하고 빈 상태로 시작): {e}")
+
+
+def _flush_session_index() -> None:
+    """dict를 디스크에 atomic write (temp + rename)."""
+    try:
+        import json
+        _SESSION_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
+        serializable = {sid: sorted(paths) for sid, paths in _session_output_files.items()}
+        tmp = _SESSION_INDEX_PATH.with_suffix(".json.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(serializable, f, ensure_ascii=False, indent=2)
+        tmp.replace(_SESSION_INDEX_PATH)
+    except Exception as e:
+        print(f"[XlsxWorker] [SESSION_INDEX] flush 실패 (메모리는 유지): {e}")
 
 
 def _register_session_file(session_id: str, filepath: str) -> None:
@@ -69,7 +104,11 @@ def _register_session_file(session_id: str, filepath: str) -> None:
         normalized = str(Path(filepath).resolve()).replace("\\", "/")
     except Exception:
         normalized = str(filepath).replace("\\", "/")
-    _session_output_files.setdefault(session_id, set()).add(normalized)
+    bucket = _session_output_files.setdefault(session_id, set())
+    if normalized in bucket:
+        return  # no-op (디스크 쓰기 절약)
+    bucket.add(normalized)
+    _flush_session_index()
 
 
 def _get_session_files(session_id: str) -> List[Path]:
@@ -78,16 +117,29 @@ def _get_session_files(session_id: str) -> List[Path]:
         return []
     paths = _session_output_files.get(session_id) or set()
     existing: List[Path] = []
+    stale = []
     for p in paths:
         try:
             pth = Path(p)
             if pth.exists():
                 existing.append(pth)
+            else:
+                stale.append(p)
         except Exception:
-            continue
-    # 최신 수정 순 정렬
+            stale.append(p)
+    # 사라진 파일은 인덱스에서 정리 (기회적 GC)
+    if stale:
+        for s in stale:
+            paths.discard(s)
+        if not paths:
+            _session_output_files.pop(session_id, None)
+        _flush_session_index()
     existing.sort(key=lambda x: x.stat().st_mtime, reverse=True)
     return existing
+
+
+# 모듈 import 시점에 인덱스 로드
+_load_session_index()
 
 
 def _get_file_lock(filepath: str) -> asyncio.Lock:
