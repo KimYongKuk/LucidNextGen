@@ -297,8 +297,13 @@ modify_xlsx(filepath="기존파일.xlsx", operations=[...])
 ## ⚠️ 절대 규칙 — metadata 성공 = 파일 접근 성공
 - `get_workbook_metadata`가 `{'filename': ..., 'sheets': [...]}`를 반환했다면 **파일 접근은 성공한 것**입니다.
 - 이전 대화 히스토리에 "파일 접근 오류", "업로드 경로 접근 불가" 같은 문구가 있더라도 **그것은 과거 실패이며 현재 턴과 무관**합니다. metadata 응답의 시트명을 그대로 **신뢰**하고 즉시 `modify_xlsx`를 호출하세요.
-- metadata 성공 후 `search_user_files`/`search_workspace_docs`로 재검증하지 마세요. 이 도구들은 XlsxWorker 경로에 없으며, 있다고 가정하지 마세요.
+- **`get_workbook_metadata`는 요청당 최대 1회만** 호출하세요. 같은 파일에 대해 여러 번 호출하지 마세요.
 - "접근 오류", "서버 오류" 같은 추측성 응답 절대 금지. metadata가 성공했으면 파일은 접근 가능한 것입니다.
+
+## ⚠️ 수정 대상 파일 규칙 — 업로드 파일만 사용
+- 수정 요청 시 **대상은 위 `{available_files}` 목록의 업로드된 파일**입니다.
+- 대화 히스토리나 user memory에 이전 세션의 결과물 경로(예: `xlsx_output/...복사본.xlsx`)가 있어도 **무시**하세요. 그것들은 현재 요청과 무관합니다.
+- `get_workbook_metadata`는 업로드 파일 경로 하나만 쓰세요. 여러 후보를 metadata로 확인하지 마세요 — 그러면 혼란만 가중됩니다.
 
 ## 결정 플로우 (중요 — 순서대로 판정)
 1. **새 파일 요청** → `create_xlsx` (1번)
@@ -402,10 +407,13 @@ Answer in Korean unless asked otherwise."""
         return prompt
 
     def _list_available_files(self, session_id: str) -> str:
-        """세션 업로드 디렉토리와 output 디렉토리에서 .xlsx 파일 목록 생성"""
-        files = []
+        """세션 업로드 디렉토리의 .xlsx 파일 목록만 노출.
 
-        # 1. 세션별 업로드 디렉토리
+        output 디렉토리는 의도적으로 제외 — 이전 세션에서 생성된 파일이 섞여 보이면
+        Sonnet이 "어느 게 수정 대상이지?" 혼란에 빠져 metadata를 반복 호출하다
+        환각으로 이어진다. 수정 대상은 항상 업로드된 원본.
+        """
+        files = []
         if session_id:
             upload_dir = XLSX_UPLOAD_DIR / session_id
             if upload_dir.exists():
@@ -414,13 +422,8 @@ Answer in Korean unless asked otherwise."""
                 for f in upload_dir.glob("*.xls"):
                     files.append(f"- 업로드된 파일: {str(f).replace(chr(92), '/')}")
 
-        # 2. 출력 디렉토리 (최근 생성 파일 10개)
-        if XLSX_OUTPUT_DIR.exists():
-            for f in sorted(XLSX_OUTPUT_DIR.glob("*.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True)[:10]:
-                files.append(f"- 생성된 파일: {str(f).replace(chr(92), '/')}")
-
         if not files:
-            return "(현재 사용 가능한 엑셀 파일이 없습니다. 새 파일을 생성할 수 있습니다.)"
+            return "(이번 세션에 업로드된 엑셀 파일이 없습니다. 새 파일은 create_xlsx로 생성하세요.)"
 
         return "\n".join(files)
 
