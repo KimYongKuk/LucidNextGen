@@ -49,6 +49,47 @@ XLSX_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 _file_locks: Dict[str, asyncio.Lock] = {}
 
 
+# ============================================================================
+# 세션별 작업 파일 추적
+# ----------------------------------------------------------------------------
+# "한 세션 내 연속 작업" 시나리오 (생성 → 수정 → 수정)를 지원하기 위해
+# create_xlsx/modify_xlsx 성공 시 그 파일을 이 세션의 "작업 파일"로 등록.
+# `_list_available_files`가 업로드 파일 + 이 세션 작업 파일만 노출하여
+# 다른 세션의 output이 컨텍스트를 오염시키지 않도록 한다.
+# process-level(휘발성) — 서버 재시작 시 초기화되지만, 일반적인 세션
+# 수명 내에서는 안정적으로 유지됨.
+# ============================================================================
+_session_output_files: Dict[str, "set[str]"] = {}
+
+
+def _register_session_file(session_id: str, filepath: str) -> None:
+    if not session_id or not filepath:
+        return
+    try:
+        normalized = str(Path(filepath).resolve()).replace("\\", "/")
+    except Exception:
+        normalized = str(filepath).replace("\\", "/")
+    _session_output_files.setdefault(session_id, set()).add(normalized)
+
+
+def _get_session_files(session_id: str) -> List[Path]:
+    """이 세션에서 생성·수정된 파일 중 현재도 존재하는 것들을 최신순으로 반환."""
+    if not session_id:
+        return []
+    paths = _session_output_files.get(session_id) or set()
+    existing: List[Path] = []
+    for p in paths:
+        try:
+            pth = Path(p)
+            if pth.exists():
+                existing.append(pth)
+        except Exception:
+            continue
+    # 최신 수정 순 정렬
+    existing.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+    return existing
+
+
 def _get_file_lock(filepath: str) -> asyncio.Lock:
     """파일 경로별 asyncio.Lock 반환 (없으면 생성)"""
     # 경로 정규화하여 동일 파일에 대해 같은 Lock 보장
@@ -407,25 +448,41 @@ Answer in Korean unless asked otherwise."""
         return prompt
 
     def _list_available_files(self, session_id: str) -> str:
-        """세션 업로드 디렉토리의 .xlsx 파일 목록만 노출.
+        """이 세션의 엑셀 파일 목록을 **업로드 원본**과 **이번 세션 작업 파일**로
+        구분하여 반환. 다른 세션의 output은 노출하지 않음 (컨텍스트 오염 방지).
 
-        output 디렉토리는 의도적으로 제외 — 이전 세션에서 생성된 파일이 섞여 보이면
-        Sonnet이 "어느 게 수정 대상이지?" 혼란에 빠져 metadata를 반복 호출하다
-        환각으로 이어진다. 수정 대상은 항상 업로드된 원본.
+        - 업로드 원본: `xlsx_upload/{session_id}/` 하위의 모든 xlsx
+        - 이번 세션 작업 파일: `_session_output_files[session_id]`에 등록된 파일들
+          (create_xlsx/modify_xlsx 성공 시 secured_ainvoke가 등록)
         """
-        files = []
+        uploaded: List[str] = []
         if session_id:
             upload_dir = XLSX_UPLOAD_DIR / session_id
             if upload_dir.exists():
                 for f in upload_dir.glob("*.xlsx"):
-                    files.append(f"- 업로드된 파일: {str(f).replace(chr(92), '/')}")
+                    uploaded.append(str(f).replace("\\", "/"))
                 for f in upload_dir.glob("*.xls"):
-                    files.append(f"- 업로드된 파일: {str(f).replace(chr(92), '/')}")
+                    uploaded.append(str(f).replace("\\", "/"))
 
-        if not files:
-            return "(이번 세션에 업로드된 엑셀 파일이 없습니다. 새 파일은 create_xlsx로 생성하세요.)"
+        session_work = _get_session_files(session_id)
 
-        return "\n".join(files)
+        if not uploaded and not session_work:
+            return "(이번 세션에 업로드/작업된 엑셀 파일이 없습니다. 새 파일은 `create_xlsx`로 생성하세요.)"
+
+        lines: List[str] = []
+        if uploaded:
+            lines.append("**업로드 원본** (읽기 및 수정 가능):")
+            for p in uploaded:
+                lines.append(f"- {p}")
+        if session_work:
+            lines.append("")
+            lines.append("**이번 세션 작업 파일** (create_xlsx/modify_xlsx로 만들거나 수정한 결과, 최신순):")
+            for p in session_work:
+                lines.append(f"- {str(p).replace(chr(92), '/')}")
+            lines.append("")
+            lines.append("→ 연속 편집 시 **가장 최근 작업 파일**을 filepath로 사용하세요. 이전 세션의 output은 노출되지 않습니다.")
+
+        return "\n".join(lines)
 
     # ==========================================================
     # prepare_tools: filepath 보안 래핑 (핵심!)
@@ -518,6 +575,7 @@ Answer in Korean unless asked otherwise."""
                 _tname=tool.name,
                 _redirected=redirected_files,
                 _user_id_for_archive=user_id,
+                _session_id_for_track=session_id,
                 _created=created_workbook,
                 _done=creation_done,
                 _write_tools=XLSX_WRITE_TOOLS,
@@ -618,6 +676,17 @@ Answer in Korean unless asked otherwise."""
                 ):
                     _done["file"] = resolved_filepath
                     print(f"[XlsxWorker] [DONE] xlsx 생성 완료 플래그 설정 → {Path(resolved_filepath).name}")
+
+                # 세션 작업 파일 추적: create_xlsx/modify_xlsx 성공 시 이 세션의 파일로 등록
+                # 다음 턴의 `_list_available_files`에 노출되어 연속 편집을 지원.
+                if (
+                    _tname in ("create_xlsx", "modify_xlsx")
+                    and isinstance(result, str)
+                    and not _is_error_response(result)
+                    and resolved_filepath
+                ):
+                    _register_session_file(_session_id_for_track, resolved_filepath)
+                    print(f"[XlsxWorker] [SESSION_FILE] {_tname} → 세션 파일 등록: {Path(resolved_filepath).name} (session={_session_id_for_track[:8] if _session_id_for_track else 'none'})")
 
                 # 긴 도구 결과 잘라서 토큰 폭증 방지 (Approach A)
                 return _truncate_tool_result(result, _tname)
