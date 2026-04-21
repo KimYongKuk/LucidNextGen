@@ -667,9 +667,11 @@ Answer in Korean unless asked otherwise."""
                     output = event.get("data", {}).get("output")
                     text = str(output.content) if hasattr(output, "content") else str(output or "")
                     if "✅ SUCCESS" in text:
-                        m = re.search(r"파일명[:：]\s*([^\s\n]+)", text)
+                        # 파일명은 공백 포함 가능하므로 .xlsx까지 lazy match
+                        # 예: "- 파일명: (IT운영팀) 3월 LFON 계정생성 및 중지 이력_복사본.xlsx"
+                        m = re.search(r"파일명[:：]\s*`?(.+?\.xlsx)`?(?:\s|$)", text)
                         if m:
-                            success_filename = m.group(1).strip().rstrip("`")
+                            success_filename = m.group(1).strip()
                             success_tool = tool_name
                             suppress_llm_text = True
                             print(f"[XlsxWorker] [FINAL_GUARD] {tool_name} 성공 감지 → LLM text 교체 모드: {success_filename}")
