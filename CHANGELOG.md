@@ -6,6 +6,7 @@
 ---
 
 ## [2026-04-22]
+- **수정** [Security/Widget] 다우오피스 `${userId}` → 사번 매핑 불일치 해결 — 위젯 배포 후 발견: 김용국(A2304013)의 JSP `${userId}` EL이 "337"을 반환했는데 이는 DaouOffice 내부 Shiro principal ID로, TIMS DB의 `v_user_info_mapping.user_id=337`(남세종, A1607003)과 **다른 체계**. 그대로 쓰면 김용국이 남세종 계정으로 인증되는 치명적 이슈. 디버그 JSP로 session 속성 덤프 → `email="wg0403@landf.co.kr"` 발견 → JSP가 email을 암호화, 백엔드 `widget_auth.py::_resolve_to_sabun()`가 email local-part(`wg0403`) → `v_user_info_mapping.login_id` 조회로 사번 획득. 사번/email/login_id 입력 모두 지원(사번 패턴 `^[A-Z]\d{7}$` 매칭 시 pass-through), 프로세스 수명 캐싱으로 DB 왕복 최소화. `deploy.bat` Step 2.6에 위젯 JS sync 추가 (이전엔 수동 복사 필요했음). → [상세](docs/history/2026-04-22_SSO_JWT_발급_핫픽스.md)
 - **수정** [Security/SSO] 그룹웨어 SSO 진입 시 JWT `auth_token` 쿠키 발급 누락 핫픽스 — 전날(04-21) 채팅 엔드포인트 JWT 인증 배포 후 **모든 SSO 사용자 전면 401** 회귀 발생 → 즉시 rollback. 원인: 기존 설계 전제("로그인된 사용자는 auth_token 쿠키 보유")와 실제 구현 불일치 — 대다수 사용자는 그룹웨어 SSO로 진입해서 `/api/auth/login` form 경로를 안 타므로 `auth_token`이 아예 발급된 적 없음. `frontend/middleware.ts`의 SSO flow(`?empno=<encrypted>` URL 진입 시)에 `jose.SignJWT`로 JWT 서명·`auth_token` HttpOnly 쿠키 set 하는 로직 추가 (백엔드 `_create_token()`과 동일 payload/알고리즘/만료). 동시에 `SECRET_KEY`를 모든 환경에서 `landf01234567890`으로 통일(frontend/backend/dev/prod), `deploy.bat`에 frontend `.env.local` 생성 시 backend `.env`의 SECRET_KEY 자동 복사 로직 추가. `WIDGET_TOKEN_VALID_SECONDS`를 300→3600으로 연장(탭 오래 열어둔 사용자 401 방지). dev 서버에서 인코그니토 창 + fetch 공격 시뮬로 end-to-end 검증 → DB 로그에서 body user_id 조작 무시 확인 → 새벽 운영 배포(`83785b7`) 성공. `rollback.bat` state.txt 미갱신 버그 인지(수동 echo 필요) → [상세](docs/history/2026-04-22_SSO_JWT_발급_핫픽스.md)
 
 ## [2026-04-21]
