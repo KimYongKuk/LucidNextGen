@@ -17,10 +17,12 @@ JSP 측 Java 코드와 `backend/app/utils/crypto.py`의 AES ECB + PKCS7 방식 1
 """
 
 import os
+import re
 import time
 import logging
 from typing import Optional
 
+import asyncpg
 from fastapi import Header, HTTPException, status
 
 from app.utils.crypto import decrypt_empno
@@ -29,6 +31,64 @@ logger = logging.getLogger(__name__)
 
 WIDGET_SHARED_KEY = os.getenv("WIDGET_SHARED_KEY", "")
 WIDGET_TOKEN_VALID_SECONDS = int(os.getenv("WIDGET_TOKEN_VALID_SECONDS", "300"))
+TIMS_DATABASE_URL = os.getenv("TIMS_DATABASE_URL", "")
+
+# login_id -> employee_number 캐시 (프로세스 수명, 매우 드물게 변경)
+_login_id_to_sabun_cache: dict[str, str] = {}
+
+# 사번 패턴 (예: A2304013, B1706021)
+_SABUN_PATTERN = re.compile(r"^[A-Z]\d{7}$")
+
+
+async def _resolve_to_sabun(value: str) -> Optional[str]:
+    """복호화된 토큰 값을 사번(employee_number)으로 정규화.
+
+    허용 입력:
+    - 사번 자체 (A2304013 등) → 그대로 반환
+    - email (wg0403@landf.co.kr) → local-part(wg0403)를 login_id로 lookup
+    - login_id (wg0403) → v_user_info_mapping.login_id로 lookup
+
+    실패 시 None 반환 (호출자가 401 처리).
+    """
+    if not value:
+        return None
+
+    value = value.strip()
+
+    # 1) 이미 사번 포맷이면 그대로
+    if _SABUN_PATTERN.match(value):
+        return value
+
+    # 2) email 형식이면 local-part 추출
+    login_id = value.split("@", 1)[0] if "@" in value else value
+
+    # 3) 캐시 확인
+    cached = _login_id_to_sabun_cache.get(login_id)
+    if cached:
+        return cached
+
+    # 4) v_user_info_mapping 조회
+    if not TIMS_DATABASE_URL:
+        logger.error("[WIDGET_AUTH] TIMS_DATABASE_URL not configured")
+        return None
+
+    try:
+        conn = await asyncpg.connect(TIMS_DATABASE_URL, timeout=5)
+        try:
+            row = await conn.fetchrow(
+                "SELECT employee_number FROM v_user_info_mapping WHERE login_id = $1 LIMIT 1",
+                login_id,
+            )
+            if row:
+                sabun = row["employee_number"]
+                _login_id_to_sabun_cache[login_id] = sabun
+                return sabun
+            return None
+        finally:
+            await conn.close()
+    except Exception as e:
+        logger.error(f"[WIDGET_AUTH] Sabun lookup failed for login_id={login_id}: {e}")
+        return None
 
 
 async def get_current_user_widget(
@@ -72,13 +132,13 @@ async def get_current_user_widget(
         )
 
     parts = payload.split("|", 1)
-    empno = parts[0].strip()
+    raw_identifier = parts[0].strip()
     ts_str = parts[1].strip()
 
-    if not empno:
+    if not raw_identifier:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Empty empno in widget token",
+            detail="Empty identifier in widget token",
         )
 
     try:
@@ -94,11 +154,22 @@ async def get_current_user_widget(
     age_seconds = abs(now_ms - ts_ms) / 1000
     if age_seconds > WIDGET_TOKEN_VALID_SECONDS:
         logger.warning(
-            f"[WIDGET_AUTH] Token expired: empno={empno}, age={age_seconds:.0f}s"
+            f"[WIDGET_AUTH] Token expired: id={raw_identifier}, age={age_seconds:.0f}s"
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Widget token expired (age={int(age_seconds)}s)",
+        )
+
+    # 사번 정규화: 사번/email/login_id 입력 모두 지원 → employee_number로 변환
+    empno = await _resolve_to_sabun(raw_identifier)
+    if not empno:
+        logger.warning(
+            f"[WIDGET_AUTH] Cannot resolve to sabun: raw_identifier={raw_identifier}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Cannot resolve widget token identifier to sabun",
         )
 
     return {
