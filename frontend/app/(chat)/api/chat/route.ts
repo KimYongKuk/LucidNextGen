@@ -99,12 +99,15 @@ export async function POST(request: Request) {
 
         try {
           console.log("[ROUTE] Fetching backend...");
+          // 브라우저 쿠키(auth_token 포함)를 백엔드로 forward — JWT 인증용
+          const cookieHeader = request.headers.get("cookie") || "";
           const backendResponse = await fetch(
             `${BACKEND_URL}/api/v1/chat/message/stream`,
             {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
+                Cookie: cookieHeader,
               },
               body: JSON.stringify({
                 message: content,

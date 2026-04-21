@@ -4,13 +4,21 @@ import { useEffect, useState } from "react";
 import { EmbedChat } from "@/components/embed-chat";
 
 export default function GroupwareEmbedPage() {
-  // 마운트 시 1회만 URL에서 empno, sid 추출 (이후 변경 없음)
+  // 마운트 시 1회만 URL에서 token(암호화) 또는 empno(legacy), sid 추출
+  const [widgetAuthToken] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      return params.get("token") || undefined;
+    }
+    return undefined;
+  });
+
   const [userId] = useState(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
-      return params.get("empno") || "anonymous";
+      return params.get("empno") || "widget_authenticated";
     }
-    return "anonymous";
+    return "widget_authenticated";
   });
 
   const [initialSessionId] = useState(() => {
@@ -42,6 +50,7 @@ export default function GroupwareEmbedPage() {
     <div className="h-dvh w-full bg-background">
       <EmbedChat
         userId={userId}
+        widgetAuthToken={widgetAuthToken}
         chatMode="groupware_embed"
         initialSessionId={initialSessionId}
         onNewChat={() => {

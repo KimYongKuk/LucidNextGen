@@ -14,11 +14,13 @@ import { generateUUID } from "@/lib/utils";
 
 export function EmbedChat({
   userId,
+  widgetAuthToken,
   chatMode = "outline_embed",
   initialSessionId,
   onNewChat,
 }: {
   userId: string;
+  widgetAuthToken?: string;
   chatMode?: string;
   initialSessionId?: string;
   onNewChat?: () => void;
@@ -42,6 +44,7 @@ export function EmbedChat({
     messages: [],
     chatMode,
     userId,
+    widgetAuthToken,
     generateId: generateUUID,
     onData: (dataPart) => {
       setDataStream((ds) => (ds ? [...ds, dataPart] : []));
@@ -59,7 +62,11 @@ export function EmbedChat({
       try {
         const baseUrl = getApiUrl();
         const res = await fetch(
-          `${baseUrl}/api/v1/chat/sessions/${initialSessionId}/messages?user_id=${encodeURIComponent(userId)}`
+          `${baseUrl}/api/v1/chat/sessions/${initialSessionId}/messages?user_id=${encodeURIComponent(userId)}`,
+          {
+            credentials: 'include',
+            headers: widgetAuthToken ? { 'X-Widget-Auth': widgetAuthToken } : {},
+          }
         );
         if (!res.ok) return;
         const data = await res.json();

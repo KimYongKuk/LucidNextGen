@@ -17,7 +17,8 @@
 
   var DEFAULT_CONFIG = {
     apiUrl: '',
-    userId: '',
+    userId: '',              // legacy: 평문 사번 (deprecated, authToken으로 대체)
+    authToken: '',           // AES 암호화 토큰 (JSP가 생성)
     position: 'bottom-right',
     zIndex: 99999,
     widgetWidth: '30vw',
@@ -118,6 +119,22 @@
     return config.userId;
   }
 
+  function buildIframeSrc() {
+    // 인증 파라미터: authToken(암호화) 우선, 없으면 legacy empno(평문)
+    var sid = getSessionId();
+    var gosso = getGossoCookie();
+    var src = config.apiUrl + config.embedPath + '?sid=' + encodeURIComponent(sid);
+    if (config.authToken) {
+      src += '&token=' + encodeURIComponent(config.authToken);
+    } else {
+      // Legacy fallback (JSP 업데이트 전 과도기 호환)
+      var empno = getEmpno();
+      if (empno) src += '&empno=' + encodeURIComponent(empno);
+    }
+    if (gosso) src += '&gosso=' + encodeURIComponent(gosso);
+    return src;
+  }
+
   function getGossoCookie() {
     // 그룹웨어 페이지의 GOSSOcookie 추출 (HttpOnly 아니면 접근 가능)
     // iframe에 전달하여 캘린더/일정 쓰기 작업 인증에 사용.
@@ -176,11 +193,7 @@
         if (frameWrap) frameWrap.innerHTML = '';
         // 다음 열기 시 새 iframe 생성됨
         if (isOpen) {
-          var empno = getEmpno();
-          var sid = getSessionId();
-          var gosso = getGossoCookie();
-          var iframeSrc = config.apiUrl + config.embedPath + '?empno=' + encodeURIComponent(empno) + '&sid=' + encodeURIComponent(sid);
-          if (gosso) iframeSrc += '&gosso=' + encodeURIComponent(gosso);
+          var iframeSrc = buildIframeSrc();
           widgetFrame = document.createElement('iframe');
           widgetFrame.id = 'lucid-gw-frame';
           widgetFrame.src = iframeSrc;
@@ -214,9 +227,7 @@
       }
       // 첫 열기 시 iframe 생성 (이 시점에 GO.session() 확실히 준비됨)
       if (!widgetFrame) {
-        var empno = getEmpno();
-        var sid = getSessionId();
-        var iframeSrc = config.apiUrl + config.embedPath + '?empno=' + encodeURIComponent(empno) + '&sid=' + encodeURIComponent(sid);
+        var iframeSrc = buildIframeSrc();
         widgetFrame = document.createElement('iframe');
         widgetFrame.id = 'lucid-gw-frame';
         widgetFrame.src = iframeSrc;

@@ -31,9 +31,10 @@ export async function GET(request: Request) {
   backendUrl.searchParams.set("limit", limit);
 
   try {
+    const cookieHeader = request.headers.get("cookie") || "";
     const res = await fetch(backendUrl.toString(), {
       method: "GET",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Cookie: cookieHeader },
     });
 
     if (!res.ok) {

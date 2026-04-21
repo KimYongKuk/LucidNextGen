@@ -33,9 +33,10 @@ export async function GET(request: Request) {
   if (workspaceId) backendUrl.searchParams.set("workspace_id", workspaceId);
 
   try {
+    const cookieHeader = request.headers.get("cookie") || "";
     const res = await fetch(backendUrl.toString(), {
       method: "GET",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Cookie: cookieHeader },
     });
 
     if (!res.ok) {
@@ -90,9 +91,10 @@ export async function DELETE(request: Request) {
   backendUrl.searchParams.set("user_id", userId);
 
   try {
+    const cookieHeader = request.headers.get("cookie") || "";
     const res = await fetch(backendUrl.toString(), {
       method: "DELETE",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Cookie: cookieHeader },
     });
 
     if (!res.ok) {

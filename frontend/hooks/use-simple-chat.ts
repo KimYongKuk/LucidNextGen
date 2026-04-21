@@ -28,6 +28,7 @@ interface UseSimpleChatOptions {
   generateId?: () => string;
   workspaceId?: string | null;  // UUID string
   userId?: string;  // 외부에서 주입 (embed 등 SSO 쿠키 없는 환경)
+  widgetAuthToken?: string;  // 그룹웨어 위젯 암호화 토큰 (embed 전용)
 }
 
 export function useSimpleChat({
@@ -40,6 +41,7 @@ export function useSimpleChat({
   generateId: customGenerateId = generateId,
   workspaceId,
   userId: externalUserId,
+  widgetAuthToken,
 }: UseSimpleChatOptions) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [status, setStatus] = useState<'ready' | 'streaming' | 'submitted'>('ready');
@@ -160,8 +162,10 @@ export function useSimpleChat({
 
       const response = await fetch(apiUrl, {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
+          ...(widgetAuthToken ? { 'X-Widget-Auth': widgetAuthToken } : {}),
         },
         body: JSON.stringify({
           message: content,

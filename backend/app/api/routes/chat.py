@@ -21,6 +21,9 @@ from app.services.chromadb_service import ChromaDBService, get_chromadb_service
 from app.services.chat_log_service import ChatLogService, get_chat_log_service
 from app.core.model_config import is_hierarchical_agent_enabled
 from app.agents.a2a_streaming import stream_a2a_response
+from app.api.dependencies.auth_jwt import get_current_user
+from app.api.dependencies.widget_auth import get_current_user_widget
+from fastapi import Header, Cookie
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -461,6 +464,30 @@ def build_message_payload(request) -> list:
 
 
 # ============================================================================
+# Unified Auth — Cookie JWT OR Widget Token
+# ============================================================================
+
+async def get_chat_user(
+    x_widget_auth: Optional[str] = Header(None),
+    auth_token: Optional[str] = Cookie(None),
+) -> dict:
+    """채팅 엔드포인트용 통합 인증.
+
+    우선순위:
+    1. X-Widget-Auth 헤더 존재 시 → 위젯 암호화 토큰 검증 (그룹웨어 iframe 경로)
+    2. 아니면 → HttpOnly 쿠키 JWT 검증 (본 웹 UI 경로)
+    3. 둘 다 없거나 모두 실패 → 401
+
+    Returns: {"empno": ..., "name": ..., "source": "widget" | "jwt"}
+    """
+    if x_widget_auth:
+        return await get_current_user_widget(x_widget_auth)
+    user = await get_current_user(auth_token)
+    user["source"] = "jwt"
+    return user
+
+
+# ============================================================================
 # Main Chat API
 # ============================================================================
 
@@ -468,6 +495,7 @@ def build_message_payload(request) -> list:
 async def chat_stream(
     request: ChatRequest,
     background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_chat_user),
     bedrock: BedrockService = Depends(get_bedrock_service),
     chromadb: ChromaDBService = Depends(get_chromadb_service),
 ):
@@ -479,12 +507,17 @@ async def chat_stream(
     - tavily_search (웹 검색)
     - search_hr_docs, search_accounting_docs 등 (사내 문서)
     - YouTube, 일정, 게시판 등 (기타 도구)
+
+    인증: HttpOnly 쿠키 `auth_token`의 JWT에서 사번 추출. body의 user_id는 무시됨.
     """
+    # 🔒 인증된 사번만 사용 (body의 request.user_id는 무시)
+    authenticated_empno = current_user["empno"]
+
     chat_log = get_chat_log_service(bedrock_service=bedrock)
 
     print("\n" + "="*60)
     print(f"[CHAT_STREAM] Unified Agent API CALLED!")
-    print(f"  User ID: {request.user_id}")
+    print(f"  Authenticated Empno: {authenticated_empno}")
     print(f"  Session ID: {request.session_id}")
     print(f"  Message: {request.message[:50]}...")
     print(f"  Chat Mode: {request.chat_mode}")
@@ -507,12 +540,12 @@ async def chat_stream(
                 from app.services.security_guard_service import (
                     get_security_guard_service, SECURITY_GUARD_ENABLED
                 )
-                if SECURITY_GUARD_ENABLED and request.user_id and request.user_id != "anonymous":
+                if SECURITY_GUARD_ENABLED and authenticated_empno:
                     guard = get_security_guard_service()
-                    block_status = await guard.get_block_status(request.user_id)
+                    block_status = await guard.get_block_status(authenticated_empno)
                     if block_status.blocked:
                         blocked_msg = guard._build_blocked_message(block_status)
-                        print(f"[CHAT_STREAM] Early block: user={request.user_id}, type={block_status.block_type}")
+                        print(f"[CHAT_STREAM] Early block: user={authenticated_empno}, type={block_status.block_type}")
                         yield f"data: {json.dumps({'type': 'security_blocked', 'block_type': block_status.block_type, 'message': blocked_msg, 'expires_at': block_status.expires_at.isoformat() if block_status.expires_at else None})}\n\n"
                         yield f"data: {json.dumps({'type': 'content', 'content': blocked_msg})}\n\n"
                         yield f"data: {json.dumps({'type': 'done'})}\n\n"
@@ -543,7 +576,7 @@ async def chat_stream(
                 has_files = False
                 if request.session_id:
                     check_start = time.time()
-                    has_files = chromadb.has_session_files(request.session_id, request.user_id)
+                    has_files = chromadb.has_session_files(request.session_id, authenticated_empno)
                     check_time = int((time.time() - check_start) * 1000)
                     print(f"[CHAT_STREAM] File check: {has_files} ({check_time}ms)")
 
@@ -623,7 +656,7 @@ async def chat_stream(
                     a2a_collected_data = {}
                     async for sse in stream_a2a_response(
                         message=request.message,
-                        user_id=request.user_id,
+                        user_id=authenticated_empno,
                         session_id=request.session_id,
                         workspace_id=request.workspace_id,
                         workspace_context=workspace_context,
@@ -680,7 +713,7 @@ async def chat_stream(
                         background_tasks.add_task(
                             _save_chat_log_background,
                             chat_log,
-                            request.user_id,
+                            authenticated_empno,
                             request.message,
                             a2a_collected_data.get("response", ""),
                             request.session_id,
@@ -1004,7 +1037,7 @@ async def chat_stream(
                 background_tasks.add_task(
                     _save_chat_log_background,
                     chat_log,
-                    request.user_id,
+                    authenticated_empno,
                     request.message,
                     response_to_save,
                     request.session_id,
@@ -1044,18 +1077,23 @@ async def chat_stream(
 
 @router.get("/v1/chat/sessions")
 async def list_chat_sessions(
-    user_id: str = Query(...),
     range_scope: str = Query("recent7", alias="range"),
     chat_mode: Optional[str] = Query(None),
     limit: int = Query(20, ge=1, le=100),
     cursor: Optional[str] = Query(None),
     workspace_id: Optional[str] = Query(None),  # UUID string
+    user_id: Optional[str] = Query(None),  # Deprecated: JWT 쿠키에서 추출, Query는 무시됨
+    current_user: dict = Depends(get_chat_user),
     chat_log: ChatLogService = Depends(get_chat_log_service),
 ):
-    """사용자 세션 목록 조회 (최근 7일/전체, 커서 페이지네이션)"""
+    """사용자 세션 목록 조회 (최근 7일/전체, 커서 페이지네이션).
+
+    인증: HttpOnly 쿠키 `auth_token`의 JWT에서 사번 추출. Query `user_id`는 무시됨.
+    """
+    authenticated_empno = current_user["empno"]
     try:
         result = chat_log.list_sessions(
-            user_id=user_id,
+            user_id=authenticated_empno,
             chat_mode=chat_mode,
             range_scope=range_scope,
             limit=limit,
@@ -1076,15 +1114,20 @@ async def list_chat_sessions(
 
 @router.get("/v1/chat/sessions/search")
 async def search_chat_sessions(
-    user_id: str = Query(...),
     q: str = Query(..., min_length=1),
     limit: int = Query(20, ge=1, le=100),
+    user_id: Optional[str] = Query(None),  # Deprecated: JWT 쿠키에서 추출
+    current_user: dict = Depends(get_chat_user),
     chat_log: ChatLogService = Depends(get_chat_log_service),
 ):
-    """대화 세션 검색 (제목 및 메시지 내용 기반, 전역 검색)"""
+    """대화 세션 검색 (제목 및 메시지 내용 기반, 전역 검색).
+
+    인증: HttpOnly 쿠키 `auth_token`의 JWT에서 사번 추출. Query `user_id`는 무시됨.
+    """
+    authenticated_empno = current_user["empno"]
     try:
         sessions = chat_log.search_sessions(
-            user_id=user_id,
+            user_id=authenticated_empno,
             query=q,
             limit=limit,
         )
@@ -1103,14 +1146,27 @@ async def update_chat_session(
     session_id: str,
     title: Optional[str] = Query(None),
     chat_mode: Optional[str] = Query(None),
+    current_user: dict = Depends(get_chat_user),
     chat_log: ChatLogService = Depends(get_chat_log_service),
 ):
-    """세션 메타데이터 수정 (제목, 모드)"""
+    """세션 메타데이터 수정 (제목, 모드).
+
+    인증: HttpOnly 쿠키 `auth_token`의 JWT에서 사번 추출.
+    세션 소유자만 수정 가능.
+    """
+    authenticated_empno = current_user["empno"]
     if title is None and chat_mode is None:
         raise HTTPException(status_code=400, detail="No fields to update")
     if chat_mode and chat_mode not in ("normal", "corp"):
         raise HTTPException(status_code=400, detail="Invalid chat_mode")
     try:
+        # 소유권 검증 — 본인 세션만 수정 가능
+        session_info = chat_log.get_session(session_id)
+        if not session_info:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if session_info.get("user_id") != authenticated_empno:
+            raise HTTPException(status_code=403, detail="본인 세션만 수정할 수 있습니다.")
+
         updated = chat_log.update_session(
             session_id=session_id,
             title=title,
@@ -1128,15 +1184,20 @@ async def update_chat_session(
 @router.get("/v1/chat/sessions/{session_id}/messages")
 async def get_session_messages(
     session_id: str,
-    user_id: str = Query(...),
     limit: int = Query(100, ge=1, le=500),
+    user_id: Optional[str] = Query(None),  # Deprecated: JWT 쿠키에서 추출
+    current_user: dict = Depends(get_chat_user),
     chat_log: ChatLogService = Depends(get_chat_log_service),
 ):
-    """세션 메시지 히스토리 조회"""
+    """세션 메시지 히스토리 조회.
+
+    인증: HttpOnly 쿠키 `auth_token`의 JWT에서 사번 추출. Query `user_id`는 무시됨.
+    """
+    authenticated_empno = current_user["empno"]
     try:
         messages = chat_log.get_session_messages(
             session_id=session_id,
-            user_id=user_id,
+            user_id=authenticated_empno,
             limit=limit,
         )
 
@@ -1159,12 +1220,23 @@ async def get_session_messages(
 @router.delete("/v1/chat/sessions/{session_id}")
 async def delete_session(
     session_id: str,
-    user_id: str = Query(...),
+    user_id: Optional[str] = Query(None),  # Deprecated: JWT 쿠키에서 추출
+    current_user: dict = Depends(get_chat_user),
     chromadb: ChromaDBService = Depends(get_chromadb_service),
     chat_log: ChatLogService = Depends(get_chat_log_service),
 ):
-    """세션 삭제 (업로드된 파일 포함)"""
+    """세션 삭제 (업로드된 파일 포함).
+
+    인증: HttpOnly 쿠키 `auth_token`의 JWT에서 사번 추출. Query `user_id`는 무시됨.
+    세션 소유자만 삭제 가능하도록 사전 검증.
+    """
+    authenticated_empno = current_user["empno"]
     try:
+        # 소유권 검증 — 본인 세션만 삭제 가능
+        session_info = chat_log.get_session(session_id)
+        if session_info and session_info.get("user_id") != authenticated_empno:
+            raise HTTPException(status_code=403, detail="본인 세션만 삭제할 수 있습니다.")
+
         # 세션과 연관된 파일 삭제
         result = await chromadb.delete_session_files(session_id)
         # 메타데이터 및 로그 삭제
@@ -1187,10 +1259,23 @@ class PinRequest(BaseModel):
 async def toggle_session_pin(
     session_id: str,
     request: PinRequest,
+    current_user: dict = Depends(get_chat_user),
     chat_log: ChatLogService = Depends(get_chat_log_service),
 ):
-    """세션 고정/해제 (Pin/Unpin)"""
+    """세션 고정/해제 (Pin/Unpin).
+
+    인증: HttpOnly 쿠키 `auth_token`의 JWT에서 사번 추출.
+    세션 소유자만 고정/해제 가능.
+    """
+    authenticated_empno = current_user["empno"]
     try:
+        # 소유권 검증 — 본인 세션만 pin 가능
+        session_info = chat_log.get_session(session_id)
+        if not session_info:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if session_info.get("user_id") != authenticated_empno:
+            raise HTTPException(status_code=403, detail="본인 세션만 고정할 수 있습니다.")
+
         success = chat_log.toggle_pin_status(session_id, request.is_pinned)
         if not success:
             raise HTTPException(status_code=404, detail="Session not found")
