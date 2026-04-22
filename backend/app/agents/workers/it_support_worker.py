@@ -61,6 +61,13 @@ class ITSupportWorker(BaseWorker):
             "execute_org_chart_query",  # 조직도/담당자 검색
             "register_works_voc",       # WORKS 서비스데스크 VOC 등록
             "reset_sap_password",       # SAP 패스워드 초기화 (RFC)
+            # LFON 그룹웨어 계정 관리 (2-step: confirm → execute)
+            "confirm_reset_otp",
+            "execute_reset_otp",
+            "confirm_reset_password",
+            "execute_reset_password",
+            "confirm_increase_mail_quota",
+            "execute_increase_mail_quota",
         ]
 
     @property
@@ -205,6 +212,68 @@ CRITICAL:
 - 사용자 본인의 SAP 비밀번호 초기화만 가능합니다 (사번 자동 주입).
 - 다른 사람의 비밀번호 초기화는 거절하고 WORKS 등록을 안내하세요.
 - 한 번의 요청에서 운영/개발 둘 다 초기화해달라고 하면 두 번 호출하세요 (각각 system="prd", "dev").
+
+## 그룹웨어 계정 관리 (OTP / 비밀번호 / 메일 용량) — 2-step 필수
+
+사용자가 아래 작업을 요청하면 반드시 **2단계 confirm → execute 패턴**을 따릅니다:
+
+| 요청 예시 | 1단계 도구 (confirm) | 2단계 도구 (execute) |
+|---------|---------------------|--------------------|
+| "OTP 초기화", "OTP 재등록", "OTP 앱 재설정" | `confirm_reset_otp` | `execute_reset_otp` |
+| "그룹웨어 비밀번호 초기화", "LFON 비밀번호 리셋", "로그인 비번 초기화" | `confirm_reset_password` | `execute_reset_password` |
+| "메일 용량 증설", "메일함 용량 늘려", "받은편지함 용량 부족" | `confirm_increase_mail_quota` | `execute_increase_mail_quota` |
+
+**SAP 비밀번호 초기화와 혼동 금지:**
+- SAP(ERP 시스템) 비밀번호 → `reset_sap_password` (위 SAP 섹션 참조)
+- LFON 그룹웨어 로그인 비밀번호 → `confirm_reset_password` + `execute_reset_password`
+- 사용자가 애매하게 "비밀번호 초기화" 만 말하면 **"SAP인가요, 그룹웨어(LFON)인가요?"** 로 1회 확인 후 진행
+
+### 2-step 패턴 엄격 준수 (CRITICAL)
+
+**절대 사용자 확인 없이 execute_* 도구를 먼저 호출하지 마세요.** destructive 작업이므로 실수 방지가 핵심입니다.
+
+**정확한 흐름:**
+1. 사용자 요청 접수 → `confirm_<action>` 도구 호출 (파라미터는 employee_number만, 자동 주입됨)
+2. confirm 응답에 포함된 `token`과 `action_label`, `detail`을 읽고, **사용자에게 확인 질문**:
+   - 예: "김용국님의 **그룹웨어 비밀번호 초기화**를 진행할까요? 초기화 후 첫 로그인 시 새 비밀번호 설정이 필요합니다. 진행하시려면 '예'라고 답해주세요."
+3. **사용자가 다음 턴에서 명확히 '예', '네', '진행' 등으로 동의**하면 `execute_<action>(token="...")` 호출
+4. execute 결과를 사용자에게 전달
+
+**금지 사항:**
+- confirm 응답을 받자마자 같은 턴에서 execute를 호출하는 것 (❌ 사용자 확인 의미 상실)
+- 사용자가 애매하게 "그래"나 "음"이라고 하면 execute 호출 금지 → 다시 명확히 확인
+- execute 단계에서 token 없이 호출 (서버가 거부하지만 그전에 프롬프트 수준에서도 막기)
+- confirm에서 받은 token을 다른 action의 execute에 전달 (서버가 action mismatch 체크하여 거부)
+
+### 메일 용량 증설 응답 해석 (CRITICAL)
+
+`execute_increase_mail_quota` 결과에 따라 **반드시** 다음처럼 응답하세요:
+
+**Case 1 — 성공 (응답에 "✅ 메일 용량 증설가 완료되었습니다" 포함):**
+사용자에게 완료 안내.
+예: "메일 용량이 증설되었습니다. 이제 여유 공간이 생겼습니다."
+
+**Case 2 — "STATUS_NOT_ERROR: 이미 한 번 증설된 상태" (응답에 해당 문자열 포함):**
+⚠️ **이것은 오류가 아닙니다.** 사용자에게 "이미 증설된 상태"라고 상황 안내만 하세요.
+예: "현재 메일 용량은 이미 한 번 증설된 상태입니다. 추가 증설이 필요하시면 기안 상신으로 요청해주세요."
+**절대 "죄송합니다", "오류 발생", "실패했습니다" 같은 표현 사용 금지.**
+
+**Case 3 — "STATUS_NOT_ERROR: 최대 용량 도달" (응답에 해당 문자열 포함):**
+⚠️ **이것도 오류가 아닙니다.** 사용자에게 "메일 정리가 필요하다"고 안내만 하세요.
+예: "메일함이 최대 용량에 도달했습니다. 오래된 메일을 정리하거나 백업 후 다시 시도해주세요."
+
+**Case 4 — 기타 실패 (응답에 "❌ ... 실패" 포함):**
+그때만 오류로 취급. "오류가 발생했습니다. WORKS 서비스데스크에 등록하시겠어요?"
+
+핵심 규칙:
+- `STATUS_NOT_ERROR:` prefix는 사용자에게 보이지 말고 **무시**, 뒤의 내용만 해석
+- `STATUS_NOT_ERROR:`가 있으면 무조건 **중립/안내 톤**으로 응답 (오류 아님)
+
+### 본인 한정 (CRITICAL)
+
+- 사번은 시스템이 자동 주입하므로 사용자가 사번을 말해도 **무시하고 자동 주입된 값만 사용**.
+- "○○○씨 비밀번호 초기화해줘" 같이 타인 대상 요청 → **거절하고 WORKS 등록 안내**:
+  "보안상 본인 계정만 초기화 가능합니다. 해당 사용자 본인이 직접 요청하거나 WORKS 서비스데스크로 등록해주세요."
 
 CRITICAL - 담당자 질문 응답 규칙:
 When the user asks "담당자 누구야?" or similar, you MUST:
@@ -356,8 +425,22 @@ database structure, schema, or internal system details, respond with:
         if not user_id or user_id == "anonymous":
             return tools
 
+        # employee_number 강제 주입 대상 도구들
+        # (사용자 본인 사번만 쓰도록 LLM 조작 차단)
+        SECURED_TOOLS = {
+            "register_works_voc",
+            "reset_sap_password",
+            # LFON 계정 관리 — confirm/execute 양쪽 모두 본인 사번 고정
+            "confirm_reset_otp",
+            "execute_reset_otp",
+            "confirm_reset_password",
+            "execute_reset_password",
+            "confirm_increase_mail_quota",
+            "execute_increase_mail_quota",
+        }
+
         for tool in tools:
-            if tool.name in ("register_works_voc", "reset_sap_password"):
+            if tool.name in SECURED_TOOLS:
                 original_ainvoke = getattr(tool, '_unwrapped_ainvoke', None) or tool.ainvoke
                 object.__setattr__(tool, '_unwrapped_ainvoke', original_ainvoke)
 

@@ -1,6 +1,6 @@
 # 그룹웨어 관리 API Reference
 
-> 작성일: 2026-04-21
+> 작성일: 2026-04-21 (2026-04-22 secure 경로 + 인증 토큰 반영)
 > Base URL: `https://api.landf.co.kr:44818/`
 > 용도: 그룹웨어 사용자 계정 관리 (OTP/패스워드 초기화, 메일 용량 증설)
 
@@ -12,16 +12,24 @@ LF그룹 그룹웨어(LFON) 사용자 계정의 **관리 작업을 원격으로 
 
 | 작업 | Endpoint | Method | updateDataFlag |
 |------|----------|--------|----------------|
-| OTP 초기화 | `/lfon/management/OTP` | `PUT` | `OTP` |
-| 패스워드 초기화 | `/lfon/management/password` | `PUT` | `password` |
-| 메일 용량 증설 | `/lfon/management/userInfo` | `PUT` | `mail` |
+| OTP 초기화 | `/secure/lfon/management/OTP` | `PUT` | `OTP` |
+| 패스워드 초기화 | `/secure/lfon/management/password` | `PUT` | `password` |
+| 메일 용량 증설 | `/secure/lfon/management/userInfo` | `PUT` | `mail` |
 
 ### 공통 사항
 
 - **프로토콜**: HTTPS (포트 `44818`)
 - **요청 형식**: JSON (`Content-Type: application/json`)
+- **인증**: `Authorization: <TOKEN>` 헤더 필수 (2026-04-22 추가). 토큰은 `.env`의 `LFON_MGMT_API_KEY`에 저장.
 - **대상 지정**: `ids` 배열에 그룹웨어 ID(정수)를 하나 이상 담아 전달. 다건 처리 가능 구조.
 - **동작 원리**: `updateDataFlag`로 엔드포인트별 처리 종류를 구분. 단일 API 패턴을 세 경로로 분기.
+
+### 이력
+
+| 날짜 | 변경 |
+|------|------|
+| 2026-04-21 | 최초 명세 수령 — 인증 없음, `/lfon/management/*` 경로 |
+| 2026-04-22 | `/secure/lfon/management/*` 경로로 변경 + `Authorization` 헤더 인증 추가. 리버스 엔지니어링으로 타 사용자 계정 조작 가능했던 근본 취약점 해결 |
 
 ---
 
@@ -32,7 +40,7 @@ LF그룹 그룹웨어(LFON) 사용자 계정의 **관리 작업을 원격으로 
 ### Endpoint
 
 ```
-PUT /lfon/management/OTP
+PUT /secure/lfon/management/OTP
 ```
 
 ### Request Body
@@ -45,7 +53,7 @@ PUT /lfon/management/OTP
 ### 예시
 
 ```http
-PUT /lfon/management/OTP HTTP/1.1
+PUT /secure/lfon/management/OTP HTTP/1.1
 Content-Type: application/json
 
 {
@@ -70,7 +78,7 @@ Content-Type: application/json
 ### Endpoint
 
 ```
-PUT /lfon/management/password
+PUT /secure/lfon/management/password
 ```
 
 ### Request Body
@@ -83,7 +91,7 @@ PUT /lfon/management/password
 ### 예시
 
 ```http
-PUT /lfon/management/password HTTP/1.1
+PUT /secure/lfon/management/password HTTP/1.1
 Content-Type: application/json
 
 {
@@ -108,7 +116,7 @@ Content-Type: application/json
 ### Endpoint
 
 ```
-PUT /lfon/management/userInfo
+PUT /secure/lfon/management/userInfo
 ```
 
 ### Request Body
@@ -121,7 +129,7 @@ PUT /lfon/management/userInfo
 ### 예시
 
 ```http
-PUT /lfon/management/userInfo HTTP/1.1
+PUT /secure/lfon/management/userInfo HTTP/1.1
 Content-Type: application/json
 
 {

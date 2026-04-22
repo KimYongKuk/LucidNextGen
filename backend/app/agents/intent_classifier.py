@@ -40,6 +40,13 @@ INTENTS:
 - youtube: Contains YouTube URL
 - it_support: IT help desk, IT VOC, security issues, VPN, printers, IT-domain staff lookup
   Systems: 쉐도우큐브, DRM, DLP, LFON, SAP GUI, Citrix, AD, 방화벽, 백신, 매체제어
+  ALSO HANDLES (destructive account actions, 2-step confirm/execute):
+    - OTP 초기화/재등록/재설정 (휴대폰 교체 등)
+    - 그룹웨어(LFON) 비밀번호 초기화/리셋
+    - SAP 비밀번호 초기화 (reset_sap_password)
+    - 메일함 용량 증설/확장
+  IMPORTANT: "비밀번호 초기화"는 모호하면 → it_support (Worker가 SAP/LFON 재질문)
+  IMPORTANT: "OTP", "메일 용량", "메일함 증설" 등 명시 키워드 → 즉시 it_support
 - acct_support: Accounting/finance VOC, 세금계산서, SAP 전표, 결산, 예산, 자산, 경비 처리
   NOTE: "결산" (settlement) → "acct_support", NOT "approval"
   NOTE: "WA전표품의" is an approval FORM name → "approval", NOT "acct_support"
@@ -143,6 +150,14 @@ EXAMPLES:
 - "마케팅 담당자 누구야?" → corp_rag
 - "VPN 담당자 누구야?" → it_support
 - "쉐도우큐브 담당자?" → it_support
+- "내 OTP 초기화해줘" → it_support
+- "OTP 재등록 해야돼" → it_support
+- "그룹웨어 비밀번호 초기화" → it_support
+- "LFON 로그인 비번 리셋해줘" → it_support
+- "SAP 비밀번호 초기화" → it_support
+- "메일 용량 늘려줘" → it_support
+- "메일함 증설해줘" → it_support
+- "받은편지함이 꽉 찼어" → it_support
 - "세금계산서 담당자?" → acct_support
 - "결산 담당자 누구야?" → acct_support
 - "전자결재 관련 게시글 찾아줘" → board (게시글 검색, 전자결재는 주제)
@@ -322,6 +337,17 @@ class IntentClassifier:
             calendar_keywords = r'(캘린더|일정\s?(조회|등록|삭제|추가|확인)|내\s?일정|오늘\s?일정|이번\s?주\s?일정|다음\s?주\s?일정|빈\s?시간|스케줄|일정\s?잡아|일정\s?만들|일정\s?넣어|일정\s?잡아줘)'
             if re.search(calendar_keywords, message, re.IGNORECASE):
                 matched_intents.append(Intent.CALENDAR)
+
+        # IT Support - 계정 관리 destructive 액션 키워드 (즉시 분류, 매우 명확)
+        # OTP 초기화, 비밀번호 리셋, 메일 용량 증설 등은 반드시 ITSupportWorker로 라우팅
+        # (ITSupportWorker에서 2-step confirm/execute 패턴으로 안전 처리)
+        it_account_pattern = r'(OTP.{0,10}(초기화|재등록|재설정|리셋)|' \
+                             r'(그룹웨어|LFON|SAP|로그인)?\s*비밀번호.{0,5}(초기화|리셋|재설정)|' \
+                             r'(메일|받은\s?편지함|메일함).{0,5}(용량|증설|확장|늘려)|' \
+                             r'메일.{0,5}용량.{0,5}(늘려|증설|확장|부족))'
+        if re.search(it_account_pattern, message, re.IGNORECASE):
+            print(f"[INTENT] Quick: IT account management keyword → IT_SUPPORT")
+            return Intent.IT_SUPPORT
 
         # NAS keywords
         nas_enabled = os.environ.get("NAS_WORKER_ENABLED", "true").lower() == "true"

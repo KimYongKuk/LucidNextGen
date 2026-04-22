@@ -207,6 +207,21 @@
       "transport": "stdio",
       "description": "L&F Wiki 문서 검색/조회/생성/수정 (키워드 검색, 최근 문서, 컬렉션 탐색, 텍스트 직접 게시)",
       "enabled": true
+    },
+    "lfon_mgmt": {
+      "command": "python",
+      "args": [
+        "app/mcp_servers/lfon_mgmt/server.py"
+      ],
+      "env": {
+        "LFON_MGMT_BASE_URL": "${LFON_MGMT_BASE_URL}",
+        "LFON_MGMT_API_KEY": "${LFON_MGMT_API_KEY}",
+        "LFON_MGMT_ENABLED": "${LFON_MGMT_ENABLED}",
+        "TIMS_DATABASE_URL": "${TIMS_DATABASE_URL}"
+      },
+      "transport": "stdio",
+      "description": "그룹웨어 계정 관리 (OTP/비밀번호 초기화, 메일 용량 증설) — 본인 계정만, 2-step confirm/execute 필수",
+      "enabled": true
     }
   }
 }
