@@ -7,9 +7,16 @@ import { getUserId } from "@/lib/utils";
 
 export default function EmbedPage() {
   const searchParams = useSearchParams();
+  // AES 암호화 토큰 (Outline 서버사이드에서 생성, iframe src URL 파라미터로 전달)
+  // 백엔드 widget_auth.py가 복호화해서 사번으로 정규화 (email/login_id/사번 모두 지원)
+  const widgetAuthToken = useMemo(() => {
+    return searchParams.get("token") || undefined;
+  }, [searchParams]);
+
   // 우선순위: URL 파라미터 empno > SSO 쿠키 > anonymous
+  // (token이 있어도 userId는 UI 표시용으로 유지 — 실제 인증은 widgetAuthToken으로)
   const userId = useMemo(() => {
-    return searchParams.get("empno") || getUserId() || "anonymous";
+    return searchParams.get("empno") || getUserId() || "wiki_user";
   }, [searchParams]);
 
   // embed 내 링크 클릭 시 부모 프레임(L&F Wiki)으로 postMessage 전송
@@ -47,7 +54,11 @@ export default function EmbedPage() {
 
   return (
     <div className="h-dvh w-full bg-background">
-      <EmbedChat userId={userId} chatMode="outline_embed" />
+      <EmbedChat
+        userId={userId}
+        widgetAuthToken={widgetAuthToken}
+        chatMode="outline_embed"
+      />
     </div>
   );
 }
