@@ -76,7 +76,7 @@ class Synthesizer:
         return CachedChatBedrockConverse(
             model=effective_model_id,
             temperature=0.3,
-            max_tokens=4096,
+            max_tokens=8192,
         )
 
     def _ensure_correct_region(self):

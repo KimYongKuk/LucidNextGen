@@ -21,8 +21,8 @@ MODEL_MAP: Dict[str, str] = {
 
 # 모델별 max_tokens 상한
 _MODEL_MAX_TOKENS: Dict[str, int] = {
-    "claude-sonnet": 8192,
-    "claude-haiku": 4096,
+    "claude-sonnet": 32768,
+    "claude-haiku": 8192,
 }
 
 _MAX_RETRIES = 2

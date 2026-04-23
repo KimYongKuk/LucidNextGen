@@ -5,6 +5,11 @@
 
 ---
 
+## [2026-04-24]
+- **수정** [Bedrock/max_tokens] Sonnet Worker max_tokens 8K → 32K 상향 — A2203003 사용자의 "엘앤에프 전체 부서 조직도" 요청이 운영에서 마크다운 계층 트리 출력 중 8192 토큰에 걸려 중간 절단되는 이슈 확인(2026-04-22 17:44 로그, CorpRAGWorker output=8,488로 정확히 상한). Sonnet 4.5/4.6 API 상한 64K 중 표준값 32K(32768)를 선택. `model_config.py`의 `get_model_chain()` primary + `get_worker_config(use_sonnet=True)` 두 곳, `openapi_bedrock_service.py`의 `_MODEL_MAX_TOKENS` sonnet cap 상향, Haiku 계열(fallback/synthesizer/Haiku worker)은 모델 상한인 8K로 동반 상향(4096→8192). Bedrock read_timeout은 청크 간격 기준이라 변경 없음. 폴백으로 Haiku 전환 시에는 암묵적으로 8K로 재축소되는 점이 제약. 근본 해결(긴 리스트 → xlsx 경로 Planner 유도)은 별도 과제로 남김 → [상세](docs/history/2026-04-24_max_tokens_32K_상향.md)
+
+---
+
 ## [2026-04-22]
 - **추가** [Wiki/Embed] Outline 위키 iframe 임베드 인증 — 오늘 새벽 배포된 JWT 인증 의무화로 위키 iframe 채팅이 401 발생. cross-origin iframe이라 쿠키 전달 불가 → 그룹웨어 위젯과 동일한 AES 암호화 토큰 방식 재사용. Outline 측(Node.js)이 `crypto.createCipheriv('aes-128-ecb', ...)`로 `email|timestamp` 암호화 → iframe src `?token=` 파라미터 → Lucid `/embed/wiki/page.tsx`가 추출 → `EmbedChat(widgetAuthToken)` → `useSimpleChat`이 `X-Widget-Auth` 헤더로 전송 → `widget_auth.py`가 복호화 + `v_user_info_mapping.login_id → employee_number` 조회. 같은 `WIDGET_SHARED_KEY` 삼각 호환(Java JSP + Python + Node.js). `outline_embed` 모드 인텐트 제한(OUTLINE + DIRECT)은 유지 → 사번 인증되어도 위키 검색 범위만 접근. 동시에 `/embed` 경로의 Next.js trailing slash redirect loop(서브라우트 있을 때 발생) 해결 위해 `app/embed/page.tsx`와 `layout.tsx`를 `embed/wiki/`, `embed/gw/` sub-path로 이동 → [상세](docs/history/2026-04-22_위키_임베드_인증.md)
 - **추가** [IT/LFON] 그룹웨어 계정 관리 자동화 (OTP/비밀번호/메일용량 초기화) — 사용자가 자연어로 "내 OTP 초기화해줘" / "비밀번호 리셋" / "메일 용량 늘려줘" 요청 시 ITSupportWorker가 2-step confirm/execute 패턴으로 안전 처리. 신규 MCP 서버 `lfon_mgmt/server.py` (FastMCP stdio, 6개 도구: confirm_* x3 + execute_* x3), 사번 → v_user_info_mapping.user_id 변환 후 `/secure/lfon/management/*` PUT 호출 (Authorization 토큰 헤더 인증, 2026-04-22 개발자 배포). 토큰 1회성 + 60초 유효 + empno/action mismatch 이중 검증. `ITSupportWorker.SECURED_TOOLS` 집합에 6개 추가하여 `prepare_tools()`에서 employee_number 강제 주입 (본인 계정만 조작 가능). 프롬프트에 SAP vs LFON 비밀번호 구분, 2-step 패턴 엄격 준수, 메일 증설 `code` 분기(full/end) 등 상세 가이드 추가. LFON 측이 원본 API 이력을 자체 DB에 기록하므로 챗봇 측 별도 감사 테이블은 두지 않음 → [상세](docs/history/2026-04-22_LFON_계정관리_연동.md)

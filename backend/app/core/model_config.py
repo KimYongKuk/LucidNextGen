@@ -41,12 +41,12 @@ def get_model_chain() -> List[ModelConfig]:
         ModelConfig(
             model_id=primary_id,
             display_name=_derive_display_name(primary_id),
-            max_tokens=8192
+            max_tokens=32768
         ),
         ModelConfig(
             model_id=fallback_id,
             display_name=_derive_display_name(fallback_id),
-            max_tokens=4096
+            max_tokens=8192
         ),
     ]
 
@@ -93,13 +93,13 @@ def get_worker_config(use_sonnet: bool = False) -> ModelConfig:
         return ModelConfig(
             model_id=mid,
             display_name=f"Worker ({_derive_display_name(mid)})",
-            max_tokens=8192
+            max_tokens=32768
         )
     mid = os.getenv("WORKER_DEFAULT_MODEL_ID", "global.anthropic.claude-haiku-4-5-20251001-v1:0")
     return ModelConfig(
         model_id=mid,
         display_name=f"Worker ({_derive_display_name(mid)})",
-        max_tokens=4096
+        max_tokens=8192
     )
 
 
