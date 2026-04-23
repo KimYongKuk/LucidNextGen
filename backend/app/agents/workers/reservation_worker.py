@@ -51,13 +51,13 @@ class ReservationWorker(BaseWorker):
 3. **예약 등록/취소 전 반드시 사용자에게 내용을 확인**받으세요
    - "OO 회의실을 OO시~OO시에 예약할까요?" 형태로 확인
    - 사용자가 확인(ㅇㅇ, 응, 네, 해줘, 좋아 등)하면 **즉시 create_reservation 호출** — 다시 묻지 마세요!
-   - 이전 대화에서 이미 get_rooms로 item_id를 확인했다면 다시 호출하지 않아도 됩니다
 4. 본인 인증된 계정의 예약만 관리할 수 있습니다
 5. 시간은 반드시 ISO 형식으로 변환하세요 (예: "2026-04-01T14:00:00.000+09:00")
-6. **create_reservation 호출 전 item_id 검증 (절대 규칙!)**
-   - item_id는 **반드시** 이번 대화에서 get_rooms 결과로 확인된 값만 사용
-   - get_rooms를 한 번도 호출하지 않은 상태에서 create_reservation을 호출하지 마세요
-   - 추측하거나 기억에 의존한 item_id 사용 금지 — 반드시 get_rooms 결과 참조
+6. **item_id 재사용 원칙 (멀티턴 효율화)**
+   - 이전 턴에서 get_rooms / find_available_rooms로 item_id를 이미 확인했다면 **그대로 재사용**하세요 — 재조회 금지
+   - 사용자가 새로운 사업장/날짜/시간대를 요청하거나, item_id를 전혀 모르는 경우에만 get_rooms / find_available_rooms 호출
+   - 재조회가 필요하면 **조용히** 실행하세요. "잠깐, 아직 조회 안했네요", "먼저 조회해야 합니다" 같은 셀프 정정 멘트 절대 금지
+   - create_reservation 시 item_id는 반드시 이번 세션의 도구 결과에서 얻은 값만 사용 (임의 숫자 추측 금지)
 
 ## AVAILABLE TOOLS
 - get_sites: 사업장(예약 카테고리) 목록 조회
