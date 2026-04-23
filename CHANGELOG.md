@@ -6,6 +6,7 @@
 ---
 
 ## [2026-04-24]
+- **추가** [UI/Embed] 그룹웨어 embed에 예시 질문 박스(2x2 랜덤 4개) 추가 — 사용자가 embed 초기 화면에서 바로 시도할 수 있도록 40개 풀(IT 매뉴얼/담당자/메일/결재/공지/일정/예약/일정+예약 하이브리드) 준비. `EmbedChat`에 `renderEmptyExamples` 렌더 prop 추가하여 `messages.length === 0`일 때만 호출, wiki embed는 prop 미전달이라 영향 없음. 전 지원부서(IT·HR·재무·총무·회계·구매·EHS·품질) 커버 + CalendarWorker의 일정+예약 통합 능력을 반영한 하이브리드 예시 포함 → [상세](docs/history/2026-04-24_그룹웨어_임베드_예시_질문.md)
 - **수정** [Bedrock/max_tokens] Sonnet Worker max_tokens 8K → 32K 상향 — A2203003 사용자의 "엘앤에프 전체 부서 조직도" 요청이 운영에서 마크다운 계층 트리 출력 중 8192 토큰에 걸려 중간 절단되는 이슈 확인(2026-04-22 17:44 로그, CorpRAGWorker output=8,488로 정확히 상한). Sonnet 4.5/4.6 API 상한 64K 중 표준값 32K(32768)를 선택. `model_config.py`의 `get_model_chain()` primary + `get_worker_config(use_sonnet=True)` 두 곳, `openapi_bedrock_service.py`의 `_MODEL_MAX_TOKENS` sonnet cap 상향, Haiku 계열(fallback/synthesizer/Haiku worker)은 모델 상한인 8K로 동반 상향(4096→8192). Bedrock read_timeout은 청크 간격 기준이라 변경 없음. 폴백으로 Haiku 전환 시에는 암묵적으로 8K로 재축소되는 점이 제약. 근본 해결(긴 리스트 → xlsx 경로 Planner 유도)은 별도 과제로 남김 → [상세](docs/history/2026-04-24_max_tokens_32K_상향.md)
 
 ---

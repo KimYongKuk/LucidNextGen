@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { EmbedChat } from "@/components/embed-chat";
+import { EmbedGwExamples } from "@/components/embed-gw-examples";
 
 export default function GroupwareEmbedPage() {
   // 마운트 시 1회만 URL에서 token(암호화) 또는 empno(legacy), sid 추출
@@ -59,6 +60,9 @@ export default function GroupwareEmbedPage() {
             window.parent.postMessage({ type: 'lucid-new-chat' }, '*');
           }
         }}
+        renderEmptyExamples={({ chatId, onSelect }) => (
+          <EmbedGwExamples chatId={chatId} onSelect={onSelect} />
+        )}
       />
     </div>
   );

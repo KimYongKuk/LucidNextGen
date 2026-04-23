@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, type ReactNode } from "react";
 import { SquarePen } from "lucide-react";
 import { useSimpleChat } from "@/hooks/use-simple-chat";
 import { useDataStream } from "./data-stream-provider";
@@ -18,12 +18,17 @@ export function EmbedChat({
   chatMode = "outline_embed",
   initialSessionId,
   onNewChat,
+  renderEmptyExamples,
 }: {
   userId: string;
   widgetAuthToken?: string;
   chatMode?: string;
   initialSessionId?: string;
   onNewChat?: () => void;
+  renderEmptyExamples?: (args: {
+    chatId: string;
+    onSelect: (text: string) => void;
+  }) => ReactNode;
 }) {
   const { setDataStream } = useDataStream();
   const [sessionId, setSessionId] = useState(() => initialSessionId || generateUUID());
@@ -131,7 +136,16 @@ export function EmbedChat({
 
       {/* 입력 영역 */}
       <div className="sticky bottom-0 z-1 mx-auto flex w-full max-w-4xl flex-col gap-2 border-t-0 bg-background px-2 pb-4 md:px-4 md:pb-4">
-        {status === "ready" && !input.trim() && (
+        {status === "ready" && !input.trim() && messages.length === 0 && renderEmptyExamples?.({
+          chatId: sessionId,
+          onSelect: (text) => {
+            sendMessage({
+              role: "user",
+              parts: [{ type: "text", text }],
+            });
+          },
+        })}
+        {status === "ready" && !input.trim() && messages.length > 0 && (
           <FollowUpSuggestions
             suggestions={followUpSuggestions}
             onSuggestionClick={(suggestion) => {
