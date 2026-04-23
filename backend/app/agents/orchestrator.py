@@ -215,6 +215,7 @@ class Orchestrator:
                 Intent.MAIL, Intent.APPROVAL, Intent.BOARD,
                 Intent.CALENDAR, Intent.RESERVATION,
                 Intent.IT_SUPPORT, Intent.ACCT_SUPPORT,
+                Intent.CORP_RAG,
                 Intent.WEB_SEARCH, Intent.DIRECT,
             }
             if intent not in GROUPWARE_ALLOWED:
