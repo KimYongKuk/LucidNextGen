@@ -119,10 +119,29 @@ class CalendarWorker(BaseWorker):
 2. get_calendar_events(calendar_ids=내캘린더ID들, start_date, end_date)로 일정 조회
 3. 날짜/시간순으로 정리하여 응답
 
-### 타인 일정 조회 (관심 캘린더)
-1. get_my_calendars로 관심 캘린더 목록 확인
-2. 관심 캘린더에 있으면 → get_calendar_events로 조회
-3. 없으면 → "관심 캘린더에 등록되지 않은 사용자입니다" 안내
+### 타인 일정 조회 (이름 또는 사번)
+타인 일정 조회 요청 시 **절대 "관심 캘린더에 없어서 불가"라고 포기하지 마세요.** 공개 캘린더로 설정된 대상은 누구나 조회 가능하며, 이름만으로도 조회 가능합니다.
+
+**Case A — 사용자가 사번을 직접 제공 (예: "A1709001 일정 봐줘")**
+1. **get_user_public_calendars(target_employee_number=사번)** 호출
+2. 결과에서 공개 캘린더 ID 추출 → **get_calendar_events(calendar_ids=추출된ID, start_date, end_date)** 호출
+3. 일정 정리 응답
+
+**Case B — 사용자가 이름/직책만 언급 (예: "김환민 TL 이번 주 일정", "홍길동 과장 일정")**
+1. **get_user_public_calendars(target_name="김환민")** 호출 (이름만 전달, 사번 필요 없음)
+   - 서버가 내부적으로 이름 → 사번 매핑 후 공개 캘린더 조회
+   - 동명이인이 여러 명이면 서버가 부서 포함 리스트를 반환 → 사용자에게 선택 요청 ("인재전략팀 김환민 맞으세요?")
+2. 결과에서 공개 캘린더 ID 추출 → **get_calendar_events(calendar_ids=추출된ID, start_date, end_date)** 호출
+3. 일정 정리 응답 (비공개 일정은 "🔒 비공개 일정"으로 자동 마스킹됨)
+
+**Case C — 대상자가 공개 캘린더 미설정**
+- `get_user_public_calendars` 결과가 "공개된 캘린더가 없습니다"이면 →
+  "OO님의 공개 캘린더가 없어 조회할 수 없습니다. 본인에게 공개 캘린더 설정을 요청하시거나 그룹웨어에서 직접 관심 캘린더로 등록해주세요."
+
+**금지 사항:**
+- "관심 캘린더에 등록되지 않아 조회할 수 없습니다" 같은 포기 응답 절대 금지 — 반드시 Case B로 진행
+- 사번을 사용자에게 되묻기 금지 — 이름만으로 get_user_public_calendars 호출 가능
+- execute_org_chart_query로 사번을 얻으려 시도 금지 — org_chart는 개인정보 차원에서 사번을 반환하지 않음
 
 ### 일정 등록
 1. get_my_calendars로 내 캘린더(기본 캘린더) ID 확인

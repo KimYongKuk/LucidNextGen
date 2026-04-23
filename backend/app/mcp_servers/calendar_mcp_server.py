@@ -434,18 +434,43 @@ async def get_my_calendars(employee_number: str, gosso_cookie: str = "") -> str:
 
 
 @mcp.tool()
-async def get_user_public_calendars(target_employee_number: str, employee_number: str, gosso_cookie: str = "") -> str:
+async def get_user_public_calendars(
+    employee_number: str,
+    target_employee_number: str = "",
+    target_name: str = "",
+    gosso_cookie: str = "",
+) -> str:
     """특정 사용자의 공개 캘린더 목록을 조회합니다.
     관심 캘린더에 등록하지 않은 사용자의 공개 일정을 확인할 때 사용합니다.
 
+    사번을 모르면 이름으로 조회하세요. 동명이인이 여러 명이면
+    부서 포함 disambiguation 리스트가 반환되며, 그 중 하나를 다음 턴에 선택합니다.
+
     Args:
-        target_employee_number: 조회 대상 사번
         employee_number: 요청자 사번 (자동 주입됨)
+        target_employee_number: 조회 대상 사번 (사번을 알고 있을 때)
+        target_name: 조회 대상 이름 (사번을 모를 때 — "김환민" 처럼 이름만)
         gosso_cookie: 사용자 GOSSOcookie (자동 주입됨, 직접 지정 금지)
 
     Returns:
-        대상 사용자의 공개 캘린더 목록
+        대상 사용자의 공개 캘린더 목록. 동명이인 발견 시 선택 안내.
     """
+    # 1. 대상 사번 결정 (사번 우선 > 이름 조회)
+    if not target_employee_number and not target_name:
+        return "오류: target_employee_number 또는 target_name 중 하나를 제공해주세요."
+
+    if not target_employee_number and target_name:
+        matches = await _search_users_by_name(target_name, limit=10)
+        if not matches:
+            return f"오류: 이름 '{target_name}'에 해당하는 사용자를 찾을 수 없습니다."
+        if len(matches) > 1:
+            lines = [f"'{target_name}' 이름으로 {len(matches)}명이 검색되었습니다. 부서를 포함하여 다시 말씀해주세요:\n"]
+            for m in matches:
+                dept = m.get("dept_name") or "부서 미상"
+                lines.append(f"- {m['name']} ({dept})")
+            return "\n".join(lines)
+        target_employee_number = matches[0]["employee_number"]
+
     target_info = await _get_go_user_info(target_employee_number)
     if not target_info:
         return f"오류: 사번 '{target_employee_number}'에 대한 사용자 정보를 찾을 수 없습니다."
