@@ -29,6 +29,7 @@ interface UseSimpleChatOptions {
   workspaceId?: string | null;  // UUID string
   userId?: string;  // 외부에서 주입 (embed 등 SSO 쿠키 없는 환경)
   widgetAuthToken?: string;  // 그룹웨어 위젯 암호화 토큰 (embed 전용)
+  gossoCookie?: string;  // 그룹웨어 위젯에서 URL로 전달된 GOSSOcookie (embed 전용, 쿠키 경유 우회)
 }
 
 export function useSimpleChat({
@@ -42,6 +43,7 @@ export function useSimpleChat({
   workspaceId,
   userId: externalUserId,
   widgetAuthToken,
+  gossoCookie,
 }: UseSimpleChatOptions) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [status, setStatus] = useState<'ready' | 'streaming' | 'submitted'>('ready');
@@ -175,15 +177,17 @@ export function useSimpleChat({
           images: imageFiles.length > 0 ? imageFiles : null,
           message_history: messageHistory.length > 0 ? messageHistory : null,
           workspace_id: workspaceId,
-          // gosso_cookie 추출 — GOSSOcookie(LFON 원본) 우선, 없으면 gosso(middleware 세팅) 폴백
-          // LFON이 GOSSOcookie를 `.landf.co.kr` 도메인으로 세팅하면 iframe에서도 직접 읽힘 →
-          // SSO URL param 경로 안 거쳐도 그룹웨어 로그인 상태만으로 쓰기 작업 가능
-          ...(typeof document !== 'undefined' && (() => {
+          // gosso_cookie 주입 — 우선순위:
+          // 1) prop으로 직접 전달된 값 (그룹웨어 위젯 URL 파라미터 경로, iframe 쿠키/캐시 무관하게 동작)
+          // 2) 현재 문서의 쿠키 폴백 (SSO URL param 경유 middleware가 세팅한 gosso 또는 동일 도메인 GOSSOcookie)
+          ...(() => {
+            if (gossoCookie) return { gosso_cookie: gossoCookie };
+            if (typeof document === 'undefined') return {};
             const m1 = document.cookie.match(/(?:^|;\s*)GOSSOcookie=([^;]+)/);
             const m2 = document.cookie.match(/(?:^|;\s*)gosso=([^;]+)/);
             const val = m1?.[1] || m2?.[1];
             return val ? { gosso_cookie: val } : {};
-          })()),
+          })(),
         }),
         signal: abortControllerRef.current.signal,
       });

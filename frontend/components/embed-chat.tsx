@@ -15,6 +15,7 @@ import { generateUUID } from "@/lib/utils";
 export function EmbedChat({
   userId,
   widgetAuthToken,
+  gossoCookie,
   chatMode = "outline_embed",
   initialSessionId,
   onNewChat,
@@ -22,6 +23,7 @@ export function EmbedChat({
 }: {
   userId: string;
   widgetAuthToken?: string;
+  gossoCookie?: string;
   chatMode?: string;
   initialSessionId?: string;
   onNewChat?: () => void;
@@ -50,6 +52,7 @@ export function EmbedChat({
     chatMode,
     userId,
     widgetAuthToken,
+    gossoCookie,
     generateId: generateUUID,
     onData: (dataPart) => {
       setDataStream((ds) => (ds ? [...ds, dataPart] : []));
