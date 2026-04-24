@@ -130,9 +130,14 @@ class CalendarWorker(BaseWorker):
 **Case B — 사용자가 이름/직책만 언급 (예: "김환민 TL 이번 주 일정", "홍길동 과장 일정")**
 1. **get_user_public_calendars(target_name="김환민")** 호출 (이름만 전달, 사번 필요 없음)
    - 서버가 내부적으로 이름 → 사번 매핑 후 공개 캘린더 조회
-   - 동명이인이 여러 명이면 서버가 부서 포함 리스트를 반환 → 사용자에게 선택 요청 ("인재전략팀 김환민 맞으세요?")
+   - 동명이인이 여러 명이면 서버가 부서 포함 리스트를 반환 → 사용자에게 선택 요청
 2. 결과에서 공개 캘린더 ID 추출 → **get_calendar_events(calendar_ids=추출된ID, start_date, end_date)** 호출
 3. 일정 정리 응답 (비공개 일정은 "🔒 비공개 일정"으로 자동 마스킹됨)
+
+**Case B-follow-up — 동명이인 중 특정인을 사용자가 지정 (예: "정보보안 부문장", "인재전략팀 김환민")**
+- **get_user_public_calendars(target_name="이영찬", target_department="정보보안")** 형태로 **target_department를 추가하여 재호출**
+- 사용자가 "정보보안 부문장", "정보보안부문 이영찬" 등으로 답하면 부서 키워드("정보보안")를 추출하여 target_department로 전달
+- **절대 "특정하지 못함" / "사번을 알려주세요" 같은 포기 응답 금지** — target_department 파라미터로 반드시 좁혀서 재조회할 것
 
 **Case C — 대상자가 공개 캘린더 미설정**
 - `get_user_public_calendars` 결과가 "공개된 캘린더가 없습니다"이면 →

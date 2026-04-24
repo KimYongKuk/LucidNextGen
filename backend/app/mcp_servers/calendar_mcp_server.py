@@ -89,16 +89,24 @@ async def _get_go_user_info(employee_number: str) -> Optional[dict]:
         return None
 
 
-async def _search_users_by_name(name: str, limit: int = 5) -> list:
-    """이름으로 사용자 검색 (참석자 조회용)"""
+async def _search_users_by_name(name: str, dept_filter: str = "", limit: int = 5) -> list:
+    """이름으로 사용자 검색 (참석자 조회용).
+
+    Args:
+        name: 이름 (부분 매칭)
+        dept_filter: 부서명 필터 (부분 매칭, 빈 문자열이면 필터 없음)
+        limit: 최대 반환 건수
+    """
     try:
         pool = await _get_db_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT employee_number, login_id, user_id, name, dept_name "
-                "FROM v_user_info_mapping WHERE name LIKE '%' || $1 || '%' "
-                "LIMIT $2",
-                name, limit,
+                "FROM v_user_info_mapping "
+                "WHERE name LIKE '%' || $1 || '%' "
+                "  AND ($2 = '' OR dept_name ILIKE '%' || $2 || '%') "
+                "LIMIT $3",
+                name, dept_filter, limit,
             )
         return [
             {
@@ -438,18 +446,21 @@ async def get_user_public_calendars(
     employee_number: str,
     target_employee_number: str = "",
     target_name: str = "",
+    target_department: str = "",
     gosso_cookie: str = "",
 ) -> str:
     """특정 사용자의 공개 캘린더 목록을 조회합니다.
     관심 캘린더에 등록하지 않은 사용자의 공개 일정을 확인할 때 사용합니다.
 
     사번을 모르면 이름으로 조회하세요. 동명이인이 여러 명이면
-    부서 포함 disambiguation 리스트가 반환되며, 그 중 하나를 다음 턴에 선택합니다.
+    부서 포함 disambiguation 리스트가 반환되며, 다음 턴에 target_department를
+    함께 전달하여 특정할 수 있습니다.
 
     Args:
         employee_number: 요청자 사번 (자동 주입됨)
         target_employee_number: 조회 대상 사번 (사번을 알고 있을 때)
         target_name: 조회 대상 이름 (사번을 모를 때 — "김환민" 처럼 이름만)
+        target_department: 부서명 필터 (이름이 동명이인일 때 좁히기용, 예: "정보보안")
         gosso_cookie: 사용자 GOSSOcookie (자동 주입됨, 직접 지정 금지)
 
     Returns:
@@ -460,14 +471,16 @@ async def get_user_public_calendars(
         return "오류: target_employee_number 또는 target_name 중 하나를 제공해주세요."
 
     if not target_employee_number and target_name:
-        matches = await _search_users_by_name(target_name, limit=10)
+        matches = await _search_users_by_name(target_name, dept_filter=target_department, limit=10)
         if not matches:
-            return f"오류: 이름 '{target_name}'에 해당하는 사용자를 찾을 수 없습니다."
+            hint = f" (부서 필터: '{target_department}')" if target_department else ""
+            return f"오류: 이름 '{target_name}'{hint}에 해당하는 사용자를 찾을 수 없습니다."
         if len(matches) > 1:
             lines = [f"'{target_name}' 이름으로 {len(matches)}명이 검색되었습니다. 부서를 포함하여 다시 말씀해주세요:\n"]
             for m in matches:
                 dept = m.get("dept_name") or "부서 미상"
                 lines.append(f"- {m['name']} ({dept})")
+            lines.append("\n(다음 턴에 target_department 파라미터로 좁힐 수 있습니다)")
             return "\n".join(lines)
         target_employee_number = matches[0]["employee_number"]
 
