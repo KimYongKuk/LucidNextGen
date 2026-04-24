@@ -1,6 +1,5 @@
 'use client';
 
-import { usePathname } from 'next/navigation';
 import { Card, CardContent } from '@/components/ui/card';
 import {
   Carousel,
@@ -64,9 +63,6 @@ function SourceCard({ source, index }: { source: Source; index: number }) {
 }
 
 export function SourcesCarousel({ sources }: SourcesCarouselProps) {
-  const pathname = usePathname();
-  const isEmbed = pathname?.startsWith('/embed/') ?? false;
-
   if (!sources || sources.length === 0) {
     return null;
   }
@@ -102,15 +98,15 @@ export function SourcesCarousel({ sources }: SourcesCarouselProps) {
         참고 자료 (References) ({validSources.length})
       </div>
 
-      {isEmbed ? (
-        // Embed 모드: 세로 리스트 (좁은 iframe에 가로 스크롤 없이 최적화)
-        <div className="flex flex-col gap-2">
-          {validSources.map((source, index) => (
-            <SourceCard key={index} source={source} index={index} />
-          ))}
-        </div>
-      ) : (
-        // 일반 모드: 가로 캐러셀
+      {/* 좁은 화면(< 640px, embed iframe 등): 세로 리스트 */}
+      <div className="flex flex-col gap-2 sm:hidden">
+        {validSources.map((source, index) => (
+          <SourceCard key={index} source={source} index={index} />
+        ))}
+      </div>
+
+      {/* 일반 화면(≥ 640px): 가로 캐러셀 */}
+      <div className="hidden sm:block">
         <Carousel
           opts={{
             align: 'start',
@@ -128,7 +124,7 @@ export function SourcesCarousel({ sources }: SourcesCarouselProps) {
           <CarouselPrevious />
           <CarouselNext />
         </Carousel>
-      )}
+      </div>
     </div>
   );
 }
