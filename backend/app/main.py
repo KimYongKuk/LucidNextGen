@@ -166,10 +166,14 @@ async def lifespan(app: FastAPI):
     outline_sync_scheduler.start()
 
     # Outline Webhook 큐 프로세서 시작
-    print("[STARTUP] Outline Webhook Service starting...")
-    from app.services.outline_webhook_service import get_outline_webhook_service
-    _outline_webhook_service = get_outline_webhook_service()
-    _outline_webhook_service.start()
+    _outline_webhook_service = None
+    if os.getenv("OUTLINE_WEBHOOK_ENABLED", "true").lower() == "true":
+        print("[STARTUP] Outline Webhook Service starting...")
+        from app.services.outline_webhook_service import get_outline_webhook_service
+        _outline_webhook_service = get_outline_webhook_service()
+        _outline_webhook_service.start()
+    else:
+        print("[STARTUP] Outline Webhook Service SKIPPED (OUTLINE_WEBHOOK_ENABLED=false)")
 
     startup_time = int((time.time() - startup_start) * 1000)
     print("="*70)
@@ -190,7 +194,8 @@ async def lifespan(app: FastAPI):
             nightly_summary_scheduler.stop()
             voc_wiki_scheduler.stop()
             outline_sync_scheduler.stop()
-            _outline_webhook_service.stop()
+            if _outline_webhook_service:
+                _outline_webhook_service.stop()
             await close_mcp_adapter()
             # Notification service pool cleanup
             from app.services.notice_service import _notification_service

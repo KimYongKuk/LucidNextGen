@@ -30,6 +30,16 @@ export default function GroupwareEmbedPage() {
     return undefined;
   });
 
+  // URL `?gosso=` → lucid 도메인 쿠키로 이식 (iframe은 middleware 경로 제외이므로 여기서 처리)
+  // use-simple-chat이 이후 document.cookie에서 자동 픽업하여 chat API body에 gosso_cookie로 전달
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const gosso = params.get("gosso");
+    if (gosso) {
+      document.cookie = `gosso=${encodeURIComponent(gosso)}; path=/; SameSite=Lax; max-age=86400`;
+    }
+  }, []);
+
   // embed 내 링크 클릭 시 새 탭으로 열기 (그룹웨어는 postMessage 불필요)
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {

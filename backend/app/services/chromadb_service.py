@@ -67,6 +67,15 @@ class SafeSentenceTransformerEmbeddingFunction:
         if self._model is not None:
             return self._model
 
+        # 개발서버 전용: 운영과 같은 호스트에서 GPU/Windows commit charge 경합을 피하기 위해
+        # 임베딩 모델 로드를 원천 차단. RAG 검색·파일 벡터화 기능은 비활성화됨.
+        if os.getenv("DEV_DISABLE_EMBEDDING", "false").lower() == "true":
+            raise RuntimeError(
+                "임베딩이 DEV_DISABLE_EMBEDDING=true로 비활성화되었습니다. "
+                "개발서버에서 운영과의 GPU·커밋 차지 경합 방지용 설정입니다. "
+                "RAG 검색·파일 벡터화를 사용하려면 .env에서 이 플래그를 제거하세요."
+            )
+
         # 동시에 여러 요청이 모델을 로드하지 않도록 락 사용
         with _model_load_lock:
             # 락 획득 후 다시 확인 (다른 스레드가 이미 로드했을 수 있음)
