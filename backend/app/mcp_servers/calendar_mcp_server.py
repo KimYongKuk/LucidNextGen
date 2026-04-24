@@ -45,6 +45,22 @@ _user_feed_cache: dict = {}          # go_user_id → {calendar_id: feed_info, .
 _user_feed_cache_ts: dict = {}       # go_user_id → datetime (캐시 시각)
 FEED_CACHE_TTL = 300                 # 피드 캐시 TTL (5분)
 
+# ── 파일 로거 ──────────────────────────────────────────
+# MCP 서버는 별도 프로세스(stdio)라 stderr가 main backend server.log에 캡처되지 않음.
+# LFON API 응답 진단을 위해 backend/logs/calendar_mcp.log 에 직접 기록.
+_CALENDAR_MCP_LOG = os.path.join(
+    os.path.dirname(__file__), "..", "..", "logs", "calendar_mcp.log"
+)
+
+
+def _log_to_file(msg: str) -> None:
+    try:
+        os.makedirs(os.path.dirname(_CALENDAR_MCP_LOG), exist_ok=True)
+        with open(_CALENDAR_MCP_LOG, "a", encoding="utf-8") as f:
+            f.write(f"[{datetime.now().isoformat()}] {msg}\n")
+    except Exception:
+        pass
+
 
 # ── DB 헬퍼 ───────────────────────────────────────────
 
@@ -185,6 +201,7 @@ async def _api_request_with_cookies(
         headers["Origin"] = LFON_BASE_URL
         headers["Referer"] = f"{LFON_BASE_URL}/app/calendar"
 
+    cookie_tag = ",".join(sorted(cookies.keys()))
     max_attempts = 2 if retry_on_auth_fail else 1
     for attempt in range(max_attempts):
         try:
@@ -196,14 +213,23 @@ async def _api_request_with_cookies(
                     method, path, headers=headers, cookies=cookies, **kwargs
                 )
 
+                body_preview = (resp.text[:300] if resp.text else "(empty)").replace("\n", " ")
+                _log_to_file(
+                    f"{method} {path} cookies=[{cookie_tag}] attempt={attempt} "
+                    f"→ status={resp.status_code} body={body_preview}"
+                )
+
                 if resp.status_code in (401, 403):
                     if retry_on_auth_fail and attempt == 0:
                         global _sso_cookies
                         _sso_cookies = None
                         cookies = await _sso_login()
                         if not cookies:
+                            _log_to_file(f"{method} {path} 재로그인 실패 → None 반환")
                             return None
+                        cookie_tag = ",".join(sorted(cookies.keys()))
                         continue
+                    _log_to_file(f"{method} {path} 인증 실패({resp.status_code}) → None 반환 (폴백 유도)")
                     return None  # 사용자 쿠키는 재시도 없이 None 반환
 
                 if resp.status_code == 200:
@@ -218,6 +244,7 @@ async def _api_request_with_cookies(
                     except Exception:
                         return {"code": str(resp.status_code), "message": body}
         except Exception as e:
+            _log_to_file(f"{method} {path} cookies=[{cookie_tag}] attempt={attempt} 예외: {type(e).__name__}: {e}")
             print(f"[Calendar MCP] API 호출 실패: {method} {path} → {e}", file=sys.stderr)
             return None
 
@@ -237,10 +264,12 @@ async def _api_request(method: str, path: str, gosso_cookie: str = "", **kwargs)
         )
         if result is not None:
             return result
+        _log_to_file(f"{method} {path} 사용자 쿠키 실패 → 서비스 계정 폴백 진입")
         print(f"[Calendar MCP] 사용자 GOSSOcookie 만료/실패 → 서비스 계정 폴백: {method} {path}",
               file=sys.stderr)
 
     # 2) 서비스 계정 폴백 (기존 동작)
+    _log_to_file(f"{method} {path} 서비스 계정 경로 시작 (gosso_present={bool(gosso_cookie)})")
     return await _api_request_with_cookies(
         method, path,
         cookies=await _sso_login(),
@@ -944,10 +973,17 @@ async def create_event(
     print(f"[Calendar MCP] 일정 등록: cal={calendar_id}, summary={summary}, "
           f"user=GO#{go_user_id}, gosso={'있음' if gosso_cookie else '없음'}", file=sys.stderr)
 
+    _log_to_file(
+        f"create_event 요청: cal={calendar_id} user={employee_number} "
+        f"go_user_id={go_user_id} gosso_present={bool(gosso_cookie)} "
+        f"payload_keys={list(payload.keys())}"
+    )
     result = await _api_request("POST", f"/api/calendar/{calendar_id}/event/",
                                 gosso_cookie=gosso_cookie, json=payload)
     if not result:
-        return "오류: 일정 등록에 실패했습니다. 서버에 연결할 수 없습니다."
+        _log_to_file(f"create_event 최종 실패: cal={calendar_id} user={employee_number}")
+        return ("오류: 일정 등록에 실패했습니다. LFON 서버가 응답을 거부했습니다 "
+                "(자세한 원인은 backend/logs/calendar_mcp.log 참고).")
 
     # 에러 응답 확인
     if isinstance(result, dict) and result.get("code") and str(result["code"]) != "200":
