@@ -105,7 +105,7 @@ export function EmbedChat({
   }, [setMessages, setDataStream, onNewChat]);
 
   return (
-    <div className="flex h-full min-w-0 flex-col bg-background">
+    <div className="flex h-full min-w-0 flex-col overflow-x-hidden bg-background">
       {/* 새 대화 버튼 — 대화가 시작된 후에만 표시 */}
       {messages.length > 0 && (
         <div className="flex justify-end px-3 py-1.5">

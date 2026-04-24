@@ -466,7 +466,7 @@ const TableWithCopyButton = ({ children, ...props }: HTMLAttributes<HTMLTableEle
   }, []);
 
   return (
-    <div className="relative group/table my-4">
+    <div className="relative group/table my-4 overflow-x-auto max-w-full">
       <button
         onClick={handleCopyAsExcel}
         className="absolute -top-3 right-1 z-10 opacity-0 group-hover/table:opacity-100 transition-opacity inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium bg-muted hover:bg-accent border border-border shadow-sm cursor-pointer"
