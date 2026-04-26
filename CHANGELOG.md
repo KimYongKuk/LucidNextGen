@@ -5,6 +5,11 @@
 
 ---
 
+## [2026-04-27]
+- **수정** [Calendar/RecurrenceUpdate] 반복 일정 회차 수정 시 LFON 500 internal.error 발생하던 이슈 수정 — 사용자(A2304013)가 본인 반복 일정의 한 회차 시간을 변경 요청했을 때 `update_event`가 LFON `PUT /api/calendar/{cal}/event/{event_id}`로 호출했는데 `event_id="403063_1777374000000"`(마스터ID_인스턴스타임스탬프) 형식의 반복 인스턴스 ID에 대해 LFON이 500 반환. `delete_event`는 이미 `?recurChangeType={delete_type}` 쿼리로 처리하던 패턴인데 `update_event`엔 누락되어 있었음. `recur_change_type: str = "this"` 파라미터 추가, event_id에 `_` 포함된 경우 PUT URL에 `?recurChangeType=...` 자동 부착. CalendarWorker 시스템 프롬프트에 반복 일정 회차/전체/이후 구분 안내 가이드 추가하여 LLM이 사용자에게 명시적으로 확인하도록 지시. calendar_mcp.log에 update_event 호출 시점의 인스턴스 여부 + recur_change_type 기록 → [상세](docs/history/2026-04-27_반복일정_회차수정_지원.md)
+
+---
+
 ## [2026-04-24]
 - **수정** [Calendar/Embed] 그룹웨어 위젯 경로에서 GOSSOcookie가 백엔드까지 전달되지 않아 `create_event`가 "서버에 연결할 수 없습니다"로 실패하던 이슈 수정 — 3단계 작업으로 최종 해결. (1) URL `?gosso=`를 `useEffect`로 document.cookie에 이식 시도했으나 iframe context에서 미반영, (2) 쿠키 경유 우회하여 `URL → state → EmbedChat prop → useSimpleChat → fetch body` 직접 경로로 전환 — prop 경로 정상 동작 확인(`gosso → 있음` 로그), (3) `calendar_mcp_server.py`에 파일 로거(`backend/logs/calendar_mcp.log`) 추가하여 LFON API 응답 진단 — 실제 원인은 **개발 그룹웨어 세션/운영 LFON API 도메인 불일치**로 판명. 개발 GW의 GOSSOcookie는 운영 LFON에서 401, 서비스 계정(wg0403=김용국)은 타인 캘린더에 403. 운영 그룹웨어에 위젯 임베드하니 정상 동작 확인. 코드는 올바르게 동작했고 환경 구성 이슈였으나, prop 경로/진단 로깅은 견고한 구조로 그대로 유지 → [상세](docs/history/2026-04-24_GW위젯_GOSSO_전달_수정.md)
 - **수정** [Dev/Embedding] 개발서버 BGE-m3-ko 임베딩 로드 차단 — 같은 Windows 호스트에서 dev(8099)와 운영 blue/green(8001/8002)이 각자 PyTorch+CUDA+BGE-m3-ko+ChromaDB를 로드하면 **프로세스당 peak Virtual ~95GB**를 예약 → 시스템 commit limit(93GB = 물리 64GB + 페이징 29GB)을 한 프로세스만으로도 돌파 위험. 오늘 조사에서 dev 좀비(PID 1543848) Virtual 95,374MB 및 운영 green PeakVirtualMB 96,880MB 확인 — 운영도 같은 패턴 기록. 페이징 대폭 상향은 C드라이브 여유(29GB) 문제로 불가. 근본 원인(PyTorch/CUDA+safetensors mmap+cuDNN 예약)은 `SentenceTransformer(...)` 호출 시점부터 시작되므로 **dev에서 모델 로드 자체를 차단**. `.env`에 `DEV_DISABLE_EMBEDDING=true` 추가, `chromadb_service.py:_load_model()` 초입에 플래그 가드 추가 → true면 즉시 `RuntimeError`. 효과: dev 백엔드 peak가 10GB 전후로 유지 예상, 운영과 commit charge 경합 해소. 파급: dev에서 search_user_files/search_workspace_docs/사내문서 RAG/파일 벡터화 비활성(명확한 에러 메시지 반환). Bedrock 채팅·기타 Worker는 정상. MCP rag_server 서브프로세스도 부모 환경변수 상속으로 같이 차단됨. 운영 blue/green은 이 변수 미설정 → 기본값 false → 영향 없음 → [상세](docs/history/2026-04-24_dev_embedding_비활성화.md)

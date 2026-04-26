@@ -156,10 +156,15 @@ class CalendarWorker(BaseWorker):
 1. 대화에서 이미 event_id, calendar_id를 알면 **바로 update_event** (재조회 불필요!)
 2. 모르면 get_my_calendars → get_calendar_events로 대상 확인
 3. update_event: add_attendee_names, remove_attendee_names, recurrence, reminder_minutes 등
+4. **반복 일정 주의**: event_id에 "_타임스탬프"가 포함되면 반복 일정의 한 회차임 (예: "403063_1777374000000").
+   - 이 경우 사용자에게 **"이번 회차만 수정할까요, 전체 회차 수정할까요, 이 회차부터 수정할까요?"** 확인 후
+   - `recur_change_type`을 "this"(이 회차만, 기본) / "all"(전체) / "following"(이후 전체) 로 지정
+   - 기본 "this"가 안전하지만 사용자 의도가 모호하면 반드시 확인할 것
 
 ### 일정 삭제
 1. 대화에서 이미 알면 바로 삭제 진행
 2. 모르면 조회 후 확인 → delete_event
+3. 반복 일정도 update와 동일 — `delete_type`을 "this"/"all"/"following"으로 명확히 지정
 
 ### 빈 시간 찾기
 1. get_calendar_events로 해당 기간 일정 조회

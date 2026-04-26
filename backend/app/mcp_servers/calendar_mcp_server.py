@@ -1034,6 +1034,7 @@ async def update_event(
     remove_attendee_names: str = "",
     recurrence: str = "",
     reminder_minutes: str = "",
+    recur_change_type: str = "this",
     gosso_cookie: str = "",
 ) -> str:
     """기존 일정을 수정합니다.
@@ -1043,7 +1044,7 @@ async def update_event(
     Args:
         employee_number: 사번 (자동 주입됨)
         calendar_id: 캘린더 ID
-        event_id: 수정할 일정 ID (get_calendar_events에서 확인)
+        event_id: 수정할 일정 ID (get_calendar_events에서 확인). 반복 일정 인스턴스는 "마스터ID_타임스탬프" 형식
         summary: 변경할 제목 (빈 문자열이면 유지)
         start_time: 변경할 시작 시간 (ISO 형식, 빈 문자열이면 유지)
         end_time: 변경할 종료 시간 (ISO 형식, 빈 문자열이면 유지)
@@ -1054,6 +1055,7 @@ async def update_event(
         add_attendee_names: 추가할 참석자 이름 (콤마 구분)
         recurrence: 반복 설정 변경 (RFC5545, 예: "FREQ=WEEKLY;UNTIL=20260601". "NONE"이면 반복 해제)
         reminder_minutes: 알림 변경 (분 단위, 콤마 구분, 예: "10,30". "0"이면 알림 제거)
+        recur_change_type: 반복 일정 수정 범위 — "this"(이 회차만, 기본), "all"(전체), "following"(이 회차부터). 단일 일정엔 무시됨
         remove_attendee_names: 제거할 참석자 이름 (콤마 구분)
 
     Returns:
@@ -1157,12 +1159,25 @@ async def update_event(
 
     updated["attendees"] = attendees
 
-    print(f"[Calendar MCP] 일정 수정: cal={calendar_id}, event={event_id}, "
-          f"user=GO#{go_user_id}", file=sys.stderr)
+    # 반복 일정 인스턴스(event_id에 "_타임스탬프" 포함)는 LFON이 recurChangeType 쿼리를 요구.
+    # delete_event와 동일 패턴. 이게 빠지면 LFON이 500 internal.error 반환.
+    is_recurrence_instance = "_" in event_id
+    path = f"/api/calendar/{calendar_id}/event/{event_id}"
+    if is_recurrence_instance:
+        path += f"?recurChangeType={recur_change_type}"
 
-    result = await _api_request("PUT", f"/api/calendar/{calendar_id}/event/{event_id}",
-                                gosso_cookie=gosso_cookie, json=updated)
+    _log_to_file(
+        f"update_event 요청: cal={calendar_id} event={event_id} "
+        f"recur_instance={is_recurrence_instance} recur_change_type={recur_change_type} "
+        f"user={employee_number} go_user_id={go_user_id}"
+    )
+    print(f"[Calendar MCP] 일정 수정: cal={calendar_id}, event={event_id}, "
+          f"user=GO#{go_user_id}, recur={recur_change_type if is_recurrence_instance else 'n/a'}",
+          file=sys.stderr)
+
+    result = await _api_request("PUT", path, gosso_cookie=gosso_cookie, json=updated)
     if not result:
+        _log_to_file(f"update_event 최종 실패: cal={calendar_id} event={event_id}")
         return "오류: 일정 수정에 실패했습니다."
 
     if isinstance(result, dict) and result.get("code") and str(result["code"]) != "200":
