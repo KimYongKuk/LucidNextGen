@@ -1207,16 +1207,18 @@ async def update_event(
         code = str(result.get("code"))
         # LFON DaouOffice는 단건 회차 수정(recurChangeType=this/following)을 500으로 거부함.
         # 사용자에게 정확한 원인과 대안을 알려서 LLM이 헛된 재시도(삭제후재등록 등) 안 하도록.
-        if code == "500" and is_recurrence_instance and recur_change_type in ("this", "following"):
+        if code in ("400", "500") and is_recurrence_instance and recur_change_type in ("this", "following"):
             _log_to_file(
-                f"update_event 단건 수정 거부: recur_change_type={recur_change_type} → "
-                f"LFON 500. 'all'로 폴백 권고 안내 반환."
+                f"update_event 단건/이후 수정 거부 ({code}): recur_change_type={recur_change_type} → "
+                f"LLM에 폴백 금지 안내 반환"
             )
             return (
-                f"오류: LFON 그룹웨어가 반복 일정 단건 수정(recur_change_type='{recur_change_type}')을 "
-                "지원하지 않습니다 (500 internal.error). 다음 중 하나로 처리하세요: "
-                "(a) recur_change_type='all'로 전체 회차에 동일 변경 적용, "
-                "(b) 사용자에게 그룹웨어 캘린더에서 해당 회차만 직접 수정하도록 안내."
+                "[INTERNAL_TOOL_RESULT — 사용자 응답에 그대로 옮기지 말 것] "
+                "LFON 그룹웨어가 단건/이후 회차 수정을 거부했습니다. "
+                "절대 recur_change_type='all'로 재시도하지 마세요(다른 회차까지 함께 변경되어 데이터 손상). "
+                "사용자에게 다음 한 문장으로만 자연스럽게 안내하세요: "
+                "\"이 반복 일정은 그룹웨어 정책상 일부 회차만 수정할 수 없어요. "
+                "그룹웨어 캘린더에서 직접 해당 회차를 선택해 변경해주세요.\""
             )
         return f"오류: 일정 수정 실패 — {msg}"
 
@@ -1250,7 +1252,10 @@ async def delete_event(
         employee_number: 사번 (자동 주입됨)
         calendar_id: 캘린더 ID
         event_id: 삭제할 일정 ID (반복 일정은 "eventId_timestamp" 형식)
-        delete_type: 반복 일정 삭제 범위 - "all"(전체), "this"(이 일정만), "following"(이후 전체) (기본: "all")
+        delete_type: 반복 일정 삭제 범위 — **"all"(전체) 사용 권장**.
+            "this"(이 회차만) / "following"(이후 전체)는 LFON DaouOffice가 400/500으로 거부함.
+            사용자가 단건/이후 삭제를 명시 요청해도 절대 "all"로 자동 변환하지 말 것 — 데이터 손실 위험.
+            그룹웨어에서 직접 처리하도록 안내할 것.
 
     Returns:
         삭제 결과
@@ -1286,10 +1291,32 @@ async def delete_event(
 
     # 삭제 실행
     path = f"/api/calendar/{calendar_id}/event/{event_id}?recurChangeType={delete_type}"
+    _log_to_file(
+        f"delete_event 요청: cal={calendar_id} event={event_id} delete_type={delete_type} "
+        f"user={employee_number}"
+    )
     result = await _api_request("DELETE", path, gosso_cookie=gosso_cookie)
 
     if not result:
         return "오류: 일정 삭제에 실패했습니다. 서버에 연결할 수 없습니다."
+
+    # LFON이 this/following 거부 (400/500) — LLM이 자체 폴백("all"로 재시도) 못 하도록 명시 차단.
+    # 시리즈 전체 삭제는 데이터 손실 위험이라 사용자가 그룹웨어에서 직접 처리해야 함.
+    if (isinstance(result, dict) and result.get("code")
+            and str(result["code"]) in ("400", "500")
+            and delete_type in ("this", "following")):
+        _log_to_file(
+            f"delete_event 단건/이후 삭제 거부 ({result.get('code')}): "
+            f"event={event_id} delete_type={delete_type} → LLM에 폴백 금지 안내 반환"
+        )
+        return (
+            "[INTERNAL_TOOL_RESULT — 사용자 응답에 그대로 옮기지 말 것] "
+            "LFON 그룹웨어가 단건/이후 회차 삭제를 거부했습니다. "
+            "절대 delete_type='all'로 재시도하지 마세요(이전 회차까지 모두 사라져 데이터 손실). "
+            "사용자에게 다음 한 문장으로만 자연스럽게 안내하세요: "
+            "\"이 반복 일정은 그룹웨어 정책상 일부 회차만 삭제할 수 없어요. "
+            "그룹웨어 캘린더에서 직접 해당 회차를 선택해 삭제해주세요.\""
+        )
 
     if isinstance(result, dict) and result.get("code") and str(result["code"]) != "200":
         msg = result.get("message", "알 수 없는 오류")
