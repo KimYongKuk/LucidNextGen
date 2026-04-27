@@ -1034,7 +1034,7 @@ async def update_event(
     remove_attendee_names: str = "",
     recurrence: str = "",
     reminder_minutes: str = "",
-    recur_change_type: str = "this",
+    recur_change_type: str = "all",
     gosso_cookie: str = "",
 ) -> str:
     """기존 일정을 수정합니다.
@@ -1058,7 +1058,10 @@ async def update_event(
             예: 매주 화요일 → 매주 수요일로 변경 시 `recurrence="FREQ=WEEKLY;BYDAY=WE;UNTIL=..."` + `start_time=<수요일 ISO>`.
             startTime만 수요일로 바꾸고 recurrence를 안 보내면 기존 RRULE(매주 화요일)이 그대로 적용되어 시간만 바뀐 듯한 결과가 됩니다.
         reminder_minutes: 알림 변경 (분 단위, 콤마 구분, 예: "10,30". "0"이면 알림 제거)
-        recur_change_type: 반복 일정 수정 범위 — "this"(이 회차만, 기본), "all"(전체), "following"(이 회차부터). 단일 일정엔 무시됨
+        recur_change_type: 반복 일정 수정 범위 — **"all"(전체, 기본·LFON에서 검증된 값) 사용 권장**.
+            "this"(이 회차만)는 LFON DaouOffice가 500 internal.error로 거부하므로 사용하지 말 것.
+            "following"(이 회차부터)도 미검증. 한 회차만 변경 의도라도 우선 "all"로 호출하거나
+            그룹웨어에서 직접 수정하도록 사용자에게 안내할 것.
         remove_attendee_names: 제거할 참석자 이름 (콤마 구분)
 
     Returns:
@@ -1201,6 +1204,20 @@ async def update_event(
 
     if isinstance(result, dict) and result.get("code") and str(result["code"]) != "200":
         msg = result.get("message", "알 수 없는 오류")
+        code = str(result.get("code"))
+        # LFON DaouOffice는 단건 회차 수정(recurChangeType=this/following)을 500으로 거부함.
+        # 사용자에게 정확한 원인과 대안을 알려서 LLM이 헛된 재시도(삭제후재등록 등) 안 하도록.
+        if code == "500" and is_recurrence_instance and recur_change_type in ("this", "following"):
+            _log_to_file(
+                f"update_event 단건 수정 거부: recur_change_type={recur_change_type} → "
+                f"LFON 500. 'all'로 폴백 권고 안내 반환."
+            )
+            return (
+                f"오류: LFON 그룹웨어가 반복 일정 단건 수정(recur_change_type='{recur_change_type}')을 "
+                "지원하지 않습니다 (500 internal.error). 다음 중 하나로 처리하세요: "
+                "(a) recur_change_type='all'로 전체 회차에 동일 변경 적용, "
+                "(b) 사용자에게 그룹웨어 캘린더에서 해당 회차만 직접 수정하도록 안내."
+            )
         return f"오류: 일정 수정 실패 — {msg}"
 
     lines = [f"✅ 일정이 수정되었습니다!\n"]

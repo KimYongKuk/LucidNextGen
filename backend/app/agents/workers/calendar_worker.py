@@ -157,9 +157,9 @@ class CalendarWorker(BaseWorker):
 2. 모르면 get_my_calendars → get_calendar_events로 대상 확인
 3. update_event: add_attendee_names, remove_attendee_names, recurrence, reminder_minutes 등
 4. **반복 일정 주의**: event_id에 "_타임스탬프"가 포함되면 반복 일정의 한 회차임 (예: "403063_1777374000000").
-   - 이 경우 사용자에게 **"이번 회차만 수정할까요, 전체 회차 수정할까요, 이 회차부터 수정할까요?"** 확인 후
-   - `recur_change_type`을 "this"(이 회차만, 기본) / "all"(전체) / "following"(이후 전체) 로 지정
-   - 기본 "this"가 안전하지만 사용자 의도가 모호하면 반드시 확인할 것
+   - **`recur_change_type`은 반드시 `"all"`(전체 회차) 사용**. LFON DaouOffice가 `"this"`/`"following"`을 500 internal.error로 거부함.
+   - 사용자가 "이번 회차만 옮겨줘" 같이 단건 수정을 명시 요청해도, **그룹웨어에서 직접 수정하도록 안내**하고 도구로 "this" 호출하지 말 것 (실패 확정).
+   - 여러 회차의 시간/내용을 한꺼번에 변경할 때는 인스턴스 하나에 `recur_change_type="all"`로 한 번만 호출하면 시리즈 전체 적용됨. 회차마다 반복 호출 X.
    - **반복 일정의 마스터 ID(언더스코어 없는 ID)로는 직접 호출하지 말 것** — LFON이 500 반환. 항상 인스턴스 ID 사용.
 5. **반복 일정의 요일/주기 변경 시 (예: "매주 화요일 → 매주 수요일")**:
    - `start_time`/`end_time`만 새 요일로 바꾸면 안 됨. RRULE이 그대로라 결과적으로 시간만 변경되어 보임.
