@@ -24,6 +24,7 @@ import { chatModels } from "@/lib/ai/models";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import { cn, getUserId } from "@/lib/utils";
 import { getApiUrl } from "@/lib/api/config";
+import { compressImageIfNeeded } from "@/lib/image-compression";
 import {
   PromptInput,
   PromptInputModelSelect,
@@ -187,8 +188,21 @@ function PureMultimodalInput({
   // 최대 파일 크기 (50MB)
   const MAX_FILE_SIZE = 50 * 1024 * 1024;
 
-  const uploadFile = useCallback(async (file: File) => {
-    // 파일 크기 검증 (50MB)
+  const uploadFile = useCallback(async (rawFile: File) => {
+    // 이미지면 업로드 직전 브라우저에서 resize + 재인코딩 (longest 1568px, JPEG q0.85)
+    // 폰 사진/풀스크린 캡처 등 5~10MB 짜리를 300~500KB 수준으로 떨어뜨려
+    // HTTP body 전송 시간과 Bedrock vision tokenization 비용을 동시에 줄임.
+    let file = rawFile;
+    if (rawFile.type.startsWith("image/")) {
+      try {
+        file = await compressImageIfNeeded(rawFile);
+      } catch (e) {
+        console.warn("[image-compression] failed, using original:", e);
+        file = rawFile;
+      }
+    }
+
+    // 파일 크기 검증 (50MB) — 압축 후 기준
     if (file.size > MAX_FILE_SIZE) {
       toast.error(`파일 크기가 50MB를 초과합니다: ${file.name} (${(file.size / (1024 * 1024)).toFixed(2)}MB)`);
       return;
