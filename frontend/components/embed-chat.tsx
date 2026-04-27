@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, type ReactNode } from "react";
-import { SquarePen } from "lucide-react";
+import { SquarePen, ExternalLink } from "lucide-react";
 import { useSimpleChat } from "@/hooks/use-simple-chat";
 import { useDataStream } from "./data-stream-provider";
 import { Messages } from "./messages";
@@ -107,11 +107,30 @@ export function EmbedChat({
     onNewChat?.();
   }, [setMessages, setDataStream, onNewChat]);
 
+  const handleOpenInMainApp = useCallback(() => {
+    if (typeof window === "undefined") return;
+    window.open(
+      `${window.location.origin}/chat/${sessionId}`,
+      "_blank",
+      "noopener,noreferrer"
+    );
+  }, [sessionId]);
+
   return (
     <div className="flex h-full min-w-0 flex-col overflow-x-hidden bg-background">
-      {/* 새 대화 버튼 — 대화가 시작된 후에만 표시 */}
+      {/* 새 대화 / 본체에서 열기 — 대화가 시작된 후에만 표시 */}
       {messages.length > 0 && (
-        <div className="flex justify-end px-3 py-1.5">
+        <div className="flex justify-end gap-1 px-3 py-1.5">
+          {chatMode === "groupware_embed" && (
+            <button
+              onClick={handleOpenInMainApp}
+              className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              title="본체에서 열기 (현재 대화 이어서)"
+            >
+              <ExternalLink size={14} />
+              <span>본체에서 열기</span>
+            </button>
+          )}
           <button
             onClick={handleNewChat}
             className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
