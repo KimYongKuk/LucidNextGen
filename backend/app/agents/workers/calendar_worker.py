@@ -160,6 +160,12 @@ class CalendarWorker(BaseWorker):
    - 이 경우 사용자에게 **"이번 회차만 수정할까요, 전체 회차 수정할까요, 이 회차부터 수정할까요?"** 확인 후
    - `recur_change_type`을 "this"(이 회차만, 기본) / "all"(전체) / "following"(이후 전체) 로 지정
    - 기본 "this"가 안전하지만 사용자 의도가 모호하면 반드시 확인할 것
+   - **반복 일정의 마스터 ID(언더스코어 없는 ID)로는 직접 호출하지 말 것** — LFON이 500 반환. 항상 인스턴스 ID 사용.
+5. **반복 일정의 요일/주기 변경 시 (예: "매주 화요일 → 매주 수요일")**:
+   - `start_time`/`end_time`만 새 요일로 바꾸면 안 됨. RRULE이 그대로라 결과적으로 시간만 변경되어 보임.
+   - **반드시 `recurrence` 파라미터에 새 RRULE을 함께 전달**해야 함.
+     예: 매주 수요일로 변경 → `recurrence="FREQ=WEEKLY;BYDAY=WE;UNTIL=20260701"` + `start_time=<수요일 ISO>` + `recur_change_type="all"`
+   - 시간만 바꾸는 경우(예: "20시로 옮겨줘")는 recurrence 변경 불필요.
 
 ### 일정 삭제
 1. 대화에서 이미 알면 바로 삭제 진행

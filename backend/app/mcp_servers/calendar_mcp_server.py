@@ -1053,7 +1053,10 @@ async def update_event(
         description: 변경할 설명 (빈 문자열이면 유지)
         visibility: 변경할 공개 설정 (빈 문자열이면 유지)
         add_attendee_names: 추가할 참석자 이름 (콤마 구분)
-        recurrence: 반복 설정 변경 (RFC5545, 예: "FREQ=WEEKLY;UNTIL=20260601". "NONE"이면 반복 해제)
+        recurrence: 반복 설정 변경 (RFC5545 RRULE 문자열). "NONE"이면 반복 해제.
+            **반복 일정의 요일/주기 자체를 변경할 때는 startTime만 옮기지 말고 이 파라미터에 새 RRULE을 함께 전달해야 함**.
+            예: 매주 화요일 → 매주 수요일로 변경 시 `recurrence="FREQ=WEEKLY;BYDAY=WE;UNTIL=..."` + `start_time=<수요일 ISO>`.
+            startTime만 수요일로 바꾸고 recurrence를 안 보내면 기존 RRULE(매주 화요일)이 그대로 적용되어 시간만 바뀐 듯한 결과가 됩니다.
         reminder_minutes: 알림 변경 (분 단위, 콤마 구분, 예: "10,30". "0"이면 알림 제거)
         recur_change_type: 반복 일정 수정 범위 — "this"(이 회차만, 기본), "all"(전체), "following"(이 회차부터). 단일 일정엔 무시됨
         remove_attendee_names: 제거할 참석자 이름 (콤마 구분)
@@ -1089,6 +1092,22 @@ async def update_event(
     creator_id = event_data.get("creator", {}).get("id")
     if str(creator_id) != str(go_user_id):
         return "오류: 본인이 등록한 일정만 수정할 수 있습니다."
+
+    # 반복 일정의 마스터 ID로 PUT하면 LFON이 500을 반환함. 인스턴스 ID로 호출해야 함.
+    # 단일 일정은 recurrence가 없으므로 가드 통과 (회귀 0).
+    event_has_recurrence = bool(event_data.get("recurrence"))
+    is_recurrence_instance = "_" in event_id
+    if event_has_recurrence and not is_recurrence_instance:
+        _log_to_file(
+            f"update_event 가드: 반복 일정 마스터 ID 직접 호출 차단 "
+            f"cal={calendar_id} event={event_id} user={employee_number}"
+        )
+        return (
+            "오류: 반복 일정의 마스터 ID로는 직접 수정할 수 없습니다. "
+            "get_calendar_events로 변경할 회차의 인스턴스 ID(예: '"
+            f"{event_id}_<타임스탬프>')를 확인한 뒤 해당 ID로 다시 호출하세요. "
+            "전체 회차에 적용하려면 인스턴스 ID와 함께 recur_change_type='all'을 사용하세요."
+        )
 
     # 기존 데이터 기반으로 변경 필드만 덮어쓰기
     updated = {**event_data}
