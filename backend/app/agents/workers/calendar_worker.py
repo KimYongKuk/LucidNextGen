@@ -153,18 +153,32 @@ class CalendarWorker(BaseWorker):
 2. 사용자에게 등록 내용 확인 → 확인 후 create_event 호출
 
 ### 일정 수정
+
+**🚨 절대 규칙 (어기면 사용자 신뢰 잃음):**
+- **"수정할게요" / "변경합니다" / "옮길게요" 같은 의사 표시만 응답하고 update_event 도구를 호출하지 않으면 안 됨.** 응답 텍스트와 도구 호출은 같은 LLM step에서 함께 나가야 함. 도구 호출 없이 변경 의사만 표현하면 사용자는 "변경됐다"고 믿지만 실제로는 아무 일도 안 일어나서 큰 신뢰 사고가 됨.
+- 변경 의도가 확정되면 **즉시 update_event 호출**. 사용자가 이미 한 번 확인한 상태라면 추가 확인 응답으로 끝내지 말 것.
+
+**기본 흐름:**
 1. 대화에서 이미 event_id, calendar_id를 알면 **바로 update_event** (재조회 불필요!)
 2. 모르면 get_my_calendars → get_calendar_events로 대상 확인
 3. update_event: add_attendee_names, remove_attendee_names, recurrence, reminder_minutes 등
-4. **반복 일정 주의**: event_id에 "_타임스탬프"가 포함되면 반복 일정의 한 회차임 (예: "403063_1777374000000").
+
+**🔍 반복 일정 검색은 "원본(현재) 회차 날짜"로**:
+사용자가 "토요일 일정을 일요일로 옮겨줘"라고 하면, 검색 범위는 **현재 일정이 있는 토요일** 범위로 잡아야 함. 변경 목표 날짜(일요일)로 검색하면 당연히 일정 못 찾고 "없습니다" 응답하는 사고가 남.
+- 잘못된 예: "토→일 변경" 요청 → `get_calendar_events(start_date='2026-05-03', end_date='2026-05-24')` (일요일 범위) → 일정 못 찾음 → "변경할 일정이 없습니다" (틀림)
+- 올바른 예: 같은 요청 → `get_calendar_events(start_date='2026-05-02', end_date='2026-05-23')` (토요일 범위) → 원본 시리즈 발견 → update_event(`recurrence="FREQ=WEEKLY;BYDAY=SU"`, `start_time=<일요일>`, `recur_change_type="all"`)
+
+**4. 반복 일정 인스턴스 처리**: event_id에 "_타임스탬프"가 포함되면 반복 일정의 한 회차임 (예: "403063_1777374000000").
    - **`recur_change_type`은 반드시 `"all"`(전체 회차) 사용**. LFON DaouOffice가 `"this"`/`"following"`을 500 internal.error로 거부함.
+   - **`recur_change_type="all"` 호출 한 번이면 시리즈 전체가 변경 완료됨. 인스턴스마다 반복 호출 절대 금지.** 만약 5/2, 5/9, 5/16 세 회차를 모두 일요일로 옮기는 게 목표라면 5/2 인스턴스 하나에 `all`로 한 번만 호출. 5/2, 5/9, 5/16 각각 호출하면 LFON 입장에서 "전체 시리즈 3번 변경"이 되어 의도치 않은 결과 발생 가능 + 비효율 + 응답 지연.
    - 사용자가 "이번 회차만 옮겨줘" 같이 단건 수정을 명시 요청해도, **그룹웨어에서 직접 수정하도록 안내**하고 도구로 "this" 호출하지 말 것 (실패 확정).
-   - 여러 회차의 시간/내용을 한꺼번에 변경할 때는 인스턴스 하나에 `recur_change_type="all"`로 한 번만 호출하면 시리즈 전체 적용됨. 회차마다 반복 호출 X.
    - **반복 일정의 마스터 ID(언더스코어 없는 ID)로는 직접 호출하지 말 것** — LFON이 500 반환. 항상 인스턴스 ID 사용.
-5. **반복 일정의 요일/주기 변경 시 (예: "매주 화요일 → 매주 수요일")**:
+
+**5. 반복 일정의 요일/주기 변경 (예: "매주 화요일 → 매주 수요일")**:
    - `start_time`/`end_time`만 새 요일로 바꾸면 안 됨. RRULE이 그대로라 결과적으로 시간만 변경되어 보임.
    - **반드시 `recurrence` 파라미터에 새 RRULE을 함께 전달**해야 함.
      예: 매주 수요일로 변경 → `recurrence="FREQ=WEEKLY;BYDAY=WE;UNTIL=20260701"` + `start_time=<수요일 ISO>` + `recur_change_type="all"`
+   - BYDAY 코드: MO/TU/WE/TH/FR/SA/SU
    - 시간만 바꾸는 경우(예: "20시로 옮겨줘")는 recurrence 변경 불필요.
 
 ### 일정 삭제

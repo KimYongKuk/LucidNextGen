@@ -30,6 +30,67 @@ MAX_PARALLEL_TASKS: int = 10      # 동시 실행 task 상한
 TASK_TIMEOUT_SECONDS: int = 300   # 개별 task 최대 실행 시간 (5분)
 
 
+class _StreamTagFilter:
+    """워커 LLM 스트림에서 HTML 주석/도구 호출 태그를 청크 경계 안전하게 제거.
+
+    a2a_streaming.py의 메인 본문 필터와 동일한 태그 집합을 task_thinking 스트림에도
+    적용하기 위한 task-scoped 필터. 청크가 태그 중간에서 잘려도 다음 청크에서 이어
+    매칭한다.
+    """
+
+    OPEN_TAGS = ("<!--", "<tool_call>", "<tool_response>", "<function_calls>", "<function_result>")
+    CLOSE_TAGS = ("-->", "</tool_call>", "</tool_response>", "</function_calls>", "</function_result>")
+    MAX_TAG_LEN = max(len(t) for t in OPEN_TAGS + CLOSE_TAGS)
+
+    def __init__(self) -> None:
+        self._inside_tag = False
+        self._buffer = ""
+
+    def feed(self, text: str) -> str:
+        """청크 텍스트를 받아 필터링된 안전 텍스트만 반환. 태그 내부 텍스트는 폐기."""
+        out = ""
+        for ch in text:
+            self._buffer += ch
+            if self._inside_tag:
+                if any(self._buffer.endswith(t) for t in self.CLOSE_TAGS):
+                    self._inside_tag = False
+                    self._buffer = ""
+                elif len(self._buffer) > 50000:
+                    # 안전장치: 종료 태그 없이 너무 길면 버림
+                    self._buffer = ""
+            else:
+                matched = None
+                for t in self.OPEN_TAGS:
+                    if self._buffer.endswith(t):
+                        matched = t
+                        break
+                if matched:
+                    pre_tag = self._buffer[: -len(matched)]
+                    out += pre_tag
+                    self._inside_tag = True
+                    self._buffer = ""
+                elif len(self._buffer) > self.MAX_TAG_LEN:
+                    out += self._buffer
+                    self._buffer = ""
+                elif "<" not in self._buffer:
+                    out += self._buffer
+                    self._buffer = ""
+        # 태그 내부 아니고 `<` 후보 없으면 flush
+        if not self._inside_tag and self._buffer and "<" not in self._buffer:
+            out += self._buffer
+            self._buffer = ""
+        return out
+
+    def flush(self) -> str:
+        """스트림 종료 시 남은 안전 텍스트 반환. 태그 내부였으면 빈 문자열."""
+        if self._inside_tag:
+            self._buffer = ""
+            return ""
+        out = self._buffer
+        self._buffer = ""
+        return out
+
+
 class Executor:
     """Plan의 Task DAG를 실행하고 Blackboard에 결과 축적"""
 
@@ -62,6 +123,12 @@ class Executor:
         terminal_ids: set = set()              # DONE/FAILED/SKIPPED — is_ready 판정용
         awaiting_confirm: List[Task] = []     # 승인 대기 task (본 턴 종료 후 Synthesizer가 안내)
         executor_start = time.time()
+
+        # task_id별 스트림 태그 필터 — task_thinking 출력에서 <!--FOLLOW_UP/HANDOFF/NO_RESULTS-->,
+        # <tool_call> 등 LLM이 텍스트로 흘리는 마커를 청크 경계 안전하게 제거한다.
+        # 메인 본문은 a2a_streaming.py가 동일 태그를 필터링하지만 task_thinking 경로에는
+        # 적용되지 않아 CoT 타임라인에 마커가 노출되던 문제를 해결.
+        tag_filters: Dict[str, _StreamTagFilter] = {}
 
         # 메인 루프 — 모든 task가 종결 상태가 될 때까지
         iteration = 0
@@ -163,14 +230,22 @@ class Executor:
                             continue
                         # Level 1 — 워커의 pre-tool reasoning을 CoT 이벤트로 변환
                         # blackboard에는 _run_task에서 이미 수집되므로 여기서는 UX 표시용
+                        # HTML 주석/도구 호출 마커는 task별 필터로 청크 경계 안전하게 제거
                         if isinstance(ev, dict) and ev.get("event") == "on_chat_model_stream":
                             text = Executor._extract_text(ev)
                             if text:
-                                yield {
-                                    "type": "task_thinking",
-                                    "task_id": ev.get("_task_id"),
-                                    "content": text,
-                                }
+                                tid = ev.get("_task_id") or ""
+                                tf = tag_filters.get(tid)
+                                if tf is None:
+                                    tf = _StreamTagFilter()
+                                    tag_filters[tid] = tf
+                                filtered = tf.feed(text)
+                                if filtered:
+                                    yield {
+                                        "type": "task_thinking",
+                                        "task_id": tid or None,
+                                        "content": filtered,
+                                    }
                             continue
                         yield ev
 
@@ -190,6 +265,23 @@ class Executor:
                 while not q.empty():
                     ev = await q.get()
                     if ev is None:
+                        continue
+                    # 드레인 루프와 동일한 task_thinking 필터링 적용
+                    if isinstance(ev, dict) and ev.get("event") == "on_chat_model_stream":
+                        text = Executor._extract_text(ev)
+                        if text:
+                            ev_tid = ev.get("_task_id") or ""
+                            tf = tag_filters.get(ev_tid)
+                            if tf is None:
+                                tf = _StreamTagFilter()
+                                tag_filters[ev_tid] = tf
+                            filtered = tf.feed(text)
+                            if filtered:
+                                yield {
+                                    "type": "task_thinking",
+                                    "task_id": ev_tid or None,
+                                    "content": filtered,
+                                }
                         continue
                     yield ev
 
@@ -215,6 +307,16 @@ class Executor:
                         "error": t.error,
                         "elapsed_ms": t.elapsed_ms(),
                     }
+
+        # 모든 task_thinking 필터의 남은 버퍼 flush — 태그 외부 안전 텍스트만 방출
+        for ev_tid, tf in tag_filters.items():
+            tail = tf.flush()
+            if tail:
+                yield {
+                    "type": "task_thinking",
+                    "task_id": ev_tid or None,
+                    "content": tail,
+                }
 
         total_ms = int((time.time() - executor_start) * 1000)
         stats = {
