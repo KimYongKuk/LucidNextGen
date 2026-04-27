@@ -43,6 +43,7 @@ Your job: decompose user's request into a JSON Task DAG that can be executed by 
 7. **Task IDs are t1, t2, t3, ...** in declaration order.
 8. **첨부파일은 분석 중간 단계 끼우지 말 것**: 사용자가 "등록해줘/업로드해줘/첨부해줘" 등 **쓰기 작업 + 파일 첨부**를 요청했을 때, 파일 내용 분석(user_files)을 **사전 태스크로 넣지 마세요**. 해당 쓰기 워커(it_support, mail 등)가 파일을 직접 첨부 파라미터로 전달합니다. 예외: 사용자가 명시적으로 "내 파일 내용 읽고 요약해줘/본문에 반영해줘"라고 요청한 경우만 user_files 사전 태스크 추가.
 9. **엑셀 파일 수정·편집 요청은 `xlsx` 단일 태스크(trivial=true)로 처리**: "업로드한 엑셀/기존 파일에 **시트 추가·복사·삭제·이름변경·값변경·서식·수식·병합·행열 삽입/삭제·차트·피벗**" 등 모든 xlsx 편집 요청은 **user_files 사전 태스크를 넣지 마세요**. XlsxWorker가 `get_workbook_metadata + read_data_from_excel + modify_xlsx`를 이미 보유하여 자체적으로 메타→읽기→수정을 처리합니다. **예외**: 사용자가 엑셀을 "요약해줘/분석해줘/요점만 알려줘" 등 **read-only 요약**을 요청한 경우에만 `user_files` 사용.
+10. **이미지 첨부 시(`has_images=true`) 분석/요약/변환 태스크는 절대 `user_files`로 보내지 마세요**: `search_user_files`는 ChromaDB 텍스트 검색이라 이미지 픽셀을 못 봅니다. 사용자가 첨부한 이미지를 "보고/요약/포맷에 맞춰 작성/표로 정리" 해달라고 하면 **`direct` 워커**(또는 차트/PDF 생성이 필요하면 `visualization`)를 사용하세요. 이미지는 Executor가 `depends=[]`인 첫 task에 자동으로 multimodal HumanMessage로 동봉하므로, 워커의 LLM이 직접 픽셀을 봅니다. 후속 task(`depends=[t1]`)는 t1의 텍스트 결과를 blackboard로 받으므로 이미지를 다시 받을 필요 없습니다.
 
 ## AVAILABLE WORKERS (use the `worker` field value)
 
@@ -201,6 +202,37 @@ Output:
 
 **주의**: 엑셀 수정·편집 요청 시 `user_files` 사전 태스크(파일 내용 분석)를 넣지 마세요. XlsxWorker가 직접 읽고 수정합니다. 단, "엑셀 요약해줘/요점만 알려줘" 같은 read-only 요청은 `user_files` 사용이 맞습니다.
 
+### Example 9 — 이미지 첨부 후 분석/요약 (direct + 멀티모달)
+
+User: "지금 첨부한 이미지는 파워젠의 AI Hub 솔루션이거든. 이전 포맷에 맞춰서 정리해줘"
+Context: has_files=true, has_images=true
+
+Output:
+{{
+  "is_trivial": true,
+  "rationale": "이미지 첨부 + 텍스트 정리 요청. direct 단일 태스크 — Executor가 첫 task에 이미지를 multimodal로 동봉하므로 Sonnet이 픽셀을 직접 본다. user_files는 텍스트 검색이라 이미지에 동작 안 함.",
+  "tasks": [
+    {{"id":"t1","worker":"direct","goal":"첨부 이미지(파워젠 AI Hub 솔루션)를 보고 이전 대화 포맷(제목 + 번호 리스트)에 맞춰 정리","depends":[],"needs_confirm":false}}
+  ]
+}}
+
+### Example 10 — 이미지 + 후속 가공 (direct → visualization)
+
+User: "이 차트 이미지의 수치 읽어서 동일한 데이터로 막대그래프 다시 만들어줘"
+Context: has_images=true
+
+Output:
+{{
+  "is_trivial": false,
+  "rationale": "이미지 픽셀에서 수치 추출(direct, vision) → 추출 결과로 차트 생성(visualization). t1이 이미지 보고 텍스트 추출, t2는 t1 결과로 차트 생성.",
+  "tasks": [
+    {{"id":"t1","worker":"direct","goal":"첨부 차트 이미지에서 카테고리·값 쌍을 표 형식으로 추출","depends":[],"needs_confirm":false}},
+    {{"id":"t2","worker":"visualization","goal":"t1 결과를 사용해 동일 데이터의 막대그래프 생성","depends":["t1"],"needs_confirm":false}}
+  ]
+}}
+
+**주의**: 이미지가 첨부됐을 때 `user_files` 사전 태스크는 절대 추가하지 마세요. `search_user_files`는 텍스트 RAG라 이미지에 동작하지 않습니다. 이미지를 LLM이 직접 봐야 하는 모든 케이스는 `depends=[]`인 첫 task의 워커를 `direct` 또는 `visualization`으로 지정하세요.
+
 """
 
 
@@ -209,6 +241,7 @@ PLANNER_USER_TEMPLATE = """## CONTEXT
 
 - Today: {today}
 - User uploaded files present: {has_files}
+- Image attached (current turn): {has_images}
 - Workspace mode: {has_workspace}
 - Workspace name: {workspace_name}
 - Workspace instructions (운영자 지정 — 존재 시 DAG 계획에 반영):
@@ -342,6 +375,7 @@ class Planner:
         user_content = PLANNER_USER_TEMPLATE.format(
             today=today,
             has_files=context.get("has_files", False),
+            has_images=context.get("has_images", False),
             has_workspace=bool(context.get("workspace_id") or context.get("workspace_uuid")),
             workspace_name=context.get("workspace_name") or "N/A",
             workspace_instructions=ws_instructions.strip() if ws_instructions else "N/A",

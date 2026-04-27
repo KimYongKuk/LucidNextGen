@@ -374,6 +374,9 @@ async def stream_a2a_response(
         "chat_mode": chat_mode,
         "gosso_cookie": gosso_cookie,
         "session_file_names": [],  # 아래에서 채움
+        # Planner-Executor 경로용 — Executor가 depends=[] task에 동봉, Planner가 라우팅 힌트로 사용
+        "images": images,
+        "has_images": bool(images),
     }
 
     # 세션 업로드 파일명 목록 조회 (OutlineWorker 등에서 파일명 주입용)

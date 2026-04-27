@@ -277,7 +277,29 @@ class Executor:
 
         # Worker 메시지 — task goal만 담은 단일 HumanMessage
         # (원본 사용자 메시지를 넣으면 워커가 scope를 오해할 수 있음)
-        messages: List[BaseMessage] = [HumanMessage(content=task.goal)]
+        # 단, depends=[] (첫 단계) task에는 사용자 첨부 이미지를 multimodal로 동봉.
+        # 후속 task는 blackboard에서 선행 결과 텍스트를 받으므로 이미지 재전달 불필요.
+        images = context.get("images") or []
+        if images and not task.depends:
+            content_blocks: List[Dict[str, Any]] = []
+            for img in images:
+                media_type = img.get("media_type") if isinstance(img, dict) else getattr(img, "media_type", None)
+                data = img.get("base64_data") if isinstance(img, dict) else getattr(img, "base64_data", None)
+                if not data:
+                    continue
+                content_blocks.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type or "image/jpeg",
+                        "data": data,
+                    },
+                })
+            content_blocks.append({"type": "text", "text": task.goal})
+            messages: List[BaseMessage] = [HumanMessage(content=content_blocks)]
+            print(f"[EXECUTOR] {task.id} ({task.worker}): multimodal goal with {len(content_blocks)-1} image(s)")
+        else:
+            messages = [HumanMessage(content=task.goal)]
 
         try:
             worker = get_worker(worker_name)

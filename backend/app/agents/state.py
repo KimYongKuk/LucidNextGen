@@ -114,6 +114,11 @@ class RequestContext(TypedDict, total=False):
     chat_mode: str
     gosso_cookie: Optional[str]  # 사용자 LFON GOSSOcookie (캘린더 API 사용자 인증용)
 
+    # 첨부 이미지 — Planner-Executor 경로의 depends=[] task에 multimodal로 동봉
+    # (trivial 경로는 orchestrator._build_messages가 직접 처리하므로 사용 안 함)
+    images: Optional[List[Dict[str, str]]]  # [{"media_type": ..., "base64_data": ...}, ...]
+    has_images: bool                         # Planner 라우팅 힌트용 (이미지 분석은 direct 워커로)
+
     # Planner-Executor 경로 전용 필드 (PLANNER_ENABLED=true일 때만 주입)
     task_goal: Optional[str]             # 현재 워커가 처리할 sub-task 목표 (한 줄)
     task_id: Optional[str]                # 현재 task의 id (블랙보드 참조용)
