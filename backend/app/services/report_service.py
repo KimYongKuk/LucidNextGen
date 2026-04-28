@@ -36,9 +36,15 @@ LABEL_TO_INTENT["미분류"] = "unknown"
 EXCLUDED_USERS = [
     u.strip() for u in os.getenv("REPORT_EXCLUDED_USERS", "A2304013").split(",") if u.strip()
 ]
-_EXCLUDED_USERS_SQL = " AND userId NOT IN ({})".format(
+_EXCLUDED_USERS_SQL_USER = " AND userId NOT IN ({})".format(
     ",".join(f"'{u}'" for u in EXCLUDED_USERS)
 ) if EXCLUDED_USERS else ""
+
+# Eval 회귀 테스트 트래픽 제외 — metadata.is_eval=true는 모든 운영 통계에서 배제
+# (chat_log_new.metadata는 JSON, is_eval은 chat.py에서 마킹)
+_NOT_EVAL_SQL = " AND (JSON_EXTRACT(metadata, '$.is_eval') IS NULL OR JSON_EXTRACT(metadata, '$.is_eval') != true)"
+
+_EXCLUDED_USERS_SQL = _EXCLUDED_USERS_SQL_USER + _NOT_EVAL_SQL
 
 # ─── 답변 실패 감지 로직 ───
 # 실패 조건:
