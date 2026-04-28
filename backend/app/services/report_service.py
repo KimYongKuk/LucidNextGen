@@ -801,6 +801,7 @@ class ReportService:
             daily_trend = list(daily_map.values())
 
             # 5) 사용자별 토큰 top 20
+            # token_usage_log은 metadata 컬럼이 없으므로 user 제외 SQL만 사용 (is_eval 필터는 chat_log_new 전용)
             cursor.execute(f"""
                 SELECT
                     user_id,
@@ -811,7 +812,7 @@ class ReportService:
                 FROM token_usage_log
                 WHERE created_at >= %s AND created_at < DATE_ADD(%s, INTERVAL 1 DAY)
                   AND user_id IS NOT NULL
-                  {_EXCLUDED_USERS_SQL.replace('userId', 'user_id')}
+                  {_EXCLUDED_USERS_SQL_USER.replace('userId', 'user_id')}
                 GROUP BY user_id
                 ORDER BY total_tokens DESC
                 LIMIT 20
