@@ -553,8 +553,17 @@ async def stream_a2a_response(
                 # 도구 결과 디버깅 로그
                 try:
                     output_str = tool_output.content if hasattr(tool_output, 'content') else str(tool_output)
-                    # 예약/캘린더 도구는 전문 로깅 (LLM 데이터 누락 디버깅)
-                    if tool_name in ("get_daily_reservations", "get_calendar_events"):
+                    # 예약/캘린더/메일 도구는 전문 로깅 (LLM 데이터 누락/파싱 오류 디버깅)
+                    if tool_name in (
+                        "get_daily_reservations",
+                        "get_calendar_events",
+                        "get_inbox_mail",
+                        "get_sent_mail",
+                        "get_unread_mail",
+                        "search_mail",
+                        "get_mail_folders",
+                        "get_mail_detail",
+                    ):
                         print(f"[TOOL_OUTPUT] {tool_name}: (full, {len(output_str)} chars)\n{output_str}")
                     else:
                         print(f"[TOOL_OUTPUT] {tool_name}: {output_str[:300]}")

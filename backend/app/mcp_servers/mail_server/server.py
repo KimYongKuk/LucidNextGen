@@ -117,7 +117,26 @@ async def _call_mail_api(message_store: str, action: str, **kwargs) -> dict:
             stripped = raw_text.strip()
             if not stripped:
                 raise RuntimeError(f"메일 서버 빈 응답 (action={action})")
-            return json.loads(stripped)
+            # JSP가 메일 제목/본문 안의 control char(\n, \t 등)를 escape하지 않은 채
+            # JSON 문자열에 넣는 경우가 있어, strict 실패 시 strict=False로 재시도.
+            try:
+                return json.loads(stripped)
+            except json.JSONDecodeError as e_strict:
+                print(
+                    f"[Mail MCP] JSON strict 파싱 실패, strict=False 재시도: "
+                    f"action={action} err_pos={e_strict.pos} err={e_strict.msg}",
+                    file=sys.stderr,
+                )
+                try:
+                    return json.loads(stripped, strict=False)
+                except json.JSONDecodeError:
+                    # 둘 다 실패: 진단을 위해 head/tail 일부를 stderr에 기록 후 재던짐
+                    print(
+                        f"[Mail MCP] JSON 재시도도 실패: action={action} "
+                        f"len={len(raw_text)} head={raw_text[:200]!r} tail={raw_text[-200:]!r}",
+                        file=sys.stderr,
+                    )
+                    raise e_strict
     except httpx.TimeoutException:
         raise RuntimeError(f"메일 서버 응답 시간 초과 (action={action})")
     except httpx.HTTPStatusError as e:
