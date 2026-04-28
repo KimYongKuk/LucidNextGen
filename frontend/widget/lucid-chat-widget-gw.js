@@ -183,7 +183,11 @@
 
     container.appendChild(frameWrap);
     container.appendChild(button);
-    document.body.appendChild(container);
+    // SPA(다우오피스 등)가 body.innerHTML을 갈아엎어도 영향 받지 않도록
+    // body가 아닌 documentElement(<html>) 직속에 부착.
+    // body 자식이면 SPA가 분리·재부착하는 순간 iframe이 reload되어
+    // 진행 중인 채팅/스트리밍 상태가 통째로 날아감.
+    document.documentElement.appendChild(container);
 
     // iframe에서 새 대화 요청 시 세션 리셋
     window.addEventListener('message', function (e) {
@@ -204,14 +208,11 @@
       }
     });
 
-    // SPA 환경: body 자식 변경 시 위젯이 사라지면 다시 붙이기
-    if (typeof MutationObserver !== 'undefined') {
-      new MutationObserver(function () {
-        if (!document.body.contains(container)) {
-          document.body.appendChild(container);
-        }
-      }).observe(document.body, { childList: true });
-    }
+    // 과거: body 자식 변경 시 자동 재부착 MutationObserver 운영했으나,
+    // 재부착 자체가 iframe을 detach→reattach시켜 무조건 iframe reload를
+    // 유발하던 것이 SPA 환경 스트리밍 끊김의 진짜 원인이었음.
+    // documentElement에 부착하는 현재 방식에서는 SPA가 컨테이너를 건드리지
+    // 않으므로 observer 자체를 제거 (자동복구 시도가 오히려 상태 손실 유발).
   }
 
   function toggleWidget() {

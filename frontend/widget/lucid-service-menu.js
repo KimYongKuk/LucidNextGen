@@ -246,7 +246,9 @@
 
     container.appendChild(menuPanel);
     container.appendChild(button);
-    document.body.appendChild(container);
+    // SPA(다우오피스 등)가 body.innerHTML을 갈아엎어도 영향 받지 않도록
+    // body가 아닌 documentElement(<html>) 직속에 부착.
+    document.documentElement.appendChild(container);
 
     // 외부 클릭 시 닫기
     document.addEventListener('click', function (e) {
@@ -255,14 +257,8 @@
       }
     });
 
-    // SPA 환경: body 변경 시 위젯 재부착
-    if (typeof MutationObserver !== 'undefined') {
-      new MutationObserver(function () {
-        if (!document.body.contains(container)) {
-          document.body.appendChild(container);
-        }
-      }).observe(document.body, { childList: true });
-    }
+    // 자동 재부착 MutationObserver 제거 — 재부착이 오히려 상태 손실 유발.
+    // documentElement 직속이므로 SPA가 컨테이너를 건드리지 않음.
   }
 
   function toggleMenu() {

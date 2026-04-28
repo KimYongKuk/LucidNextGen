@@ -88,3 +88,31 @@ init: function (userConfig) {
 1. 모듈 A에서 채팅 응답 받는 중 → 모듈 B로 이동 → 위젯 그대로 유지되며 스트리밍 계속 진행되는지
 2. `document.querySelectorAll('#lucid-gw-container').length` 가 항상 1인지
 3. `document.querySelectorAll('#lucid-sm-container').length` 가 항상 1인지
+
+## 후속 패치 (1차 배포 이후)
+
+1차 배포(`init` idempotent 가드)만으로는 여전히 위젯이 모듈 이동 시 리셋되는 현상이 남아있었음. 사용자 콘솔 검증으로 `LucidChat.init.toString().includes('lucid-gw-container')` → `true` 확인되어 fix는 분명 적용된 상태였으나, 위젯 자체는 깜빡이며 새로 로드됨.
+
+### 진짜 원인 (2단계)
+
+다우오피스 SPA가 모듈 이동 시 `body.innerHTML`을 통째로 갈아엎으면서 우리 컨테이너도 함께 분리됨. 기존 코드의 `MutationObserver`가 즉시 `document.body.appendChild(container)`로 재부착해서 outerHTML 검증에서는 살아있는 것처럼 보였지만, **iframe 요소를 DOM에서 detach 후 reattach하는 순간 브라우저는 iframe content를 무조건 reload함** (HTML 사양). 즉:
+
+1. SPA가 body 갈아엎음 → 컨테이너 분리됨 (수 ms)
+2. MutationObserver 즉시 fire → `body.appendChild(container)` 재부착
+3. iframe이 DOM에서 떨어졌다 다시 붙음 → **브라우저가 iframe reload 강제** → React 앱 새로 mount → 채팅 히스토리 fresh fetch → 진행 중 스트리밍 끊김
+
+`outerHTML.length`가 동일했던 이유는 재부착이 끝난 후 시점에 검사했고, outerHTML은 iframe의 src 속성만 포함하지 iframe 내부 컨텐츠 상태는 포함하지 않기 때문.
+
+### 2차 수정
+
+1. **부착 위치 변경**: `document.body.appendChild(container)` → `document.documentElement.appendChild(container)` — 컨테이너를 `<body>` 자식이 아닌 `<html>` 직속으로 이동. SPA가 body를 갈아엎어도 컨테이너는 sibling이라 영향 받지 않음.
+
+2. **MutationObserver 제거**: documentElement 직속이라 SPA가 건드릴 일 없으므로 자동 재부착 로직 자체가 불필요. 게다가 재부착이 iframe reload를 유발하므로 자동 복구 시도가 오히려 상태 손실의 원인이었음 — 제거가 정답.
+
+두 위젯(`lucid-chat-widget-gw.js`, `lucid-service-menu.js`) 동일 패턴 모두 적용.
+
+### 학습
+
+- 자동 복구 로직이 자기 자신을 망가뜨리는 케이스. iframe reload는 detach/reattach만으로 강제되며, 의도한 위치로 돌려놓는 것이 의미가 없음.
+- "DOM에 있다"와 "DOM에서 분리된 적이 없다"는 다른 명제. outerHTML 검증으로는 후자를 측정 못 함.
+- SPA 호환은 컨테이너 자체를 SPA가 건드릴 수 없는 위치(documentElement 또는 Shadow DOM)에 두는 것이 가장 안전. 자동 복구는 본질적으로 사후약방문이며 부작용을 동반.
