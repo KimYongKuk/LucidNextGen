@@ -9,8 +9,9 @@
 import sys
 import os
 import json
+import re
 import urllib3
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 
 import asyncpg
 import httpx
@@ -88,6 +89,91 @@ async def _get_message_store(employee_number: str) -> str:
     return message_store
 
 
+def _salvage_mail_response(text: str) -> Optional[Dict[str, Any]]:
+    """깨진 JSON 응답에서 가능한 한 많은 메일 객체를 복구.
+
+    JSP가 한두 통 메일 직렬화에서 unescaped quote/콤마 누락을 하면
+    list 전체 파싱이 실패하므로, 메일 단위로 raw_decode를 돌려서
+    성공한 객체만 모아 정상 응답 형태로 재구성한다.
+
+    실패한 메일은 _skipped 카운트에 누적, _salvaged=True 플래그로
+    호출자가 부분 결과임을 알 수 있게 한다.
+    """
+    action_match = re.search(r'"action"\s*:\s*"([^"]+)"', text)
+    total_match = re.search(r'"total_count"\s*:\s*(\d+)', text)
+
+    data_kw = text.find('"data"')
+    if data_kw < 0:
+        return None
+    arr_start = text.find('[', data_kw)
+    if arr_start < 0:
+        return None
+
+    decoder = json.JSONDecoder(strict=False)
+    salvaged: list = []
+    skipped = 0
+    pos = arr_start + 1
+    n = len(text)
+
+    while pos < n:
+        # 객체 사이 공백/콤마 스킵
+        while pos < n and text[pos] in ' \t\n\r,':
+            pos += 1
+        if pos >= n or text[pos] == ']':
+            break
+        if text[pos] != '{':
+            # 다음 { 까지 점프
+            nb = text.find('{', pos)
+            if nb < 0:
+                break
+            pos = nb
+
+        try:
+            obj, end = decoder.raw_decode(text, pos)
+            if isinstance(obj, dict):
+                salvaged.append(obj)
+            pos = end
+        except json.JSONDecodeError:
+            # 깨진 객체 스킵: balanced brace 스캔으로 다음 객체 시작 위치 찾기
+            skipped += 1
+            depth = 0
+            i = pos
+            in_str = False
+            esc = False
+            while i < n:
+                c = text[i]
+                if esc:
+                    esc = False
+                elif c == '\\':
+                    esc = True
+                elif c == '"':
+                    in_str = not in_str
+                elif not in_str:
+                    if c == '{':
+                        depth += 1
+                    elif c == '}':
+                        depth -= 1
+                        if depth <= 0:
+                            i += 1
+                            break
+                i += 1
+            if i <= pos:
+                # 진전 없음 → 무한 루프 방지
+                break
+            pos = i
+
+    if not salvaged and skipped == 0:
+        return None
+
+    return {
+        "action": action_match.group(1) if action_match else "",
+        "total_count": int(total_match.group(1)) if total_match else len(salvaged),
+        "data": salvaged,
+        "_salvaged": True,
+        "_skipped": skipped,
+    }
+
+
 async def _call_mail_api(message_store: str, action: str, **kwargs) -> dict:
     """mail_query.jsp HTTP 호출"""
     params = {
@@ -130,9 +216,18 @@ async def _call_mail_api(message_store: str, action: str, **kwargs) -> dict:
                 try:
                     return json.loads(stripped, strict=False)
                 except json.JSONDecodeError:
-                    # 둘 다 실패: 진단을 위해 head/tail 일부를 stderr에 기록 후 재던짐
+                    # JSP가 어느 한 메일 직렬화에서 콤마 누락/unescaped quote로
+                    # 구조 자체를 깨뜨린 경우: 성공한 메일만 골라서 부분 복구.
+                    salvaged = _salvage_mail_response(stripped)
+                    if salvaged is not None and salvaged.get("data"):
+                        print(
+                            f"[Mail MCP] JSON salvage: action={action} "
+                            f"recovered={len(salvaged['data'])} skipped={salvaged['_skipped']}",
+                            file=sys.stderr,
+                        )
+                        return salvaged
                     print(
-                        f"[Mail MCP] JSON 재시도도 실패: action={action} "
+                        f"[Mail MCP] JSON 재시도도 실패 (salvage도 실패): action={action} "
                         f"len={len(raw_text)} head={raw_text[:200]!r} tail={raw_text[-200:]!r}",
                         file=sys.stderr,
                     )
@@ -157,6 +252,13 @@ def _format_mail_list(result: dict, label: str) -> str:
         return f"{label}: 메일이 없습니다."
 
     lines = [f"{label} ({len(data)}건)\n"]
+    if result.get("_salvaged"):
+        skipped = result.get("_skipped", 0)
+        total = result.get("total_count", len(data))
+        lines.append(
+            f"[참고] 메일 서버 응답 일부가 손상되어 {skipped}건은 복구하지 못했습니다. "
+            f"전체 {total}건 중 {len(data)}건만 표시합니다.\n"
+        )
     for i, mail in enumerate(data, 1):
         uid = mail.get("uid", "")
         folder_no = mail.get("folder_no", "")

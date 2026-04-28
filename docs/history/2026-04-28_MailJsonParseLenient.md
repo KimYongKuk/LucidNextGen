@@ -1,12 +1,12 @@
-# 2026-04-28 메일 MCP JSON 파싱 관용화 (strict=False 폴백)
+# 2026-04-28 메일 MCP JSON 파싱 관용화 (strict=False + 부분 복구 salvage)
 
 ## 개요
-그룹웨어 임베드 UI에서 "안 읽은 메일 확인해줘" 요청 시 JSON 파싱 오류가 반복 발생하여 LLM이 "특수 문자 포함된 메일로 인해 JSON 파싱 오류" 응답을 보낸 이슈를 수정. JSP가 메일 제목/본문에 들어있는 raw control char(\n, \t 등)를 escape 없이 JSON 문자열에 넣어 Python의 strict JSON 파서가 거부하던 문제로 추정. strict=False 재시도 폴백을 추가하고, 진단을 위해 mail 도구의 풀 출력 로깅을 활성화.
+그룹웨어 임베드 UI에서 "안 읽은 메일 확인해줘" 요청 시 JSON 파싱 오류로 메일이 한 통도 안 나오던 이슈를 3-단계 fallback으로 해결. 1차 strict 시도, 실패 시 strict=False, 그래도 실패하면 메일 객체 단위로 raw_decode를 돌려 깨진 메일은 스킵하고 성공한 것만 모아 정상 응답 형태로 재구성. **풀 로깅으로 실제 깨진 위치를 확보한 결과 control char가 아닌 JSP 직렬화 자체의 구조 손상**(`"flag":96` 다음에 콤마 없이 다음 메일 subject가 그대로 이어붙는 패턴)으로 확인되어 salvage 단계가 실질적인 해결책. 라이브 검증으로 19건 중 18건 복구, 1건만 스킵 확인.
 
 ## 변경 파일 요약
 | 파일 | 변경 유형 | 설명 |
 |------|-----------|------|
-| backend/app/mcp_servers/mail_server/server.py | 수정 | `_call_mail_api`에서 `json.loads` 실패 시 `strict=False` 재시도 + 실패 시 raw 응답 head/tail stderr 로깅 |
+| backend/app/mcp_servers/mail_server/server.py | 수정 | `_call_mail_api`에 strict → strict=False → salvage 3단계 폴백 적용. `_salvage_mail_response()` 신설: data 배열을 메일 객체 단위로 raw_decode, 깨진 객체는 balanced-brace 스캔으로 스킵, `_salvaged=True`/`_skipped=N` 메타 부착. `_format_mail_list`가 부분 복구 사실을 LLM에 안내. |
 | backend/app/agents/a2a_streaming.py | 수정 | `[TOOL_OUTPUT]` 풀 로깅 화이트리스트에 6개 메일 도구 추가 (300자 truncate 제거) |
 
 ## 상세 내용
@@ -38,7 +38,10 @@
    - 향후 파싱 이슈가 재발해도 ToolMessage 전체 텍스트가 로그에 남아 즉시 진단 가능
 
 ## 결정 사항 및 주의점
-- **strict=False 채택 이유**: invalid escape sequence(`\x` 등)와 달리 unescaped control char는 의미 손실 없이 그대로 받아들여도 안전. JSP 측을 수정하는 것이 정공법이지만 그룹웨어 코드 변경은 별도 협의가 필요하므로 클라이언트(MCP) 측에서 관용 처리.
-- **head/tail 200자만 기록**: 메일 본문 전체를 로그에 찍으면 PII 노출/로그 폭증 우려. 진단용 단서만 남김.
+- **3단계 폴백 채택 이유**: 1차 풀 로깅 후 실제 깨짐 패턴이 unescaped control char가 아니라 **JSP 측 직렬화의 구조 손상**(콤마 누락, escape 안 된 quote)임이 드러남. strict=False는 무력하므로 salvage 단계 추가가 실질적 해결책.
+- **객체 단위 복구 vs 전체 거부**: 한 통이 깨졌다고 181건 unread를 한 통도 못 보여주는 건 사용자 가치를 0으로 만듬. 깨진 1건만 스킵하고 18건 보여주는 게 명백히 낫다. 부분 결과임은 `_salvaged`/`_skipped` 메타 + `[참고]` 안내 라인으로 LLM/사용자에게 전달.
+- **balanced-brace 스캔 안전장치**: salvage 루프에서 `i <= pos`면 진전 없는 것으로 간주해 break — 무한 루프 방지. depth 추적은 string 내부의 `{`/`}`를 무시하기 위해 in_str/esc 상태 유지.
+- **검증 방법**: 운영 JSP에 직접 호출해 실제 깨진 응답으로 1차 strict→2차 strict=False→3차 salvage 순으로 확인. A2304013 unread 19건 중 18건 복구, 1건 스킵.
+- **JSP 측 정공법은 별건**: 그룹웨어 lucid_mail.jsp의 직렬화 로직(특히 preview/subject escape)을 고치면 근본 해결되나 협의 필요. 클라이언트 salvage는 그 사이의 임시 우회 + 영구 안전망으로 남음.
 - **풀 로깅 부담**: 메일 본문 detail은 최대 8,000자까지 로그에 찍히게 됨. 파싱 이슈 진단이 안정화되면 다시 300자 트렁케이션으로 되돌리는 것을 검토할 것.
-- **재발 시 다음 단계**: stderr에 `[Mail MCP] JSON 재시도도 실패` 로그가 남으면 head/tail로 정확한 원인 식별 → JSP 측 escape 수정 또는 추가 sanitization 도입.
+- **재발 시 다음 단계**: stderr에 `[Mail MCP] JSON 재시도도 실패 (salvage도 실패)` 로그가 남으면 head/tail로 정확한 원인 식별 → JSP 측 직렬화 수정 또는 추가 sanitization 도입.
