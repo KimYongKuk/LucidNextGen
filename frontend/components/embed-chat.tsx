@@ -18,6 +18,11 @@ type ParentPageInfo = { url: string; title: string };
 // 부모 DOM 본문 추출 응답 대기 타임아웃
 const PAGE_CONTENT_REQUEST_TIMEOUT_MS = 3000;
 
+// 화면 공유 기능 on/off — Next.js NEXT_PUBLIC_* 는 빌드 타임 임베드.
+// 기본 false. 활성화하려면 backend/.env에 NEXT_PUBLIC_PAGE_SHARE_ENABLED=true
+// 추가하고 deploy.bat의 .env.local 생성 블록(Step 2.5)에서 propagate 필요.
+const PAGE_SHARE_ENABLED = process.env.NEXT_PUBLIC_PAGE_SHARE_ENABLED === 'true';
+
 export function EmbedChat({
   userId,
   widgetAuthToken,
@@ -46,6 +51,9 @@ export function EmbedChat({
 
   // ─── 그룹웨어 위젯: 현재 화면 공유 상태 ───
   const isGroupwareEmbed = chatMode === "groupware_embed";
+  // PAGE_SHARE_ENABLED 환경변수가 false면 화면 공유 관련 모든 동작 비활성
+  // (chip 미표시 + DOM 추출 미수행 + page_context 미전송)
+  const enablePageShare = isGroupwareEmbed && PAGE_SHARE_ENABLED;
   const [parentPage, setParentPage] = useState<ParentPageInfo | null>(null);
   const [pageShareEnabled, setPageShareEnabled] = useState(true);
   const pageShareEnabledRef = useRef(true);
@@ -55,7 +63,7 @@ export function EmbedChat({
 
   // 부모 위젯에서 오는 postMessage 리스너
   useEffect(() => {
-    if (!isGroupwareEmbed) return;
+    if (!enablePageShare) return;
     const handler = (e: MessageEvent) => {
       if (!e.data || typeof e.data !== "object") return;
       if (e.data.type === "lucid-page-context") {
@@ -74,11 +82,11 @@ export function EmbedChat({
       window.parent.postMessage({ type: "lucid-request-page-context" }, "*");
     }
     return () => window.removeEventListener("message", handler);
-  }, [isGroupwareEmbed]);
+  }, [enablePageShare]);
 
   // sendMessage 직전 부모 DOM 본문 추출 — useSimpleChat이 호출
   const getPageContext = useCallback(async () => {
-    if (!isGroupwareEmbed) return null;
+    if (!enablePageShare) return null;
     if (!pageShareEnabledRef.current) return null;
     if (!parentPageRef.current) return null;
     if (window.parent === window) return null;
@@ -113,7 +121,7 @@ export function EmbedChat({
         resolve(p ? { url: p.url, title: p.title, content: "" } : null);
       }, PAGE_CONTENT_REQUEST_TIMEOUT_MS);
     });
-  }, [isGroupwareEmbed]);
+  }, [enablePageShare]);
 
   const {
     messages,
@@ -257,7 +265,7 @@ export function EmbedChat({
           />
         )}
         {/* 그룹웨어 위젯: 현재 화면 공유 chip (input 바로 위) */}
-        {isGroupwareEmbed && parentPage && pageShareEnabled && (
+        {enablePageShare && parentPage && pageShareEnabled && (
           <div className="flex items-center justify-start">
             <div className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/60 px-2.5 py-1 text-xs text-muted-foreground max-w-full">
               <Monitor size={12} className="shrink-0" />
@@ -276,7 +284,7 @@ export function EmbedChat({
             </div>
           </div>
         )}
-        {isGroupwareEmbed && parentPage && !pageShareEnabled && (
+        {enablePageShare && parentPage && !pageShareEnabled && (
           <div className="flex items-center justify-start">
             <button
               type="button"
@@ -285,7 +293,7 @@ export function EmbedChat({
               title="현재 화면 다시 공유하기"
             >
               <Monitor size={12} />
-              <span>화면 공유 켜기</span>
+              <span>지금 보는 화면 공유</span>
             </button>
           </div>
         )}

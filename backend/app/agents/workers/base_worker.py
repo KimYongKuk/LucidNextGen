@@ -742,7 +742,12 @@ class BaseWorker(ABC):
             prompt = f"{workspace_instructions}\n\n{prompt}"
 
         # ============ 현재 화면 컨텍스트 (그룹웨어 위젯 화면 공유) ============
+        # PAGE_SHARE_ENABLED 환경변수로 기능 on/off (기본 false). 비활성 시 무시.
+        # 프론트도 동일 env로 차단되지만 backend도 가드(defense in depth).
+        import os as _os
         page_ctx = context.get("page_context")
+        if _os.getenv("PAGE_SHARE_ENABLED", "false").strip().lower() != "true":
+            page_ctx = None
         if page_ctx and isinstance(page_ctx, dict):
             page_title = (page_ctx.get("title") or "").strip()
             page_url = (page_ctx.get("url") or "").strip()
