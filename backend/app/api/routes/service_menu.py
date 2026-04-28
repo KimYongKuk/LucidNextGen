@@ -18,8 +18,8 @@ router = APIRouter()
 PG_DATABASE_URL = "postgres://ai_reader:Aitf1234$$@192.168.100.5:5432/tims"
 _pg_pool: Optional[asyncpg.Pool] = None
 
-# 사번 → 조직명 캐시 (프로세스 수명)
-_company_cache: dict[str, str] = {}
+# 사번 → 조직명 집합 캐시 (프로세스 수명, 겸직자 대응)
+_company_cache: dict[str, list[str]] = {}
 
 # 부서경로 2번째 ID → 회사명 매핑
 _DEPT_PATH_COMPANY_MAP = {
@@ -38,64 +38,75 @@ async def _get_pg_pool() -> asyncpg.Pool:
     return _pg_pool
 
 
-async def _get_company_name(empno: str) -> Optional[str]:
-    """사번으로 소속 회사명 조회 (캐시 적용)
+def _resolve_company(dept_path: str, dept_name: str) -> Optional[str]:
+    parts = (dept_path or "").split(":")
+    if len(parts) >= 2:
+        return _DEPT_PATH_COMPANY_MAP.get(parts[1])
+    if "플러스" in dept_name or "LFP" in dept_name.upper():
+        return "엘앤에프플러스"
+    if "JH" in dept_name.upper() or "화학" in dept_name:
+        return "JH화학공업"
+    return None
 
-    v_user_info_mapping으로 user_id를 얻고, v_org_chart의 부서경로에서
+
+async def _get_company_names(empno: str) -> list[str]:
+    """사번으로 소속 회사명 목록 조회 (겸직자는 다중 회사, 캐시 적용)
+
+    v_user_info_mapping으로 user_id를 얻고, v_org_chart의 모든 부서경로에서
     2번째 ID(12=엘앤에프, 566=엘앤에프플러스, 58=JH화학공업)로 회사를 판별한다.
     부서경로가 '10'만 있는 최상위 직속은 부서명으로 판별한다.
+    겸직자(여러 부서 보유)는 모든 소속 회사의 합집합을 반환한다.
     """
     if empno in _company_cache:
         return _company_cache[empno]
 
     try:
         pool = await _get_pg_pool()
-        row = await pool.fetchrow(
+        rows = await pool.fetch(
             """
             SELECT o."부서경로", o."부서", u.dept_name
             FROM v_user_info_mapping u
             JOIN v_org_chart o ON u.user_id = o.user_id
             WHERE u.employee_number = $1
-            LIMIT 1
             """,
             empno,
         )
-        if not row:
+        if not rows:
             logger.warning(f"[ServiceMenu] empno={empno} not found")
-            return None
+            return []
 
-        dept_path = row["부서경로"] or ""
-        dept_name = row["부서"] or row["dept_name"] or ""
-        parts = dept_path.split(":")
+        companies: list[str] = []
+        seen: set[str] = set()
+        for row in rows:
+            dept_path = row["부서경로"] or ""
+            dept_name = row["부서"] or row["dept_name"] or ""
+            company = _resolve_company(dept_path, dept_name)
+            if company and company not in seen:
+                companies.append(company)
+                seen.add(company)
 
-        if len(parts) >= 2:
-            # 부서경로 2번째 ID로 회사 판별
-            company_name = _DEPT_PATH_COMPANY_MAP.get(parts[1])
-        else:
-            # 최상위 직속 (경로가 '10'만) — 부서명으로 판별
-            company_name = None
-            if "플러스" in dept_name or "LFP" in dept_name.upper():
-                company_name = "엘앤에프플러스"
-            elif "JH" in dept_name.upper() or "화학" in dept_name:
-                company_name = "JH화학공업"
+        if not companies:
+            companies = ["엘앤에프"]  # 기본값
 
-        if not company_name:
-            company_name = "엘앤에프"  # 기본값
-
-        _company_cache[empno] = company_name
-        logger.info(f"[ServiceMenu] empno={empno} → company={company_name} (path={dept_path})")
-        return company_name
+        _company_cache[empno] = companies
+        logger.info(f"[ServiceMenu] empno={empno} → companies={companies} (rows={len(rows)})")
+        return companies
     except Exception as e:
         logger.error(f"[ServiceMenu] PG query failed: {e}")
-        return None
+        return []
 
 
 @router.get("/v1/service-menu")
 async def get_service_menu(empno: str = Query(..., description="사번")):
-    """사번에 해당하는 조직의 서비스 메뉴 목록 반환"""
-    company_name = await _get_company_name(empno)
-    if not company_name:
+    """사번에 해당하는 조직의 서비스 메뉴 목록 반환
+
+    겸직자는 소속된 회사 중 어느 하나라도 메뉴의 노출 대상에 포함되면 표시한다.
+    """
+    companies = await _get_company_names(empno)
+    if not companies:
         raise HTTPException(status_code=404, detail="사번에 해당하는 조직을 찾을 수 없습니다")
+
+    company_set = set(companies)
 
     db = get_database_connection()
     with db.get_cursor() as cursor:
@@ -112,7 +123,7 @@ async def get_service_menu(empno: str = Query(..., description="사번")):
         orgs = row["orgs"]
         if isinstance(orgs, str):
             orgs = json.loads(orgs)
-        if company_name in orgs:
+        if company_set.intersection(orgs):
             menus.append({
                 "id": row["id"],
                 "name": row["name"],
@@ -120,4 +131,4 @@ async def get_service_menu(empno: str = Query(..., description="사번")):
                 "url": row["target_url"],
             })
 
-    return {"company": company_name, "menus": menus}
+    return {"companies": companies, "menus": menus}
