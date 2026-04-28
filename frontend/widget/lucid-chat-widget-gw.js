@@ -166,6 +166,116 @@
     widgetFrame = null;
   }
 
+  // ─── 페이지 컨텍스트 (현재 화면 공유) ─────────────────────────────
+  function postToIframe(msg) {
+    if (widgetFrame && widgetFrame.contentWindow) {
+      try { widgetFrame.contentWindow.postMessage(msg, '*'); } catch (e) { /* 무시 */ }
+    }
+  }
+
+  function sendPageContextToIframe() {
+    postToIframe({
+      type: 'lucid-page-context',
+      url: window.location.href,
+      title: document.title || '',
+    });
+  }
+
+  // SPA navigation 감지: history.pushState/replaceState/popstate hook
+  function installNavigationHook() {
+    if (window.__lucidGwNavHookInstalled) return;
+    window.__lucidGwNavHookInstalled = true;
+
+    var origPush = history.pushState;
+    var origReplace = history.replaceState;
+    function fireChange() {
+      // 다음 tick에 보내야 document.title이 갱신됨
+      setTimeout(sendPageContextToIframe, 0);
+    }
+    history.pushState = function () {
+      var ret = origPush.apply(this, arguments);
+      fireChange();
+      return ret;
+    };
+    history.replaceState = function () {
+      var ret = origReplace.apply(this, arguments);
+      fireChange();
+      return ret;
+    };
+    window.addEventListener('popstate', fireChange);
+    window.addEventListener('hashchange', fireChange);
+
+    // document.title 변경 감지 (SPA가 navigate 후 title 갱신하는 경우)
+    if (typeof MutationObserver !== 'undefined') {
+      var titleEl = document.querySelector('title');
+      if (titleEl) {
+        new MutationObserver(fireChange).observe(titleEl, { childList: true });
+      }
+    }
+  }
+
+  // 부모 DOM 본문 추출 (텍스트 + 표 마크다운)
+  var PAGE_CONTENT_MAX_CHARS = 8000;
+  function extractPageContent() {
+    var root = document.body;
+    if (!root) return '';
+
+    // clone 후 불필요 요소 제거 (원본 DOM 변경 방지)
+    var clone = root.cloneNode(true);
+    var REMOVE_SELECTORS = [
+      'script', 'style', 'noscript', 'svg', 'iframe',
+      '#lucid-gw-container', '#lucid-sm-container',
+      'input[type="password"]', '[autocomplete*="cc-"]',
+      '[aria-hidden="true"]'
+    ];
+    REMOVE_SELECTORS.forEach(function (sel) {
+      var nodes = clone.querySelectorAll(sel);
+      for (var i = 0; i < nodes.length; i++) {
+        nodes[i].parentNode && nodes[i].parentNode.removeChild(nodes[i]);
+      }
+    });
+
+    // 표는 마크다운으로 (LLM이 구조 인식하기 좋음)
+    var tableMarkdowns = [];
+    var tables = clone.querySelectorAll('table');
+    for (var t = 0; t < tables.length; t++) {
+      var md = tableToMarkdown(tables[t]);
+      if (md) tableMarkdowns.push(md);
+      tables[t].parentNode && tables[t].parentNode.removeChild(tables[t]);
+    }
+
+    var text = (clone.innerText || clone.textContent || '').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+    var combined = text;
+    if (tableMarkdowns.length) {
+      combined += '\n\n--- 표 ---\n' + tableMarkdowns.join('\n\n');
+    }
+    if (combined.length > PAGE_CONTENT_MAX_CHARS) {
+      combined = combined.slice(0, PAGE_CONTENT_MAX_CHARS) + '\n...[잘림]';
+    }
+    return combined;
+  }
+
+  function tableToMarkdown(table) {
+    var rows = table.querySelectorAll('tr');
+    if (!rows.length) return '';
+    var lines = [];
+    for (var r = 0; r < rows.length; r++) {
+      var cells = rows[r].querySelectorAll('th,td');
+      if (!cells.length) continue;
+      var row = [];
+      for (var c = 0; c < cells.length; c++) {
+        row.push((cells[c].innerText || '').replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim());
+      }
+      lines.push('| ' + row.join(' | ') + ' |');
+      if (r === 0) {
+        var sep = [];
+        for (var k = 0; k < cells.length; k++) sep.push('---');
+        lines.push('| ' + sep.join(' | ') + ' |');
+      }
+    }
+    return lines.join('\n');
+  }
+
   function buildWidget() {
     container = document.createElement('div');
     container.id = 'lucid-gw-container';
@@ -189,9 +299,12 @@
     // 진행 중인 채팅/스트리밍 상태가 통째로 날아감.
     document.documentElement.appendChild(container);
 
-    // iframe에서 새 대화 요청 시 세션 리셋
+    // iframe에서 오는 메시지 처리
     window.addEventListener('message', function (e) {
-      if (e.data && e.data.type === 'lucid-new-chat') {
+      if (!e.data || typeof e.data !== 'object') return;
+
+      // 새 대화 요청 시 세션 리셋
+      if (e.data.type === 'lucid-new-chat') {
         resetSession();
         var frameWrap = document.getElementById('lucid-gw-frame-wrap');
         if (frameWrap) frameWrap.innerHTML = '';
@@ -203,7 +316,36 @@
           widgetFrame.src = iframeSrc;
           widgetFrame.setAttribute('allow', 'clipboard-write');
           widgetFrame.style.cssText = 'width:100%;height:100%;border:none;border-radius:16px;';
+          widgetFrame.addEventListener('load', sendPageContextToIframe);
           frameWrap.appendChild(widgetFrame);
+        }
+      }
+
+      // iframe이 부모 페이지 컨텍스트 동기화 요청 (mount/재연결 시)
+      if (e.data.type === 'lucid-request-page-context') {
+        sendPageContextToIframe();
+      }
+
+      // iframe이 부모 DOM 본문 추출 요청 (메시지 전송 직전)
+      if (e.data.type === 'lucid-request-page-content') {
+        var requestId = e.data.requestId;
+        try {
+          var content = extractPageContent();
+          postToIframe({
+            type: 'lucid-page-content',
+            requestId: requestId,
+            success: true,
+            url: window.location.href,
+            title: document.title || '',
+            content: content,
+          });
+        } catch (err) {
+          postToIframe({
+            type: 'lucid-page-content',
+            requestId: requestId,
+            success: false,
+            reason: String(err && err.message || err),
+          });
         }
       }
     });
@@ -213,6 +355,9 @@
     // 유발하던 것이 SPA 환경 스트리밍 끊김의 진짜 원인이었음.
     // documentElement에 부착하는 현재 방식에서는 SPA가 컨테이너를 건드리지
     // 않으므로 observer 자체를 제거 (자동복구 시도가 오히려 상태 손실 유발).
+
+    // SPA navigation 감지 hook 설치 (페이지 컨텍스트 자동 갱신)
+    installNavigationHook();
   }
 
   function toggleWidget() {
@@ -234,6 +379,8 @@
         widgetFrame.src = iframeSrc;
         widgetFrame.setAttribute('allow', 'clipboard-write');
         widgetFrame.style.cssText = 'width:100%;height:100%;border:none;border-radius:16px;';
+        // iframe 로드 완료 시점에 현재 페이지 컨텍스트 송신 (mount race 회피용)
+        widgetFrame.addEventListener('load', sendPageContextToIframe);
         frameWrap.appendChild(widgetFrame);
       }
       frameWrap.classList.add('lucid-gw-visible');

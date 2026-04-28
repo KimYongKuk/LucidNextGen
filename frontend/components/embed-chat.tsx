@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useCallback, useEffect, type ReactNode } from "react";
-import { SquarePen, ExternalLink } from "lucide-react";
+import { useState, useCallback, useEffect, useRef, type ReactNode } from "react";
+import { SquarePen, ExternalLink, Monitor, X } from "lucide-react";
 import { useSimpleChat } from "@/hooks/use-simple-chat";
 import { useDataStream } from "./data-stream-provider";
 import { Messages } from "./messages";
@@ -11,6 +11,12 @@ import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
 import { getApiUrl } from "@/lib/api/config";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
+
+// 그룹웨어 위젯 화면 공유 — 부모 페이지에서 받는 메타정보
+type ParentPageInfo = { url: string; title: string };
+
+// 부모 DOM 본문 추출 응답 대기 타임아웃
+const PAGE_CONTENT_REQUEST_TIMEOUT_MS = 3000;
 
 export function EmbedChat({
   userId,
@@ -38,6 +44,77 @@ export function EmbedChat({
   const [currentModelId] = useState(DEFAULT_CHAT_MODEL);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
 
+  // ─── 그룹웨어 위젯: 현재 화면 공유 상태 ───
+  const isGroupwareEmbed = chatMode === "groupware_embed";
+  const [parentPage, setParentPage] = useState<ParentPageInfo | null>(null);
+  const [pageShareEnabled, setPageShareEnabled] = useState(true);
+  const pageShareEnabledRef = useRef(true);
+  pageShareEnabledRef.current = pageShareEnabled;
+  const parentPageRef = useRef<ParentPageInfo | null>(null);
+  parentPageRef.current = parentPage;
+
+  // 부모 위젯에서 오는 postMessage 리스너
+  useEffect(() => {
+    if (!isGroupwareEmbed) return;
+    const handler = (e: MessageEvent) => {
+      if (!e.data || typeof e.data !== "object") return;
+      if (e.data.type === "lucid-page-context") {
+        const next = { url: String(e.data.url || ""), title: String(e.data.title || "") };
+        // 부모 페이지가 바뀌면 (URL 변화) 자동으로 공유 재활성화 (Gemini 동작과 동일)
+        const prev = parentPageRef.current;
+        if (!prev || prev.url !== next.url) {
+          setPageShareEnabled(true);
+        }
+        setParentPage(next);
+      }
+    };
+    window.addEventListener("message", handler);
+    // 마운트 직후 한 번 부모에 컨텍스트 송신 요청 (race 방지)
+    if (window.parent !== window) {
+      window.parent.postMessage({ type: "lucid-request-page-context" }, "*");
+    }
+    return () => window.removeEventListener("message", handler);
+  }, [isGroupwareEmbed]);
+
+  // sendMessage 직전 부모 DOM 본문 추출 — useSimpleChat이 호출
+  const getPageContext = useCallback(async () => {
+    if (!isGroupwareEmbed) return null;
+    if (!pageShareEnabledRef.current) return null;
+    if (!parentPageRef.current) return null;
+    if (window.parent === window) return null;
+
+    return await new Promise<{ url?: string; title?: string; content?: string } | null>((resolve) => {
+      const requestId = generateUUID();
+      let settled = false;
+      const onResp = (e: MessageEvent) => {
+        if (!e.data || e.data.type !== "lucid-page-content" || e.data.requestId !== requestId) return;
+        if (settled) return;
+        settled = true;
+        window.removeEventListener("message", onResp);
+        if (e.data.success) {
+          resolve({
+            url: String(e.data.url || ""),
+            title: String(e.data.title || ""),
+            content: String(e.data.content || ""),
+          });
+        } else {
+          resolve(null);
+        }
+      };
+      window.addEventListener("message", onResp);
+      window.parent.postMessage({ type: "lucid-request-page-content", requestId }, "*");
+      setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        window.removeEventListener("message", onResp);
+        console.warn("[EMBED_CHAT] page content request timed out");
+        // 타임아웃 시 메타정보만이라도 첨부 (제목/URL은 부모 mount 직후 받았음)
+        const p = parentPageRef.current;
+        resolve(p ? { url: p.url, title: p.title, content: "" } : null);
+      }, PAGE_CONTENT_REQUEST_TIMEOUT_MS);
+    });
+  }, [isGroupwareEmbed]);
+
   const {
     messages,
     setMessages,
@@ -53,6 +130,7 @@ export function EmbedChat({
     userId,
     widgetAuthToken,
     gossoCookie,
+    getPageContext,
     generateId: generateUUID,
     onData: (dataPart) => {
       setDataStream((ds) => (ds ? [...ds, dataPart] : []));
@@ -177,6 +255,39 @@ export function EmbedChat({
               });
             }}
           />
+        )}
+        {/* 그룹웨어 위젯: 현재 화면 공유 chip (input 바로 위) */}
+        {isGroupwareEmbed && parentPage && pageShareEnabled && (
+          <div className="flex items-center justify-start">
+            <div className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/60 px-2.5 py-1 text-xs text-muted-foreground max-w-full">
+              <Monitor size={12} className="shrink-0" />
+              <span className="truncate max-w-[220px]" title={parentPage.title || parentPage.url}>
+                {parentPage.title || parentPage.url || "현재 화면"} 공유 중
+              </span>
+              <button
+                type="button"
+                onClick={() => setPageShareEnabled(false)}
+                className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10 transition-colors"
+                title="화면 공유 끄기"
+                aria-label="화면 공유 끄기"
+              >
+                <X size={12} />
+              </button>
+            </div>
+          </div>
+        )}
+        {isGroupwareEmbed && parentPage && !pageShareEnabled && (
+          <div className="flex items-center justify-start">
+            <button
+              type="button"
+              onClick={() => setPageShareEnabled(true)}
+              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+              title="현재 화면 다시 공유하기"
+            >
+              <Monitor size={12} />
+              <span>화면 공유 켜기</span>
+            </button>
+          </div>
         )}
         <MultimodalInput
           attachments={attachments}

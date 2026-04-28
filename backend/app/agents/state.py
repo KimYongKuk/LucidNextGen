@@ -113,6 +113,7 @@ class RequestContext(TypedDict, total=False):
     has_session_xlsx: bool  # 세션에 xlsx 파일이 업로드되었는지 여부 (인텐트 분류용)
     chat_mode: str
     gosso_cookie: Optional[str]  # 사용자 LFON GOSSOcookie (캘린더 API 사용자 인증용)
+    page_context: Optional[Dict]  # 그룹웨어 위젯 화면 공유 (url/title/content) — DirectWorker가 시스템 프롬프트에 주입
 
     # 첨부 이미지 — Planner-Executor 경로의 depends=[] task에 multimodal로 동봉
     # (trivial 경로는 orchestrator._build_messages가 직접 처리하므로 사용 안 함)

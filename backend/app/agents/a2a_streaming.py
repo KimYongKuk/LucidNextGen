@@ -308,6 +308,7 @@ async def stream_a2a_response(
     all_tools: List,
     start_time: float,
     gosso_cookie: Optional[str] = None,
+    page_context: Optional[Dict] = None,
 ) -> AsyncIterator[str]:
     """
     A2A Hierarchical Agent 스트리밍 응답 생성
@@ -373,6 +374,7 @@ async def stream_a2a_response(
         "has_session_xlsx": _has_session_xlsx(session_id),
         "chat_mode": chat_mode,
         "gosso_cookie": gosso_cookie,
+        "page_context": page_context,  # 그룹웨어 위젯이 공유한 현재 화면 (url/title/content)
         "session_file_names": [],  # 아래에서 채움
         # Planner-Executor 경로용 — Executor가 depends=[] task에 동봉, Planner가 라우팅 힌트로 사용
         "images": images,

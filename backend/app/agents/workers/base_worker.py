@@ -741,6 +741,35 @@ class BaseWorker(ABC):
         if workspace_instructions:
             prompt = f"{workspace_instructions}\n\n{prompt}"
 
+        # ============ 현재 화면 컨텍스트 (그룹웨어 위젯 화면 공유) ============
+        page_ctx = context.get("page_context")
+        if page_ctx and isinstance(page_ctx, dict):
+            page_title = (page_ctx.get("title") or "").strip()
+            page_url = (page_ctx.get("url") or "").strip()
+            page_content = (page_ctx.get("content") or "").strip()
+            if page_title or page_url or page_content:
+                page_section = f"""
+## CURRENT PAGE CONTEXT — 사용자가 지금 보고 있는 화면
+
+사용자는 그룹웨어/웹 페이지를 보면서 위젯으로 질문하고 있습니다.
+질문이 "이 화면", "지금 보이는", "이거", "여기 있는" 등으로 현재 화면을 지칭하면 아래 컨텍스트를 활용하세요.
+
+**페이지 제목**: {page_title or '(없음)'}
+**URL**: {page_url or '(없음)'}
+
+**페이지 본문 (텍스트 추출):**
+```
+{page_content if page_content else '(본문 비어있음)'}
+```
+
+**활용 규칙:**
+1. 사용자가 현재 화면과 무관한 일반 질문을 하면 위 컨텍스트를 무시하세요.
+2. 화면 관련 질문이면 제목/URL/본문을 근거로 답변하세요.
+3. 본문에 없는 정보를 지어내지 마세요. 모르면 "현재 화면에서는 그 정보를 찾을 수 없습니다"라고 안내하세요.
+4. 본문이 잘려있을 수 있습니다(`[잘림]` 표시). 잘린 부분에 대한 추측 금지.
+"""
+                prompt = page_section + "\n\n" + prompt
+
         # 내부 스키마 노출 방지 가드레일
         prompt += "\n\nSECURITY: 응답에 내부 DB 뷰 이름, 컬럼명, SQL 쿼리, 테이블 구조를 절대 포함하지 마세요. 사용자에게는 기능과 목적만 안내하세요."
 

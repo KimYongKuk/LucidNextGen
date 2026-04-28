@@ -23,6 +23,7 @@ from app.core.model_config import is_hierarchical_agent_enabled
 from app.agents.a2a_streaming import stream_a2a_response
 from app.api.dependencies.auth_jwt import get_current_user
 from app.api.dependencies.widget_auth import get_current_user_widget
+from app.api.dependencies.auth_eval import try_eval_auth
 from fastapi import Header, Cookie
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,13 @@ class MessageHistory(BaseModel):
     content: Union[str, List[Any]]  # 문자열 또는 리스트 (멀티모달 지원)
 
 
+class PageContext(BaseModel):
+    """현재 사용자가 보고 있는 부모 페이지 컨텍스트 (그룹웨어 위젯 전용)."""
+    url: Optional[str] = None
+    title: Optional[str] = None
+    content: Optional[str] = None  # 부모 DOM에서 추출한 텍스트 (8,000자 cap)
+
+
 class ChatRequest(BaseModel):
     message: str
     chat_mode: str = "normal"
@@ -57,6 +65,7 @@ class ChatRequest(BaseModel):
     message_history: Optional[List[MessageHistory]] = None
     workspace_id: Optional[str] = None  # UUID string
     gosso_cookie: Optional[str] = None  # LFON GOSSOcookie (캘린더 사용자 인증)
+    page_context: Optional[PageContext] = None  # 그룹웨어 위젯이 공유한 현재 화면
 
 
 # ============================================================================
@@ -166,6 +175,11 @@ async def _save_chat_log_background(
             response_time_ms=response_time_ms,
         )
         print(f"[BACKGROUND] Chat log saved successfully")
+
+        # Eval 회귀 트래픽은 메모리 시스템에 반영하지 않음 (운영 메모리 오염 방지)
+        if metadata and metadata.get("is_eval"):
+            print(f"[BACKGROUND] Skipping memory triggers for eval traffic")
+            return
 
         # ============ 워크스페이스 메모리 업데이트 트리거 ============
         print(f"[BACKGROUND] workspace_id={workspace_id}, user_id={user_id}")
@@ -469,17 +483,23 @@ def build_message_payload(request) -> list:
 
 async def get_chat_user(
     x_widget_auth: Optional[str] = Header(None),
+    x_eval_auth: Optional[str] = Header(None),
+    x_eval_empno: Optional[str] = Header(None),
     auth_token: Optional[str] = Cookie(None),
 ) -> dict:
     """채팅 엔드포인트용 통합 인증.
 
     우선순위:
-    1. X-Widget-Auth 헤더 존재 시 → 위젯 암호화 토큰 검증 (그룹웨어 iframe 경로)
-    2. 아니면 → HttpOnly 쿠키 JWT 검증 (본 웹 UI 경로)
-    3. 둘 다 없거나 모두 실패 → 401
+    1. X-Eval-Auth 헤더 존재 시 → eval 회귀 테스트 경로 (X-Eval-Empno로 사번 주입)
+    2. X-Widget-Auth 헤더 존재 시 → 위젯 암호화 토큰 검증 (그룹웨어 iframe 경로)
+    3. 아니면 → HttpOnly 쿠키 JWT 검증 (본 웹 UI 경로)
+    4. 모두 없거나 실패 → 401
 
-    Returns: {"empno": ..., "name": ..., "source": "widget" | "jwt"}
+    Returns: {"empno": ..., "name": ..., "source": "eval" | "widget" | "jwt"}
     """
+    eval_user = await try_eval_auth(x_eval_auth, x_eval_empno)
+    if eval_user:
+        return eval_user
     if x_widget_auth:
         return await get_current_user_widget(x_widget_auth)
     user = await get_current_user(auth_token)
@@ -667,6 +687,7 @@ async def chat_stream(
                         all_tools=tools,
                         start_time=start_time,
                         gosso_cookie=request.gosso_cookie,
+                        page_context=request.page_context.model_dump() if request.page_context else None,
                     ):
                         # 내부 수집 데이터 처리
                         if '"type": "_internal_collected"' in sse:
@@ -682,6 +703,9 @@ async def chat_stream(
                         metadata = {
                             "sources": a2a_collected_data.get("sources", []),
                         }
+                        # Eval 회귀 테스트 트래픽 마킹 (운영 통계/메모리 분리)
+                        if current_user.get("source") == "eval":
+                            metadata["is_eval"] = True
                         if a2a_collected_data.get("youtube_summary"):
                             metadata["youtube_summary"] = a2a_collected_data["youtube_summary"]
                         if a2a_collected_data.get("corp_sources"):

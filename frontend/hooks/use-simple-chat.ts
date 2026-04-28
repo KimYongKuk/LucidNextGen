@@ -30,6 +30,9 @@ interface UseSimpleChatOptions {
   userId?: string;  // 외부에서 주입 (embed 등 SSO 쿠키 없는 환경)
   widgetAuthToken?: string;  // 그룹웨어 위젯 암호화 토큰 (embed 전용)
   gossoCookie?: string;  // 그룹웨어 위젯에서 URL로 전달된 GOSSOcookie (embed 전용, 쿠키 경유 우회)
+  // 그룹웨어 위젯 화면 공유 — sendMessage 직전에 호출되어 부모 DOM 추출 결과를 본문에 동봉
+  // null 반환 시 page_context 미첨부.
+  getPageContext?: () => Promise<{ url?: string; title?: string; content?: string } | null>;
 }
 
 export function useSimpleChat({
@@ -44,6 +47,7 @@ export function useSimpleChat({
   userId: externalUserId,
   widgetAuthToken,
   gossoCookie,
+  getPageContext,
 }: UseSimpleChatOptions) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [status, setStatus] = useState<'ready' | 'streaming' | 'submitted'>('ready');
@@ -156,6 +160,16 @@ export function useSimpleChat({
         };
       });
 
+      // 그룹웨어 위젯 화면 공유 — 부모 DOM 추출 (활성 시에만)
+      let pageContextPayload: { url?: string; title?: string; content?: string } | null = null;
+      if (getPageContext) {
+        try {
+          pageContextPayload = await getPageContext();
+        } catch (e) {
+          console.warn('[SIMPLE_CHAT] getPageContext failed:', e);
+        }
+      }
+
       // 백엔드로 스트리밍 요청
       abortControllerRef.current = new AbortController();
 
@@ -188,6 +202,7 @@ export function useSimpleChat({
             const val = m1?.[1] || m2?.[1];
             return val ? { gosso_cookie: val } : {};
           })(),
+          ...(pageContextPayload ? { page_context: pageContextPayload } : {}),
         }),
         signal: abortControllerRef.current.signal,
       });
