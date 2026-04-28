@@ -298,6 +298,17 @@
   // ─── Public API ───
   global.LucidServiceMenu = {
     init: function (userConfig) {
+      // iframe 내부(메일 주소록 등 팝업 페이지)에서는 위젯 렌더링 스킵
+      try {
+        if (window.self !== window.top) return;
+      } catch (e) {
+        return;
+      }
+
+      // SPA 환경(예: 다우오피스)에서 모듈 이동 시 헤더 JSP가 재주입되며 init이 다시 호출됨.
+      // 이미 메뉴가 살아있으면 재생성하지 않고 기존 인스턴스 유지.
+      if (document.getElementById('lucid-sm-container')) return;
+
       config = {};
       for (var key in DEFAULT_CONFIG) config[key] = DEFAULT_CONFIG[key];
       if (userConfig) {
@@ -306,6 +317,7 @@
 
       if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', function () {
+          if (document.getElementById('lucid-sm-container')) return;
           injectStyles();
           buildWidget();
         });

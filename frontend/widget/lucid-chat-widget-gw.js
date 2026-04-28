@@ -248,6 +248,19 @@
   // ─── Public API ───
   global.LucidChat = {
     init: function (userConfig) {
+      // iframe 내부(메일 주소록 등 팝업 페이지)에서는 위젯 렌더링 스킵
+      // custom_index_header.jsp가 팝업 iframe에도 include되어 중복 표시되는 것 방지
+      try {
+        if (window.self !== window.top) return;
+      } catch (e) {
+        // cross-origin 접근 차단 시에도 iframe 안으로 간주하고 스킵
+        return;
+      }
+
+      // SPA 환경(예: 다우오피스)에서 모듈 이동 시 헤더 JSP가 재주입되며 init이 다시 호출됨.
+      // 이미 위젯이 살아있으면 재생성하지 않고 기존 인스턴스 유지 → 진행 중 스트리밍/대화 보존.
+      if (document.getElementById('lucid-gw-container')) return;
+
       config = {};
       for (var key in DEFAULT_CONFIG) {
         config[key] = DEFAULT_CONFIG[key];
@@ -260,6 +273,7 @@
 
       if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', function () {
+          if (document.getElementById('lucid-gw-container')) return;
           injectStyles();
           buildWidget();
         });
