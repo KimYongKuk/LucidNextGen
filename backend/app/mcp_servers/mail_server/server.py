@@ -28,6 +28,11 @@ mcp = FastMCP("Mail Query Server v2")
 # 본문 텍스트 길이 제한 (LLM 컨텍스트 효율)
 MAIL_BODY_MAX_LENGTH = 8000
 
+# 수신자/참조 필드 압축 (전체 부서 메일은 수백 명 → 토큰 폭증/Bedrock 일일한도 차단 원인)
+RECIPIENT_LIST_MAX_NAMES = 5            # 메일 목록 조회 시 표시할 수신자 수
+RECIPIENT_DETAIL_MAX_NAMES = 30         # 메일 상세 조회 시 표시할 수신자 수
+RECIPIENT_FIELD_MAX_CHARS = 800         # 폴백: 콤마 분리 안 되는 케이스 컷오프
+
 # PostgreSQL 연결 정보 (TIMS DB - org_chart MCP와 동일)
 DATABASE_URL = os.environ.get(
     "TIMS_DATABASE_URL",
@@ -244,6 +249,24 @@ async def _call_mail_api(message_store: str, action: str, **kwargs) -> dict:
         )
 
 
+def _truncate_recipients(value: str, max_names: int) -> str:
+    """수신자/참조 문자열을 N명 + '외 M명'으로 축약.
+
+    JSP가 반환하는 to/cc는 '이름/직급/부서 <email>, ...' 콤마 구분 문자열.
+    전체 부서 공지 메일은 수백 명까지 들어와 LLM 토큰을 폭증시키므로 축약한다.
+    """
+    if not value:
+        return value
+    parts = [p.strip() for p in value.split(",") if p.strip()]
+    if len(parts) <= max_names:
+        # 콤마로 분리되지 않은 비정상 케이스도 길이 제한 적용
+        if len(value) > RECIPIENT_FIELD_MAX_CHARS:
+            return value[:RECIPIENT_FIELD_MAX_CHARS] + f"... [원본 {len(value):,}자, 일부 생략]"
+        return value
+    head = ", ".join(parts[:max_names])
+    return f"{head} 외 {len(parts) - max_names}명"
+
+
 def _format_mail_list(result: dict, label: str) -> str:
     """메일 목록 결과를 LLM 친화적 텍스트로 포맷팅"""
     data = result.get("data", [])
@@ -274,9 +297,9 @@ def _format_mail_list(result: dict, label: str) -> str:
         if uid and folder_no:
             lines.append(f"   [메일ID: uid={uid}, folder={folder_no}]")
         if sender:
-            lines.append(f"   발신: {sender}")
+            lines.append(f"   발신: {_truncate_recipients(sender, RECIPIENT_LIST_MAX_NAMES)}")
         if recipient:
-            lines.append(f"   수신: {recipient}")
+            lines.append(f"   수신: {_truncate_recipients(recipient, RECIPIENT_LIST_MAX_NAMES)}")
         if date:
             lines.append(f"   날짜: {date}")
         if preview:
@@ -324,11 +347,11 @@ def _format_mail_detail(result: dict) -> str:
 
     lines.append(f"제목: {subject}")
     if sender:
-        lines.append(f"발신자: {sender}")
+        lines.append(f"발신자: {_truncate_recipients(sender, RECIPIENT_DETAIL_MAX_NAMES)}")
     if recipient:
-        lines.append(f"수신자: {recipient}")
+        lines.append(f"수신자: {_truncate_recipients(recipient, RECIPIENT_DETAIL_MAX_NAMES)}")
     if cc:
-        lines.append(f"참조(CC): {cc}")
+        lines.append(f"참조(CC): {_truncate_recipients(cc, RECIPIENT_DETAIL_MAX_NAMES)}")
     if date:
         lines.append(f"날짜: {date}")
     lines.append("")
