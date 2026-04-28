@@ -1,5 +1,6 @@
 """Worker Agent 기본 클래스"""
 
+import copy
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import List, Dict, Any, AsyncIterator, Iterator, Optional
@@ -522,21 +523,25 @@ class BaseWorker(ABC):
         tools: List[BaseTool],
         context: Dict[str, Any],
     ) -> List[BaseTool]:
-        """Output 파일 생성 도구에 아카이브 복사 후처리를 래핑"""
+        """Output 파일 생성 도구에 아카이브 복사 후처리를 래핑
+
+        MCP 도구는 글로벌 캐시되어 모든 요청이 공유한다. 직접 ainvoke 덮어쓰기 +
+        _archive_wrapped 가드 조합은 첫 사용자의 _user_id가 closure에 박혀버려
+        이후 모든 사용자의 아카이브가 첫 사용자 폴더로 흘러가는 누설을 일으킨다.
+        → 사용자별 사본을 만들고 사본의 ainvoke만 교체한다.
+        """
         from app.utils.file_archive import archive_file, extract_output_filepath
 
         user_id = context.get("user_id", "unknown")
         archivable = self.ARCHIVABLE_TOOLS
 
+        prepared: List[BaseTool] = []
         for tool in tools:
             if tool.name not in archivable:
+                prepared.append(tool)
                 continue
 
-            # 이미 아카이브 래핑된 경우 스킵
-            if getattr(tool, "_archive_wrapped", False):
-                continue
-
-            # 항상 현재 ainvoke를 사용 (보안 래핑이 이미 적용된 경우 보존)
+            user_tool = copy.copy(tool)
             original_ainvoke = tool.ainvoke
 
             async def archive_ainvoke(
@@ -567,10 +572,10 @@ class BaseWorker(ABC):
 
                 return result
 
-            object.__setattr__(tool, "ainvoke", archive_ainvoke)
-            object.__setattr__(tool, "_archive_wrapped", True)
+            object.__setattr__(user_tool, "ainvoke", archive_ainvoke)
+            prepared.append(user_tool)
 
-        return tools
+        return prepared
 
     def build_system_prompt(
         self,

@@ -9,6 +9,7 @@
 - 감사 로그에 user_id 주입
 """
 
+import copy
 import os
 import sys
 from datetime import datetime
@@ -151,20 +152,25 @@ class NASWorker(BaseWorker):
 - 사용자가 요청하지 않은 파일을 임의로 다운로드/업로드하지 마세요."""
 
     def prepare_tools(self, tools: List[BaseTool], context: Dict[str, Any]) -> List[BaseTool]:
-        """모든 NAS 도구의 경로 인자를 검증하고 감사 로그에 user_id 주입"""
+        """모든 NAS 도구의 경로 인자를 검증하고 감사 로그에 user_id 주입
+
+        MCP 도구는 글로벌 캐시되어 모든 요청이 공유한다. 직접 ainvoke 덮어쓰기 +
+        _nas_wrapped 가드 조합은 첫 사용자의 _user_id가 closure에 박혀버려 이후
+        모든 사용자의 감사 로그가 첫 사용자로 표시되는 누설을 일으킨다.
+        → 사용자별 사본을 만들고 사본의 ainvoke만 교체한다.
+        """
         user_id = context.get("user_id", "anonymous")
 
+        prepared: List[BaseTool] = []
         for tool in tools:
             if tool.name not in _NAS_PATH_ARG_TOOLS:
+                prepared.append(tool)
                 continue
 
             path_arg_name = _NAS_PATH_ARG_TOOLS[tool.name]
 
-            # 이미 래핑된 경우 스킵
-            if hasattr(tool, "_nas_wrapped"):
-                continue
-
-            original_ainvoke = getattr(tool, "_unwrapped_ainvoke", tool.ainvoke)
+            user_tool = copy.copy(tool)
+            original_ainvoke = tool.ainvoke
 
             async def secured_ainvoke(
                 input_data,
@@ -195,8 +201,7 @@ class NASWorker(BaseWorker):
 
                 return await _original(input_data, config, **kwargs)
 
-            object.__setattr__(tool, "_unwrapped_ainvoke", original_ainvoke)
-            object.__setattr__(tool, "ainvoke", secured_ainvoke)
-            object.__setattr__(tool, "_nas_wrapped", True)
+            object.__setattr__(user_tool, "ainvoke", secured_ainvoke)
+            prepared.append(user_tool)
 
-        return tools
+        return prepared

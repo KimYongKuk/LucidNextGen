@@ -9,6 +9,7 @@
 Sonnet 모델 사용: 문서 내용 요약 및 종합 응답 생성에 고품질 필요
 """
 
+import copy
 import os
 import json
 import time
@@ -685,12 +686,18 @@ class OutlineWorker(BaseWorker):
     def prepare_tools(
         self, tools: List[BaseTool], context: Dict[str, Any]
     ) -> List[BaseTool]:
-        """도구 결과 truncation + 접근 제어 + publish_file_to_wiki user_id 주입"""
+        """도구 결과 truncation + 접근 제어 + publish_file_to_wiki user_id 주입
+
+        MCP 도구는 글로벌 캐시되어 모든 요청이 공유한다. 직접 ainvoke 덮어쓰기는
+        동시 요청 race로 다른 사용자 사번이 wrapper에 박혀 타인 권한/필터로
+        결과가 누설된다. → 사용자별 사본을 만들고 사본의 ainvoke만 교체한다.
+        """
         user_id = context.get("user_id", "anonymous")
 
+        prepared: List[BaseTool] = []
         for tool in tools:
-            original_ainvoke = getattr(tool, '_unwrapped_ainvoke', None) or tool.ainvoke
-            object.__setattr__(tool, '_unwrapped_ainvoke', original_ainvoke)
+            user_tool = copy.copy(tool)
+            original_ainvoke = tool.ainvoke
 
             if tool.name == "publish_file_to_wiki":
                 # user_id 자동 주입 + 쓰기 권한 검증
@@ -728,7 +735,8 @@ class OutlineWorker(BaseWorker):
                     result = await _original(input_data, config, **kwargs)
                     return _truncate_outline_result(result, _tname)
 
-                object.__setattr__(tool, "ainvoke", secured_ainvoke)
+                object.__setattr__(user_tool, "ainvoke", secured_ainvoke)
+                prepared.append(user_tool)
 
             elif tool.name in _ACCESS_CONTROLLED_WRITE_TOOLS:
                 # 쓰기 도구 (create_document 등): 쓰기 권한 검증만 (user_id 주입 불필요)
@@ -759,7 +767,8 @@ class OutlineWorker(BaseWorker):
                     result = await _original(input_data, config, **kwargs)
                     return _truncate_outline_result(result, _tname)
 
-                object.__setattr__(tool, "ainvoke", secured_ainvoke)
+                object.__setattr__(user_tool, "ainvoke", secured_ainvoke)
+                prepared.append(user_tool)
 
             elif tool.name == "search_documents":
                 # 하이브리드 검색: 키워드(MCP) + 시멘틱(ChromaDB) → RRF 병합
@@ -826,7 +835,8 @@ class OutlineWorker(BaseWorker):
 
                     return result
 
-                object.__setattr__(tool, "ainvoke", secured_ainvoke)
+                object.__setattr__(user_tool, "ainvoke", secured_ainvoke)
+                prepared.append(user_tool)
 
             elif tool.name in _ACCESS_CONTROLLED_READ_TOOLS:
                 # 읽기 도구 (search_documents 제외): pre-check + post-filter
@@ -887,7 +897,8 @@ class OutlineWorker(BaseWorker):
 
                     return result
 
-                object.__setattr__(tool, "ainvoke", secured_ainvoke)
+                object.__setattr__(user_tool, "ainvoke", secured_ainvoke)
+                prepared.append(user_tool)
 
             else:
                 # 기타: truncation만
@@ -899,9 +910,10 @@ class OutlineWorker(BaseWorker):
                     result = await _original(input_data, config, **kwargs)
                     return _truncate_outline_result(result, _tname)
 
-                object.__setattr__(tool, "ainvoke", secured_ainvoke)
+                object.__setattr__(user_tool, "ainvoke", secured_ainvoke)
+                prepared.append(user_tool)
 
-        return tools
+        return prepared
 
 
 async def _hybrid_merge_search(

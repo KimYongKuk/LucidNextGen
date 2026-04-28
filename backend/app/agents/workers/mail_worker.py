@@ -6,6 +6,7 @@
 Sonnet 모델 사용: 메일 본문 요약 및 답장 초안 작성에 고품질 응답 필요
 """
 
+import copy
 from typing import List, Dict, Any, Optional
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
@@ -148,15 +149,22 @@ search_mail 사용 시 주의:
         tools: List[BaseTool],
         context: Dict[str, Any]
     ) -> List[BaseTool]:
-        """메일 도구 보안 래핑: employee_number를 인증된 사번으로 강제 치환"""
+        """메일 도구 보안 래핑: employee_number를 인증된 사번으로 강제 치환
+
+        주의: MCP 도구 객체는 글로벌 캐시되어 모든 요청이 공유한다.
+        직접 ainvoke를 덮어쓰면 동시 요청 시 마지막 사용자의 wrapper로 race가 발생해
+        다른 사용자의 사번이 도구 호출 args에 주입되는 데이터 누설이 일어난다.
+        → 사용자별 shallow copy를 만들고 사본의 ainvoke만 교체한다.
+        """
         user_id = context.get("user_id", "")
         if not user_id or user_id == "anonymous":
             return tools
 
+        prepared: List[BaseTool] = []
         for tool in tools:
-            # 글로벌 캐시 도구의 래핑 체인 방지: 항상 원본 ainvoke 사용
-            original_ainvoke = getattr(tool, '_unwrapped_ainvoke', None) or tool.ainvoke
-            object.__setattr__(tool, '_unwrapped_ainvoke', original_ainvoke)
+            # 사용자별 사본 — 글로벌 캐시 객체는 절대 안 건드림
+            user_tool = copy.copy(tool)
+            original_ainvoke = tool.ainvoke
 
             async def secured_ainvoke(
                 input_data, config=None, *,
@@ -176,10 +184,11 @@ search_mail 사용 시 주의:
                     print(f"[MailWorker] [SECURE_INVOKE] {_tname} ERROR: {type(e).__name__}: {e}")
                     raise
 
-            object.__setattr__(tool, "ainvoke", secured_ainvoke)
+            object.__setattr__(user_tool, "ainvoke", secured_ainvoke)
+            prepared.append(user_tool)
 
         print(f"[MailWorker] 보안 래핑 완료: employee_number → {user_id}")
-        return tools
+        return prepared
 
     def build_system_prompt(
         self,

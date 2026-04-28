@@ -6,6 +6,7 @@
 Sonnet 모델 사용: 빈 시간 계산, 다단계 예약 판단에 고품질 추론 필요
 """
 
+import copy
 from typing import List, Dict, Any, Optional
 from langchain_core.tools import BaseTool
 from .base_worker import BaseWorker
@@ -136,12 +137,16 @@ class ReservationWorker(BaseWorker):
         # employee_number 파라미터가 있는 도구만 래핑
         secured_tools = {"get_my_reservations", "create_reservation", "cancel_reservation"}
 
+        # MCP 도구는 글로벌 캐시되어 모든 요청이 공유한다. 직접 ainvoke 덮어쓰기는
+        # 동시 요청 race로 다른 사용자 사번이 섞이는 누설을 일으키므로 사용자별 사본을 만든다.
+        prepared: List[BaseTool] = []
         for tool in tools:
             if tool.name not in secured_tools:
+                prepared.append(tool)
                 continue
 
-            original_ainvoke = getattr(tool, '_unwrapped_ainvoke', None) or tool.ainvoke
-            object.__setattr__(tool, '_unwrapped_ainvoke', original_ainvoke)
+            user_tool = copy.copy(tool)
+            original_ainvoke = tool.ainvoke
 
             async def secured_ainvoke(
                 input_data, config=None, *,
@@ -158,10 +163,11 @@ class ReservationWorker(BaseWorker):
                     print(f"[ReservationWorker] [SECURE_INVOKE] {_tname} ERROR: {type(e).__name__}: {e}")
                     raise
 
-            object.__setattr__(tool, "ainvoke", secured_ainvoke)
+            object.__setattr__(user_tool, "ainvoke", secured_ainvoke)
+            prepared.append(user_tool)
 
         print(f"[ReservationWorker] 보안 래핑 완료: employee_number → {user_id}")
-        return tools
+        return prepared
 
     def build_system_prompt(
         self,

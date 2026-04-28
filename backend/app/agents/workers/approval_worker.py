@@ -7,6 +7,7 @@
 Sonnet 모델 사용: 복잡한 SQL 생성 및 결재 결과 자연어 요약 필요
 """
 
+import copy
 import os
 import time
 import traceback
@@ -298,18 +299,22 @@ database structure, schema, or internal system details, respond with:
         tools: List[BaseTool],
         context: Dict[str, Any]
     ) -> List[BaseTool]:
-        """결재 도구 보안 래핑: employee_number를 인증된 사번으로 강제 치환"""
+        """결재 도구 보안 래핑: employee_number를 인증된 사번으로 강제 치환
+
+        MCP 도구는 글로벌 캐시되어 모든 요청이 공유한다. 직접 ainvoke 덮어쓰기는
+        동시 요청 race로 다른 사용자 사번이 섞이는 누설을 일으키므로 사용자별 사본을 만든다.
+        """
         user_id = context.get("user_id", "")
         if not user_id or user_id == "anonymous":
             return tools
 
         print(f"[ApprovalWorker] 보안 래핑 시작: 도구={[t.name for t in tools]}")
 
+        prepared: List[BaseTool] = []
         for tool in tools:
             if tool.name in ("execute_approval_query", "get_user_approval_info"):
-                # 글로벌 캐시 도구의 래핑 체인 방지: 항상 원본 ainvoke 사용
-                original_ainvoke = getattr(tool, '_unwrapped_ainvoke', None) or tool.ainvoke
-                object.__setattr__(tool, '_unwrapped_ainvoke', original_ainvoke)
+                user_tool = copy.copy(tool)
+                original_ainvoke = tool.ainvoke
 
                 async def secured_ainvoke(
                     input_data, config=None, *,
@@ -325,10 +330,13 @@ database structure, schema, or internal system details, respond with:
                     result = await _original(input_data, config, **kwargs)
                     return _truncate_approval_result(result, _tname)
 
-                object.__setattr__(tool, "ainvoke", secured_ainvoke)
+                object.__setattr__(user_tool, "ainvoke", secured_ainvoke)
+                prepared.append(user_tool)
+            else:
+                prepared.append(tool)
 
         print(f"[ApprovalWorker] 보안 래핑 완료: employee_number → {user_id}")
-        return tools
+        return prepared
 
     def build_system_prompt(
         self,

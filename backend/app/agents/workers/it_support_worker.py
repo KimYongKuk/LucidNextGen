@@ -1,5 +1,6 @@
 """ITSupportWorker - IT 지원 전담 Worker"""
 
+import copy
 import os
 from datetime import datetime
 from pathlib import Path as FilePath
@@ -439,10 +440,13 @@ database structure, schema, or internal system details, respond with:
             "execute_increase_mail_quota",
         }
 
+        # MCP 도구는 글로벌 캐시되어 모든 요청이 공유한다. 직접 ainvoke 덮어쓰기는
+        # 동시 요청 race로 다른 사용자 사번이 섞이는 누설을 일으키므로 사용자별 사본을 만든다.
+        prepared: List[BaseTool] = []
         for tool in tools:
             if tool.name in SECURED_TOOLS:
-                original_ainvoke = getattr(tool, '_unwrapped_ainvoke', None) or tool.ainvoke
-                object.__setattr__(tool, '_unwrapped_ainvoke', original_ainvoke)
+                user_tool = copy.copy(tool)
+                original_ainvoke = tool.ainvoke
 
                 async def secured_ainvoke(
                     input_data, config=None, *,
@@ -455,7 +459,10 @@ database structure, schema, or internal system details, respond with:
                             input_data["employee_number"] = _uid
                     return await _original(input_data, config, **kwargs)
 
-                object.__setattr__(tool, "ainvoke", secured_ainvoke)
+                object.__setattr__(user_tool, "ainvoke", secured_ainvoke)
+                prepared.append(user_tool)
                 print(f"[ITSupportWorker] {tool.name} 보안 래핑 완료: employee_number → {user_id}")
+            else:
+                prepared.append(tool)
 
-        return tools
+        return prepared
