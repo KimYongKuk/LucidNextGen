@@ -214,20 +214,31 @@
     }
   }
 
-  // 부모 DOM 본문 추출 (텍스트 + 표 마크다운)
+  // 부모 DOM 본문 추출 (텍스트 + 표 마크다운, same-origin iframe 재귀)
   var PAGE_CONTENT_MAX_CHARS = 8000;
-  function extractPageContent() {
-    var root = document.body;
-    if (!root) return '';
+  var IFRAME_RECURSION_MAX_DEPTH = 3;  // 다우오피스 메일은 셸→content→mail-detail 정도
 
-    // clone 후 불필요 요소 제거 (원본 DOM 변경 방지)
-    var clone = root.cloneNode(true);
+  function extractPageContent() {
+    var combined = extractFromDocument(document, 0, '');
+    if (combined.length > PAGE_CONTENT_MAX_CHARS) {
+      combined = combined.slice(0, PAGE_CONTENT_MAX_CHARS) + '\n...[잘림]';
+    }
+    return combined;
+  }
+
+  // doc → 텍스트 + 표 마크다운, 자식 iframe(same-origin)도 재귀
+  function extractFromDocument(doc, depth, framePath) {
+    if (!doc || !doc.body) return '';
+    if (depth > IFRAME_RECURSION_MAX_DEPTH) return '';
+
     var REMOVE_SELECTORS = [
-      'script', 'style', 'noscript', 'svg', 'iframe',
+      'script', 'style', 'noscript', 'svg',
       '#lucid-gw-container', '#lucid-sm-container',
       'input[type="password"]', '[autocomplete*="cc-"]',
       '[aria-hidden="true"]'
     ];
+
+    var clone = doc.body.cloneNode(true);
     REMOVE_SELECTORS.forEach(function (sel) {
       var nodes = clone.querySelectorAll(sel);
       for (var i = 0; i < nodes.length; i++) {
@@ -235,7 +246,7 @@
       }
     });
 
-    // 표는 마크다운으로 (LLM이 구조 인식하기 좋음)
+    // 표 마크다운 변환 후 본문에서 제거
     var tableMarkdowns = [];
     var tables = clone.querySelectorAll('table');
     for (var t = 0; t < tables.length; t++) {
@@ -244,15 +255,40 @@
       tables[t].parentNode && tables[t].parentNode.removeChild(tables[t]);
     }
 
+    // clone에서 iframe 자체는 제거 (자식 추출은 LIVE DOM에서 별도 처리)
+    var cloneIframes = clone.querySelectorAll('iframe');
+    for (var ci = 0; ci < cloneIframes.length; ci++) {
+      cloneIframes[ci].parentNode && cloneIframes[ci].parentNode.removeChild(cloneIframes[ci]);
+    }
+
     var text = (clone.innerText || clone.textContent || '').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
-    var combined = text;
+    var parts = [];
+    var header = framePath ? '[' + framePath + ']\n' : '';
+    if (text) parts.push(header + text);
     if (tableMarkdowns.length) {
-      combined += '\n\n--- 표 ---\n' + tableMarkdowns.join('\n\n');
+      parts.push('--- 표' + (framePath ? ' (' + framePath + ')' : '') + ' ---\n' + tableMarkdowns.join('\n\n'));
     }
-    if (combined.length > PAGE_CONTENT_MAX_CHARS) {
-      combined = combined.slice(0, PAGE_CONTENT_MAX_CHARS) + '\n...[잘림]';
+
+    // LIVE doc에서 iframe 재귀 (cross-origin은 자동 skip)
+    var liveIframes = doc.querySelectorAll('iframe');
+    for (var fi = 0; fi < liveIframes.length; fi++) {
+      var iframe = liveIframes[fi];
+      var iframeId = iframe.id || iframe.name || iframe.title || ('iframe#' + fi);
+      // 우리 위젯 iframe 자체는 스킵
+      if (iframe.id === 'lucid-gw-frame' || iframe.id === 'lucid-sm-frame') continue;
+      try {
+        var subDoc = iframe.contentDocument;
+        if (subDoc && subDoc.body) {
+          var subPath = framePath ? framePath + ' > ' + iframeId : iframeId;
+          var subContent = extractFromDocument(subDoc, depth + 1, subPath);
+          if (subContent) parts.push(subContent);
+        }
+      } catch (e) {
+        // cross-origin → 접근 불가, 스킵
+      }
     }
-    return combined;
+
+    return parts.join('\n\n');
   }
 
   function tableToMarkdown(table) {
