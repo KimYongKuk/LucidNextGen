@@ -62,11 +62,14 @@ async def _get_company_names(empno: str) -> list[str]:
 
     try:
         pool = await _get_pg_pool()
+        # 겸직자는 v_user_info_mapping에 dept_id별 다중 행을 가진다.
+        # v_org_chart는 user당 주부서 1행만 가지므로 user_id JOIN으로는 부서별 경로를
+        # 가져올 수 없다 → 각 dept_id로 v_org_chart의 부서경로를 직접 매칭한다.
         rows = await pool.fetch(
             """
-            SELECT o."부서경로", o."부서", u.dept_name
+            SELECT DISTINCT u.dept_id, u.dept_name, o."부서경로", o."부서"
             FROM v_user_info_mapping u
-            JOIN v_org_chart o ON u.user_id = o.user_id
+            LEFT JOIN v_org_chart o ON o."부서ID" = u.dept_id
             WHERE u.employee_number = $1
             """,
             empno,

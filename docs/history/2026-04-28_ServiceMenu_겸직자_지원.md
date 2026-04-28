@@ -1,31 +1,60 @@
 # 2026-04-28 ServiceMenu 겸직자(다중 회사) 지원
 
 ## 개요
-그룹웨어 서비스 메뉴 위젯이 겸직자에 대해 비결정적으로 한 회사만 잡아 메뉴가 누락되던 이슈 수정. 사번 → 회사명 매핑을 단일 값에서 회사명 목록으로 확장하고, 메뉴 필터링을 OR(교집합) 방식으로 전환.
+그룹웨어 서비스 메뉴 위젯이 겸직자에 대해 한 회사만 잡아 메뉴가 누락되던 이슈 수정. 두 차례에 걸쳐 진행: (1) 단일 → 다중 회사 매핑으로 확장, (2) JOIN 조건을 dept_id 기준으로 교정.
 
 ## 변경 파일 요약
 | 파일 | 변경 유형 | 설명 |
 |------|-----------|------|
-| backend/app/api/routes/service_menu.py | 수정 | `_get_company_name()` → `_get_company_names()`로 전환, 모든 부서 행을 fetch하여 회사 합집합 반환. 응답 필드 `company` → `companies` (list). |
+| backend/app/api/routes/service_menu.py | 수정 | `_get_company_name()` → `_get_company_names()` 전환, 모든 부서 행을 fetch하여 회사 합집합 반환. JOIN 조건을 user_id → dept_id로 교정. 응답 필드 `company` → `companies` (list). |
 
 ## 상세 내용
 
-### 문제
-A2208002(황기연 님) 같이 부서가 두 개 이상인 겸직자의 경우, `v_org_chart`에 행이 여러 개 존재한다.
+### 1차 수정 — 단일 회사 → 다중 회사 매핑
 
-```
-A2208002  hky5688  1158  황기연  597  LFP공정운영팀   (부서경로 ...:566:...)  → 엘앤에프플러스
-A2208002  hky5688  1158  황기연  589  공정기술파트    (부서경로 ...:12:...)   → 엘앤에프
-```
+기존 코드는 `pool.fetchrow(... LIMIT 1)`로 행 한 개만 가져왔고 `ORDER BY`도 없어서 회사가 PostgreSQL의 임의 순서에 따라 결정됐다. 결과가 `_company_cache`에 프로세스 수명 동안 박혀버려서 재기동 전까지 한쪽 회사로 고정되는 문제도 있었다.
 
-기존 코드는 `pool.fetchrow(... LIMIT 1)`로 행 한 개만 가져왔고 `ORDER BY`도 없어서 회사가 PostgreSQL의 임의 순서에 따라 결정됐다. 게다가 결과가 `_company_cache`에 프로세스 수명 동안 박혀버려서 재기동 전까지 한쪽 회사로 고정되는 문제까지 있었다.
-
-### 해결
+해결:
 1. `pool.fetchrow(... LIMIT 1)` → `pool.fetch(...)`로 전환하여 모든 부서 행 수집
 2. 각 행의 부서경로/부서명을 회사명으로 변환하는 헬퍼 `_resolve_company()` 분리
 3. 중복 제거된 회사명 목록을 `_company_cache`에 저장 (값 타입: `dict[str, list[str]]`)
 4. 엔드포인트 필터를 `if company_name in orgs` → `if company_set.intersection(orgs)`로 변경
 5. 응답 필드명 `company` → `companies` (frontend `lucid-service-menu.js`는 `data.menus`만 사용 → 호환성 영향 없음)
+
+### 2차 수정 — JOIN 조건 교정 (실제 fix)
+
+1차 수정 배포 후에도 A2208002(황기연 님)는 엘앤에프플러스 메뉴만 노출됐다. 로그에 `rows=2 → companies=['엘앤에프플러스']` 즉 행은 2개 들어왔지만 회사가 1개로 dedup되는 상황. PostgreSQL 직접 조회로 raw 데이터 분석한 결과 진짜 원인이 드러남:
+
+**v_user_info_mapping** (사번 → 부서들, dept_id별 다중 행)
+```
+A2208002 dept_id=597 LFP공정운영팀
+A2208002 dept_id=589 공정기술파트
+```
+
+**v_org_chart** (user별 주부서 1행만)
+```
+user_id=1158 부서ID=589 부서경로=10:566:646:582:583
+```
+
+**v_org_chart에 dept별로 직접 조회**:
+```
+부서ID=597 LFP공정운영팀 → 부서경로 10:12:147:148  → 12 → 엘앤에프
+부서ID=589 공정기술파트  → 부서경로 10:566:646:582:583 → 566 → 엘앤에프플러스
+```
+
+기존 JOIN은 `u.user_id = o.user_id`라서 v_org_chart에서 user_id=1158의 주부서 1행(589, 경로 `10:566:...`)만 반환됐고, v_user_info_mapping의 2행과 카테시안 곱이 되어 두 결과 행 모두 같은 부서경로 `10:566:...`을 갖게 됐다. 즉 두 dept를 다 봤지만 부서경로 정보가 한 종류뿐이어서 회사도 한 종류만 잡혔다.
+
+해결: JOIN 조건을 `o."부서ID" = u.dept_id`로 변경 → 각 dept_id가 자기 부서경로를 정확히 가져옴. `LEFT JOIN` + `DISTINCT`로 매칭 안 되는 경우 NULL 허용 + 중복 제거.
+
+```sql
+SELECT DISTINCT u.dept_id, u.dept_name, o."부서경로", o."부서"
+FROM v_user_info_mapping u
+LEFT JOIN v_org_chart o ON o."부서ID" = u.dept_id
+WHERE u.employee_number = $1
+```
+
+### 사용자 정정 사항
+사용자가 알려준 사실: "**LFP공정운영팀은 엘앤에프 소속**". 부서명에 LFP가 붙어있어도 회사는 엘앤에프 본사일 수 있다. dept_id 597의 부서경로가 `10:12:...`로 시작(12=엘앤에프)하는 PostgreSQL 데이터와도 일치 — 부서명 키워드 매칭 폴백은 부서경로가 비어있을 때만 발동시켜야 안전.
 
 ### 정책: "어느 한쪽 회사라도 속하면 보여준다"
 
