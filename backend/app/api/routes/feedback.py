@@ -8,6 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.services.feedback_service import FeedbackService, get_feedback_service
+from app.api.dependencies.auth_jwt import get_current_user
+from app.api.dependencies.authz import get_current_admin
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -19,7 +21,6 @@ logger = logging.getLogger(__name__)
 
 class FeedbackCreate(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000)
-    user_id: Optional[str] = Field(None, max_length=100)
 
 
 class FeedbackResponse(BaseModel):
@@ -46,11 +47,12 @@ class FeedbackSinceResponse(BaseModel):
 @router.post("/v1/feedback", response_model=FeedbackResponse)
 async def create_feedback(
     request: FeedbackCreate,
+    current_user: dict = Depends(get_current_user),
     service: FeedbackService = Depends(get_feedback_service)
 ):
-    """Create a new feedback (user_id stored but not exposed)"""
+    """Create a new feedback (인증된 사번 자동 저장, 응답에는 노출 안 함)"""
     try:
-        result = service.create_feedback(message=request.message, user_id=request.user_id)
+        result = service.create_feedback(message=request.message, user_id=current_user["empno"])
         return FeedbackResponse(**result)
     except Exception as e:
         logger.error(f"Failed to create feedback: {e}")
@@ -61,9 +63,10 @@ async def create_feedback(
 async def list_feedbacks(
     limit: int = Query(50, ge=1, le=100),
     cursor: Optional[str] = Query(None, description="ISO datetime cursor for pagination"),
+    _admin: dict = Depends(get_current_admin),
     service: FeedbackService = Depends(get_feedback_service)
 ):
-    """List feedbacks with cursor-based pagination (newest first)"""
+    """List feedbacks (운영자 전용, cursor-based pagination, newest first)"""
     try:
         result = service.list_feedbacks(limit=limit, cursor=cursor)
         return FeedbackListResponse(
@@ -79,9 +82,10 @@ async def list_feedbacks(
 @router.get("/v1/feedback/since/{timestamp}", response_model=FeedbackSinceResponse)
 async def get_feedbacks_since(
     timestamp: str,
+    _admin: dict = Depends(get_current_admin),
     service: FeedbackService = Depends(get_feedback_service)
 ):
-    """Get feedbacks created after the given timestamp (for polling)"""
+    """Get feedbacks created after the given timestamp (운영자 전용, polling)"""
     try:
         result = service.get_feedbacks_since(timestamp=timestamp)
         return FeedbackSinceResponse(

@@ -11,6 +11,9 @@ from app.services.chromadb_service import (
     get_chromadb_service,
     get_admin_chromadb_service,
 )
+from app.api.dependencies.auth_unified import get_authenticated_user
+from app.api.dependencies.authz import get_current_admin, assert_chat_session_owner
+from app.services.chat_log_service import get_chat_log_service
 
 # PDF 출력 디렉토리
 PDF_OUTPUT_DIR = FilePath(__file__).parent.parent.parent.parent / "data" / "pdf_output"
@@ -165,14 +168,15 @@ MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
 async def upload_file(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    user_id: str = Form("anonymous"),
     session_id: str = Form(None),
     collection: str | None = Form(None),
     chunk_size: int | None = Form(None),
     chunk_overlap: int | None = Form(None),
+    current_user: dict = Depends(get_authenticated_user),
     chromadb: ChromaDBService = Depends(get_chromadb_service)
 ):
-    """사용자 저장소로 업로드/임베딩 (비동기 백그라운드 처리)"""
+    """사용자 저장소로 업로드/임베딩 (인증 사번 기준, 비동기 백그라운드)"""
+    user_id = current_user["empno"]
 
     # 1. 파일 내용 읽기 (메모리)
     file_content = await file.read()
@@ -251,14 +255,15 @@ async def upload_file(
 async def admin_upload_file(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    user_id: str = Form("admin"),
     session_id: str = Form(None),
     collection: str | None = Form(None),
     chunk_size: int | None = Form(None),
     chunk_overlap: int | None = Form(None),
+    _admin: dict = Depends(get_current_admin),
     chromadb: ChromaDBService = Depends(get_admin_chromadb_service)
 ):
-    """관리자 저장소(chromadb_admin)로 업로드/임베딩 (비동기 백그라운드 처리)"""
+    """관리자 저장소(chromadb_admin)로 업로드/임베딩 (운영자 전용, 비동기 백그라운드 처리)"""
+    user_id = _admin["empno"]
 
     # 1. 파일 내용 읽기
     file_content = await file.read()
@@ -309,10 +314,11 @@ async def admin_upload_file(
 @router.post("/v1/upload/image")
 async def upload_image(
     file: UploadFile = File(...),
-    user_id: str = Form("anonymous"),
     session_id: str = Form(None),
+    current_user: dict = Depends(get_authenticated_user),
 ):
-    """이미지 업로드 - base64로 인코딩하여 즉시 반환"""
+    """이미지 업로드 - base64로 인코딩하여 즉시 반환 (인증 사번 기준)"""
+    user_id = current_user["empno"]
     try:
         # 이미지 파일 검증
         if not file.content_type or not file.content_type.startswith("image/"):
@@ -365,12 +371,13 @@ async def upload_image(
 
 @router.get("/v1/upload/list")
 async def list_uploaded_files(
-    user_id: str = Query("anonymous"),
     session_id: str | None = Query(None),
     collection: str | None = Query(None),
+    current_user: dict = Depends(get_authenticated_user),
     chromadb: ChromaDBService = Depends(get_chromadb_service)
 ):
-    """List uploaded files grouped by file_id for user/session storage."""
+    """List uploaded files grouped by file_id for user/session storage (인증 사번 기준)."""
+    user_id = current_user["empno"]
     try:
         collection_obj = chromadb.get_collection(user_id=user_id, session_id=session_id, collection=collection)
         
@@ -450,12 +457,13 @@ async def list_uploaded_files(
 
 @router.get("/v1/admin/upload/list")
 async def admin_list_uploaded_files(
-    user_id: str = Query("admin"),
     session_id: str | None = Query(None),
     collection: str | None = Query(None),
+    _admin: dict = Depends(get_current_admin),
     chromadb: ChromaDBService = Depends(get_admin_chromadb_service)
 ):
-    """관리자 저장소 리스트"""
+    """관리자 저장소 리스트 (운영자 전용)"""
+    user_id = _admin["empno"]
 
     try:
         collection_obj = chromadb.get_collection(user_id=user_id, session_id=session_id, collection=collection)
@@ -512,6 +520,7 @@ async def admin_list_uploaded_files(
 @router.post("/v1/admin/upload/collection")
 async def admin_create_collection(
     collection_name: str = Form(...),
+    _admin: dict = Depends(get_current_admin),
     chromadb: ChromaDBService = Depends(get_admin_chromadb_service),
 ):
     """빈 컬렉션을 명시적으로 생성합니다."""
@@ -563,6 +572,7 @@ async def admin_create_collection(
 
 @router.get("/v1/admin/upload/collections")
 async def admin_list_collections(
+    _admin: dict = Depends(get_current_admin),
     chromadb: ChromaDBService = Depends(get_admin_chromadb_service),
 ):
     """관리자 데이터베이스에 생성된 컬렉션 목록과 각 컬렉션의 문서 수를 반환합니다."""
@@ -615,6 +625,7 @@ async def admin_list_collections(
 @router.delete("/v1/admin/upload/collection/{collection_name}")
 async def admin_delete_collection(
     collection_name: str,
+    _admin: dict = Depends(get_current_admin),
     chromadb: ChromaDBService = Depends(get_admin_chromadb_service),
 ):
     """특정 컬렉션을 삭제합니다."""
@@ -635,6 +646,7 @@ async def admin_delete_collection(
 async def admin_delete_file(
     collection: str = Path(..., description="컬렉션 이름"),
     file_id: str = Path(..., description="삭제할 file_id"),
+    _admin: dict = Depends(get_current_admin),
     chromadb: ChromaDBService = Depends(get_admin_chromadb_service),
 ):
     """컬렉션 내 특정 file_id에 해당하는 모든 청크를 삭제합니다."""
@@ -655,9 +667,16 @@ async def admin_delete_file(
 @router.delete("/v1/upload/session/{session_id}")
 async def delete_session_files(
     session_id: str,
+    current_user: dict = Depends(get_authenticated_user),
     chromadb: ChromaDBService = Depends(get_chromadb_service)
 ):
-    """Delete files uploaded for a session"""
+    """Delete files uploaded for a session (세션 소유자 또는 미존재 세션만)"""
+
+    # 세션 소유권 검증 — 미존재 세션은 통과(고아 파일 정리 케이스), 타인 소유면 403
+    chat_log = get_chat_log_service()
+    session_info = chat_log.get_session(session_id)
+    if session_info:
+        assert_chat_session_owner(session_info, current_user["empno"])
 
     try:
         result = await chromadb.delete_session_files(session_id)
@@ -682,6 +701,7 @@ async def delete_session_files(
 @router.post("/v1/upload/session/{session_id}/cleanup")
 async def cleanup_session_files_beacon(
     session_id: str,
+    current_user: dict = Depends(get_authenticated_user),
     chromadb: ChromaDBService = Depends(get_chromadb_service)
 ):
     """
@@ -689,7 +709,15 @@ async def cleanup_session_files_beacon(
 
     sendBeacon은 POST만 지원하므로 DELETE 대신 이 엔드포인트 사용.
     브라우저 탭 닫기, 새로고침, 세션 전환 시 자동 정리용.
+
+    sendBeacon 은 쿠키를 자동 첨부하므로 JWT 인증 통과 가능.
+    세션 소유자만 정리 가능, 타인 세션이면 403.
     """
+    chat_log = get_chat_log_service()
+    session_info = chat_log.get_session(session_id)
+    if session_info:
+        assert_chat_session_owner(session_info, current_user["empno"])
+
     try:
         result = await chromadb.delete_session_files(session_id)
         logger.info(f"Session cleanup via beacon: {session_id}, success={result.get('success')}")
@@ -702,9 +730,10 @@ async def cleanup_session_files_beacon(
 @router.delete("/v1/admin/upload/session/{session_id}")
 async def admin_delete_session_files(
     session_id: str,
+    _admin: dict = Depends(get_current_admin),
     chromadb: ChromaDBService = Depends(get_admin_chromadb_service)
 ):
-    """관리자 저장소에서 세션 파일 삭제"""
+    """관리자 저장소에서 세션 파일 삭제 (운영자 전용)"""
 
     try:
         result = await chromadb.delete_session_files(session_id)

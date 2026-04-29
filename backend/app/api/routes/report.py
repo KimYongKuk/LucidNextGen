@@ -3,15 +3,21 @@
 import os
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Query, Body
+from fastapi import APIRouter, Depends, Query, Body
 from fastapi.responses import FileResponse
 
 from app.services.report_service import get_report_service
 from app.services.weekly_report_service import get_weekly_report_manager
 from app.services.report_pdf_service import REPORT_OUTPUT_DIR
 from app.services.email_service import get_email_service
+from app.api.dependencies.authz import get_current_admin
 
-router = APIRouter(prefix="/v1/admin/report", tags=["report"])
+# 라우터 전체에 운영자 인증 dependency 적용 — 비-운영자는 라우트 진입 자체 불가
+router = APIRouter(
+    prefix="/v1/admin/report",
+    tags=["report"],
+    dependencies=[Depends(get_current_admin)],
+)
 
 
 @router.get("/overview")

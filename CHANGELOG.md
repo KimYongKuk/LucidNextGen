@@ -3,6 +3,24 @@
 > 이 파일은 Claude Code 작업 세션 중 자동으로 업데이트됩니다.
 > 상세 내용은 각 항목의 [상세] 링크를 참조하세요.
 
+## [2026-04-29] - 시스템 상태 배너 (Bedrock Throttling 사용자 알림)
+
+- **추가** [system_status] AWS Bedrock throttling 5분 윈도우 추적 + `GET /api/v1/system/status` 엔드포인트 + 프론트 공통 레이아웃 최상단 배너 — 응답 지연 시 사용자에게 "현재 루시드AI의 처리 작업량이 많아 지연될 수 있습니다." 자동 노출. `RegionFallbackManager`에 `record_throttling()`/`is_degraded` 추가, 워커/플래너/인텐트분류기 throttling 호출 지점 3곳에 트리거 연결. 메인 챗·그룹웨어 위젯·위키 임베드 모두 자동 적용. `DEGRADED_WINDOW_SECONDS` env로 윈도우 조정 가능 → [상세](docs/history/2026-04-29_시스템_상태_배너.md)
+
+---
+
+## [2026-04-29] - 워크스페이스 IDOR 차단 (1·2단계)
+
+- **추가** [authz] 리소스 owner 인가 헬퍼 + `is_operator()` + `get_current_admin` dependency 신설 → [상세](docs/history/2026-04-29_워크스페이스-IDOR-차단.md)
+- **추가** [auth_unified] dual-auth 통합 dependency `get_authenticated_user`(eval/widget/cookie JWT) 신설 — 비-채팅 라우트에서도 위젯 호환 인증 가능
+- **수정** [workspace API] 일반 8개 라우트 JWT 인증 + `WorkspaceCreate.user_id` 필드 제거 + 운영자 검사 인증 사번 기준 — POST 시 owner 위조 차단
+- **수정** [workspace admin API] admin 6개 라우트(`/v1/admin/workspaces/*`)에 운영자 dependency 적용 — 무인증 노출 차단
+- **수정** [chat API] 워크스페이스 컨텍스트 진입 owner 검증 2곳 + sessions 목록 `workspace_id` 검증 + 세션 owner inline 3곳 헬퍼 통합 — 본 사건 데이터 유출 경로 봉쇄
+- **수정** [board API] 알림 3개 라우트 JWT 인증 + `user_id` Query 제거 — 다른 사용자 메일/결재 알림 노출 차단
+- **수정** [feedback API] POST `user_id` body 제거(인증 사번 자동 저장), list/since 라우트 운영자 전용으로 격상
+- **수정** [report API] 라우터 글로벌 `Depends(get_current_admin)` 적용 — admin 리포트 21개 라우트 일괄 보호
+- **수정** [upload API] 5개 user_id Form/Query 제거 → dual-auth 사번 자동 주입, admin 5개 라우트 운영자 dependency, session delete/cleanup 2개 세션 owner 검증
+
 ---
 
 ## [2026-04-29]

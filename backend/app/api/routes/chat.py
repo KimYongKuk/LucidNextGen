@@ -24,6 +24,7 @@ from app.agents.a2a_streaming import stream_a2a_response
 from app.api.dependencies.auth_jwt import get_current_user
 from app.api.dependencies.widget_auth import get_current_user_widget
 from app.api.dependencies.auth_eval import try_eval_auth
+from app.api.dependencies.authz import assert_workspace_owner, assert_chat_session_owner
 from fastapi import Header, Cookie
 
 logger = logging.getLogger(__name__)
@@ -637,6 +638,7 @@ async def chat_stream(
                         from app.services.workspace_service import get_workspace_service
                         workspace_service = get_workspace_service()
                         workspace_data = workspace_service.get_workspace_by_uuid(request.workspace_id)
+                        assert_workspace_owner(workspace_data, authenticated_empno)
                         if workspace_data:
                             workspace_has_files = workspace_service.has_files(workspace_data["id"])
                             # 워크스페이스에 파일이 있으면 파일명 목록도 로드 (인텐트 분류용)
@@ -763,6 +765,7 @@ async def chat_stream(
                     from app.services.workspace_service import get_workspace_service
                     workspace_service = get_workspace_service()
                     workspace_data = workspace_service.get_workspace_by_uuid(request.workspace_id)
+                    assert_workspace_owner(workspace_data, authenticated_empno)
                     if workspace_data:
                         workspace_has_files = workspace_service.has_files(workspace_data["id"])
                         workspace_context = {
@@ -1115,6 +1118,11 @@ async def list_chat_sessions(
     인증: HttpOnly 쿠키 `auth_token`의 JWT에서 사번 추출. Query `user_id`는 무시됨.
     """
     authenticated_empno = current_user["empno"]
+    # workspace_id 가 주어진 경우 owner 검증 — 본인 소유/공용 워크스페이스만 통과
+    if workspace_id:
+        from app.services.workspace_service import get_workspace_service
+        ws = get_workspace_service().get_workspace_by_uuid(workspace_id)
+        assert_workspace_owner(ws, authenticated_empno)
     try:
         result = chat_log.list_sessions(
             user_id=authenticated_empno,
@@ -1186,10 +1194,7 @@ async def update_chat_session(
     try:
         # 소유권 검증 — 본인 세션만 수정 가능
         session_info = chat_log.get_session(session_id)
-        if not session_info:
-            raise HTTPException(status_code=404, detail="Session not found")
-        if session_info.get("user_id") != authenticated_empno:
-            raise HTTPException(status_code=403, detail="본인 세션만 수정할 수 있습니다.")
+        assert_chat_session_owner(session_info, authenticated_empno)
 
         updated = chat_log.update_session(
             session_id=session_id,
@@ -1256,10 +1261,9 @@ async def delete_session(
     """
     authenticated_empno = current_user["empno"]
     try:
-        # 소유권 검증 — 본인 세션만 삭제 가능
+        # 소유권 검증 — 본인 세션만 삭제 가능 (없는 세션은 404)
         session_info = chat_log.get_session(session_id)
-        if session_info and session_info.get("user_id") != authenticated_empno:
-            raise HTTPException(status_code=403, detail="본인 세션만 삭제할 수 있습니다.")
+        assert_chat_session_owner(session_info, authenticated_empno)
 
         # 세션과 연관된 파일 삭제
         result = await chromadb.delete_session_files(session_id)
@@ -1295,10 +1299,7 @@ async def toggle_session_pin(
     try:
         # 소유권 검증 — 본인 세션만 pin 가능
         session_info = chat_log.get_session(session_id)
-        if not session_info:
-            raise HTTPException(status_code=404, detail="Session not found")
-        if session_info.get("user_id") != authenticated_empno:
-            raise HTTPException(status_code=403, detail="본인 세션만 고정할 수 있습니다.")
+        assert_chat_session_owner(session_info, authenticated_empno)
 
         success = chat_log.toggle_pin_status(session_id, request.is_pinned)
         if not success:

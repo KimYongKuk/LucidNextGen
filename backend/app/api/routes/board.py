@@ -4,8 +4,10 @@ import json
 import asyncio
 import logging
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
+
+from app.api.dependencies.auth_jwt import get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +25,8 @@ EMPTY_RESPONSE = {
 
 
 @router.get("/today")
-async def get_today_notifications(user_id: str = Query(..., description="사번")):
-    """통합 알림 조회 (공지사항 + 읽지 않은 메일 + 전자결재 미결)"""
+async def get_today_notifications(current_user: dict = Depends(get_current_user)):
+    """통합 알림 조회 (공지사항 + 읽지 않은 메일 + 전자결재 미결, JWT 인증 사번 기준)"""
     enabled = os.environ.get("NOTIFICATION_MODAL_ENABLED", "true").lower() == "true"
     if not enabled:
         return EMPTY_RESPONSE
@@ -32,7 +34,7 @@ async def get_today_notifications(user_id: str = Query(..., description="사번"
     from app.services.notice_service import get_notification_service
 
     try:
-        result = await get_notification_service().get_all_notifications(user_id)
+        result = await get_notification_service().get_all_notifications(current_user["empno"])
         return result
     except Exception as e:
         logger.error(f"Notifications fetch failed: {e}")
@@ -48,7 +50,7 @@ EMPTY_APPROVALS = {
 
 
 @router.get("/fast")
-async def get_fast_notifications(user_id: str = Query(..., description="사번")):
+async def get_fast_notifications(current_user: dict = Depends(get_current_user)):
     """빠른 알림 조회 (공지사항 + 전자결재) — PostgreSQL only"""
     enabled = os.environ.get("NOTIFICATION_MODAL_ENABLED", "true").lower() == "true"
     if not enabled:
@@ -56,6 +58,7 @@ async def get_fast_notifications(user_id: str = Query(..., description="사번")
 
     from app.services.notice_service import get_notification_service
     svc = get_notification_service()
+    empno = current_user["empno"]
 
     async def _safe(coro, label: str):
         try:
@@ -66,9 +69,9 @@ async def get_fast_notifications(user_id: str = Query(..., description="사번")
 
     notices, pending, received, referenced = await asyncio.gather(
         _safe(svc.get_today_notices(), "공지사항"),
-        _safe(svc.get_pending_approvals(user_id), "결재 미결"),
-        _safe(svc.get_received_documents(user_id), "수신문서"),
-        _safe(svc.get_pending_references(user_id), "참조문서"),
+        _safe(svc.get_pending_approvals(empno), "결재 미결"),
+        _safe(svc.get_received_documents(empno), "수신문서"),
+        _safe(svc.get_pending_references(empno), "참조문서"),
     )
 
     return {
@@ -78,8 +81,8 @@ async def get_fast_notifications(user_id: str = Query(..., description="사번")
 
 
 @router.get("/mail")
-async def get_mail_notifications(user_id: str = Query(..., description="사번")):
-    """메일 알림 조회 (JSP HTTP 호출)"""
+async def get_mail_notifications(current_user: dict = Depends(get_current_user)):
+    """메일 알림 조회 (JSP HTTP 호출, JWT 인증 사번 기준)"""
     enabled = os.environ.get("NOTIFICATION_MODAL_ENABLED", "true").lower() == "true"
     if not enabled:
         return EMPTY_SECTION
@@ -87,7 +90,7 @@ async def get_mail_notifications(user_id: str = Query(..., description="사번")
     from app.services.notice_service import get_notification_service
 
     try:
-        return await get_notification_service().get_unread_mail(user_id)
+        return await get_notification_service().get_unread_mail(current_user["empno"])
     except Exception as e:
         logger.error(f"메일 조회 실패: {e}")
         return EMPTY_SECTION

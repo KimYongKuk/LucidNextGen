@@ -14,6 +14,8 @@ from pydantic import BaseModel
 from datetime import datetime
 
 from app.services.workspace_service import WorkspaceService, get_workspace_service
+from app.api.dependencies.auth_jwt import get_current_user
+from app.api.dependencies.authz import assert_workspace_owner, get_current_admin
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -42,7 +44,6 @@ WORKSPACE_UPLOAD_STATUS = {}
 # ============================================================================
 
 class WorkspaceCreate(BaseModel):
-    user_id: str
     name: str
     description: Optional[str] = None
     instructions: Optional[str] = None
@@ -95,11 +96,11 @@ class ChunkSearchResult(BaseModel):
 
 @router.get("/v1/workspaces", response_model=List[WorkspaceResponse])
 async def list_workspaces(
-    user_id: str = Query(..., description="User ID"),
+    current_user: dict = Depends(get_current_user),
     service: WorkspaceService = Depends(get_workspace_service)
 ):
-    """사용자의 모든 워크스페이스 목록 조회 (본인 소유만)"""
-    return service.get_workspaces(user_id)
+    """사용자의 모든 워크스페이스 목록 조회 (본인 소유만, JWT 인증 사번 기준)"""
+    return service.get_workspaces(current_user["empno"])
 
 @router.get("/v1/workspaces/public", response_model=List[WorkspaceResponse])
 async def list_public_workspaces(
@@ -111,17 +112,19 @@ async def list_public_workspaces(
 @router.post("/v1/workspaces", response_model=WorkspaceResponse)
 async def create_workspace(
     workspace: WorkspaceCreate,
+    current_user: dict = Depends(get_current_user),
     service: WorkspaceService = Depends(get_workspace_service)
 ):
-    """새 워크스페이스 생성 (is_public=True 는 운영자만)"""
+    """새 워크스페이스 생성 (owner 는 JWT 인증 사번으로 강제, is_public=True 는 운영자만)"""
+    authenticated_empno = current_user["empno"]
     try:
-        is_public = bool(workspace.is_public) and _is_operator(workspace.user_id)
+        is_public = bool(workspace.is_public) and _is_operator(authenticated_empno)
         if workspace.is_public and not is_public:
             logger.warning(
-                f"Non-operator user {workspace.user_id} attempted to create public workspace; forcing is_public=False"
+                f"[SECURITY] non_operator_public_attempt empno={authenticated_empno} forcing is_public=False"
             )
         return service.create_workspace(
-            user_id=workspace.user_id,
+            user_id=authenticated_empno,
             name=workspace.name,
             description=workspace.description,
             instructions=workspace.instructions,
@@ -134,35 +137,29 @@ async def create_workspace(
 @router.get("/v1/workspaces/{workspace_uuid}", response_model=WorkspaceResponse)
 async def get_workspace(
     workspace_uuid: str,
-    user_id: str = Query(..., description="User ID for ownership verification"),
+    current_user: dict = Depends(get_current_user),
     service: WorkspaceService = Depends(get_workspace_service)
 ):
     """UUID로 워크스페이스 조회 (소유자 또는 공용 워크스페이스면 허용)"""
     workspace = service.get_workspace_by_uuid(workspace_uuid)
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    if workspace["user_id"] != user_id and not workspace.get("is_public"):
-        raise HTTPException(status_code=403, detail="Access denied")
+    assert_workspace_owner(workspace, current_user["empno"])
     return workspace
 
 @router.put("/v1/workspaces/{workspace_uuid}")
 async def update_workspace(
     workspace_uuid: str,
     update_data: WorkspaceUpdate,
-    user_id: str = Query(..., description="User ID for ownership verification"),
+    current_user: dict = Depends(get_current_user),
     service: WorkspaceService = Depends(get_workspace_service)
 ):
     """워크스페이스 메타데이터 업데이트 (소유자만, is_public 전환은 운영자만)"""
-    # 소유권 검증
+    authenticated_empno = current_user["empno"]
     workspace = service.get_workspace_by_uuid(workspace_uuid)
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    if workspace["user_id"] != user_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    assert_workspace_owner(workspace, authenticated_empno, allow_public=False)
 
     # is_public 전환은 운영자만 허용
     is_public = update_data.is_public
-    if is_public is not None and not _is_operator(user_id):
+    if is_public is not None and not _is_operator(authenticated_empno):
         raise HTTPException(status_code=403, detail="Only operators can toggle public workspace")
 
     success = service.update_workspace(
@@ -180,16 +177,12 @@ async def update_workspace(
 @router.delete("/v1/workspaces/{workspace_uuid}")
 async def delete_workspace(
     workspace_uuid: str,
-    user_id: str = Query(..., description="User ID for ownership verification"),
+    current_user: dict = Depends(get_current_user),
     service: WorkspaceService = Depends(get_workspace_service)
 ):
     """워크스페이스 및 파일 삭제 (소유권 검증)"""
-    # 소유권 검증
     workspace = service.get_workspace_by_uuid(workspace_uuid)
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    if workspace["user_id"] != user_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    assert_workspace_owner(workspace, current_user["empno"], allow_public=False)
 
     success = service.delete_workspace(workspace["id"])
     if not success:
@@ -304,18 +297,15 @@ async def get_workspace_upload_status(file_id: str):
 async def upload_workspace_file(
     workspace_uuid: str,
     background_tasks: BackgroundTasks,
-    user_id: str = Query(..., description="User ID for ownership verification"),
     file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
     service: WorkspaceService = Depends(get_workspace_service)
 ):
     """워크스페이스에 파일 업로드 (비동기 백그라운드 처리, 소유권 검증)"""
     try:
-        # 워크스페이스 존재 및 소유권 확인
+        # 워크스페이스 존재 및 소유권 확인 (업로드는 owner만 — 공용이라도 차단)
         workspace = service.get_workspace_by_uuid(workspace_uuid)
-        if not workspace:
-            raise HTTPException(status_code=404, detail="Workspace not found")
-        if workspace["user_id"] != user_id:
-            raise HTTPException(status_code=403, detail="Access denied")
+        assert_workspace_owner(workspace, current_user["empno"], allow_public=False)
 
         workspace_id = workspace["id"]
 
@@ -371,32 +361,24 @@ async def upload_workspace_file(
 @router.get("/v1/workspaces/{workspace_uuid}/files", response_model=List[FileResponse])
 async def list_workspace_files(
     workspace_uuid: str,
-    user_id: str = Query(..., description="User ID for ownership verification"),
+    current_user: dict = Depends(get_current_user),
     service: WorkspaceService = Depends(get_workspace_service)
 ):
     """워크스페이스의 파일 목록 조회 (소유자 또는 공용 워크스페이스면 허용)"""
     workspace = service.get_workspace_by_uuid(workspace_uuid)
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    if workspace["user_id"] != user_id and not workspace.get("is_public"):
-        raise HTTPException(status_code=403, detail="Access denied")
-
+    assert_workspace_owner(workspace, current_user["empno"])
     return service.list_files(workspace["id"])
 
 @router.delete("/v1/workspaces/{workspace_uuid}/files/{file_id}")
 async def delete_workspace_file(
     workspace_uuid: str,
     file_id: str,
-    user_id: str = Query(..., description="User ID for ownership verification"),
+    current_user: dict = Depends(get_current_user),
     service: WorkspaceService = Depends(get_workspace_service)
 ):
-    """워크스페이스에서 파일 삭제 (소유권 검증)"""
-    # 소유권 검증
+    """워크스페이스에서 파일 삭제 (소유권 검증, 공용이라도 owner만)"""
     workspace = service.get_workspace_by_uuid(workspace_uuid)
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    if workspace["user_id"] != user_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    assert_workspace_owner(workspace, current_user["empno"], allow_public=False)
 
     success = service.delete_file(workspace["id"], file_id)
     if not success:
@@ -410,9 +392,10 @@ async def delete_workspace_file(
 
 @router.get("/v1/admin/workspaces")
 async def admin_list_all_workspaces(
+    _admin: dict = Depends(get_current_admin),
     service: WorkspaceService = Depends(get_workspace_service)
 ):
-    """모든 워크스페이스 조회 (Admin 전용)"""
+    """모든 워크스페이스 조회 (운영자 전용)"""
     workspaces = service.get_all_workspaces()
     return {"workspaces": workspaces}
 
@@ -420,9 +403,10 @@ async def admin_list_all_workspaces(
 @router.get("/v1/admin/workspaces/{workspace_id}/files")
 async def admin_list_workspace_files(
     workspace_id: int,
+    _admin: dict = Depends(get_current_admin),
     service: WorkspaceService = Depends(get_workspace_service)
 ):
-    """워크스페이스의 파일 목록 조회 (Admin 전용)"""
+    """워크스페이스의 파일 목록 조회 (운영자 전용)"""
     workspace = service.get_workspace(workspace_id)
     if not workspace:
         raise HTTPException(status_code=404, detail="Workspace not found")
@@ -440,18 +424,20 @@ async def admin_get_file_chunks(
     file_id: str,
     limit: int = Query(10, ge=1, le=100, description="청크 개수 제한"),
     offset: int = Query(0, ge=0, description="시작 오프셋"),
+    _admin: dict = Depends(get_current_admin),
     service: WorkspaceService = Depends(get_workspace_service)
 ):
-    """파일의 텍스트 청크 조회 (Admin 전용, 미리보기)"""
+    """파일의 텍스트 청크 조회 (운영자 전용, 미리보기)"""
     return service.get_file_chunks(workspace_id, file_id, limit, offset)
 
 
 @router.delete("/v1/admin/workspaces/{workspace_id}")
 async def admin_delete_workspace(
     workspace_id: int,
+    _admin: dict = Depends(get_current_admin),
     service: WorkspaceService = Depends(get_workspace_service)
 ):
-    """워크스페이스 삭제 (Admin 전용)"""
+    """워크스페이스 삭제 (운영자 전용)"""
     success = service.delete_workspace(workspace_id)
     if not success:
         raise HTTPException(status_code=404, detail="Workspace not found")
@@ -462,9 +448,10 @@ async def admin_delete_workspace(
 async def admin_delete_file(
     workspace_id: int,
     file_id: str,
+    _admin: dict = Depends(get_current_admin),
     service: WorkspaceService = Depends(get_workspace_service)
 ):
-    """워크스페이스에서 파일 삭제 (Admin 전용)"""
+    """워크스페이스에서 파일 삭제 (운영자 전용)"""
     success = service.delete_file(workspace_id, file_id)
     if not success:
         raise HTTPException(status_code=404, detail="File not found")
@@ -474,6 +461,7 @@ async def admin_delete_file(
 @router.post("/v1/admin/workspaces/search-chunks")
 async def admin_search_chunks(
     request: ChunkSearchRequest,
+    _admin: dict = Depends(get_current_admin),
     service: WorkspaceService = Depends(get_workspace_service)
 ):
     """
