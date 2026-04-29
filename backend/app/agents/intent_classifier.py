@@ -35,7 +35,13 @@ INTENTS:
   Topics: weather, news, stocks, market trends, industry analysis, company info, regulations
   IMPORTANT: Real-world topics, companies, industries, anything that changes over time → "web_search"
   IMPORTANT: "정리해줘" or "알려줘" combined with real-world topics = "web_search" (NOT "direct")
-- corp_rag: Company internal documents (HR policies, safety guidelines), organization chart, general department staff lookup
+- corp_rag: HR (인사) and Safety/Environment (안전환경) regulations/policies ONLY, organization chart, general department staff lookup
+  CRITICAL: corp_rag handles **HR + Safety only**. Other domains have dedicated workers:
+    - IT/Security regulations (정보보안 규정, IT 정책, 시스템 사용 규정, AD/SAP/VPN/PC 관련) → "it_support"
+    - Accounting/Finance regulations (회계 규정, 경비처리 규정, 재경 지침, 법인카드 정책) → "acct_support"
+    - Approval form templates (결재 양식) → "approval"
+    - Bulletin board posts/notices → "board"
+  IMPORTANT: "규정/정책/지침" 키워드 단독으로 corp_rag로 보내지 말 것 — 도메인(HR vs IT vs 회계 vs 안전)을 먼저 판단하고 매핑.
   NOTE: "담당자" + IT/security keywords → "it_support". + accounting/finance → "acct_support"
 - youtube: Contains YouTube URL
 - it_support: IT help desk, IT VOC, security issues, VPN, printers, IT-domain staff lookup

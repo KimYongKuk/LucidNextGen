@@ -3,6 +3,24 @@
 > 이 파일은 Claude Code 작업 세션 중 자동으로 업데이트됩니다.
 > 상세 내용은 각 항목의 [상세] 링크를 참조하세요.
 
+## [2026-04-29] - IT/회계 규정 라우팅 결함 수정 (프롬프트 두 줄)
+
+- **수정** [Intent/Routing] "규정"+IT/회계 키워드 결합어("정보보안 관리 규정", "경비처리 규정")가 corp_rag로 잘못 분류되어 사용자에게 "찾지 못함" 응답이 나오던 라우팅 결함을 **키워드 룰 추가 0줄로 해결** — 분류 책임을 LLM에 일임하는 기존 구조를 유지하되 LLM 가이드 두 곳만 정정. (1) `state.py:WORKER_CAPABILITIES`에서 corp_rag = "인사·안전환경만", it_support/acct_support = "도메인 규정+VOC 통합"으로 명시. Planner는 이 dict를 worker_catalog로 사용하므로 자동 반영. (2) `intent_classifier.py:CLASSIFIER_PROMPT`의 corp_rag 줄에 "HR/Safety only — IT regulations → it_support, Finance → acct_support" 명시 + "규정/정책/지침 키워드 단독으로 corp_rag로 보내지 말 것" 가이드. Haiku 직접 호출로 6/6 케이스 검증(정보보안 규정→it_support, 경비처리 규정→acct_support, 안전관리 규정→corp_rag 유지). 어제 삭제했던 `it_support_security_regulation`/`acct_support_regulation` 골든 케이스 복구. 운영 적용은 다음 deploy.bat 실행 시 자연 반영. → [상세](docs/history/2026-04-29_라우팅_결함_프롬프트_수정.md)
+
+---
+
+## [2026-04-29] - 운영 로그인 흐름 복구 + 비밀번호 설정 메일 도메인 수정
+
+- **수정** [nginx/auth] 운영 Nginx가 `/api/auth/*`를 무조건 백엔드로 보내 Next.js API route(쿠키 세팅 담당)를 우회 → 로그인 후 `auth_token`/`empno` 쿠키가 안 붙어 middleware가 다시 `/login`으로 돌리는 현상. `location =`로 `login/logout/request-setup/setup-password`만 frontend로 우선 라우팅(HTTP/HTTPS 양쪽), 나머지 auth 경로는 백엔드 유지. + `auth.py`의 `SITE_URL` 기본값이 미존재 도메인(`lucidai.landf.co.kr`) → `lucid.landf.co.kr`로 정정, 운영 green/blue `.env`에도 명시 추가. 비밀번호 설정 메일 링크 정상화(백엔드 재기동 필요) → [상세](docs/history/2026-04-29_운영_로그인_복구.md)
+
+---
+
+## [2026-04-29] - Eval 케이스 재구성 + 워커 책임 분담 정리
+
+- **수정** [Eval/Cases] CLAUDE.md 워커 매트릭스가 outdated였음을 발견 — 실제 코드는 IT/회계 도메인을 ITSupportWorker/AcctSupportWorker가 RAG+VOC 통합 보유, HR/안전만 CorpRAGWorker가 RAG 단독 담당하는 구조. 케이스를 실제 구조에 맞춰 재구성: corp_rag_it_basic 삭제, corp_rag_safety_basic / it_support_pc_password / acct_support_voc_basic 신규. assertion에 `tool_called_any` 추가(OR 매칭). CLAUDE.md 매트릭스 갱신 + "워커 책임 분담 원칙" 단락 추가. **부수 발견: intent_classifier가 "규정"+IT/회계 도메인 키워드("정보보안 관리 규정", "경비처리 규정")를 corp_rag로 단순 분류 → CorpRAGWorker엔 해당 도구 없어 hr/safety로 폴백 → 사용자에게 "찾지 못함" 응답이 나오는 라우팅 결함**. 후속 작업으로 분리(intent_classifier 도메인 키워드 분기 강화 필요). → [상세](docs/history/2026-04-29_Eval_케이스_재구성.md)
+
+---
+
 ## [2026-04-29] - 시스템 상태 배너 (Bedrock Throttling 사용자 알림)
 
 - **추가** [system_status] AWS Bedrock throttling 5분 윈도우 추적 + `GET /api/v1/system/status` 엔드포인트 + 프론트 공통 레이아웃 최상단 배너 — 응답 지연 시 사용자에게 "현재 루시드AI의 처리 작업량이 많아 지연될 수 있습니다." 자동 노출. `RegionFallbackManager`에 `record_throttling()`/`is_degraded` 추가, 워커/플래너/인텐트분류기 throttling 호출 지점 3곳에 트리거 연결. 메인 챗·그룹웨어 위젯·위키 임베드 모두 자동 적용. `DEGRADED_WINDOW_SECONDS` env로 윈도우 조정 가능 → [상세](docs/history/2026-04-29_시스템_상태_배너.md)

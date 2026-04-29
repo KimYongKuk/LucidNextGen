@@ -270,7 +270,7 @@ async def verify_token(token: str = ""):
 
 TIMS_DATABASE_URL = os.getenv("TIMS_DATABASE_URL", "")
 SETUP_TOKEN_EXPIRE_HOURS = 24
-SITE_URL = os.getenv("SITE_URL", "https://lucidai.landf.co.kr")
+SITE_URL = os.getenv("SITE_URL", "https://lucid.landf.co.kr")
 
 
 async def _lookup_employee_by_email(email: str) -> dict | None:
