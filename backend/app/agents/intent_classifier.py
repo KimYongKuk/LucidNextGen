@@ -560,6 +560,8 @@ class IntentClassifier:
                 from app.core.region_fallback import swap_inference_prefix
                 print(f"[INTENT] Throttled, swapping inference profile prefix and retrying...")
                 self._region_mgr.activate_fallback()
+                # 사용자 알림용 throttling 시각 기록 (프론트 배너 트리거)
+                self._region_mgr.record_throttling()
                 self.llm = self._create_llm()
                 try:
                     response = await self.llm.ainvoke([

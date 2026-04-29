@@ -390,6 +390,10 @@ class Planner:
             ])
         except Exception as e:
             print(f"[Planner] LLM call failed: {type(e).__name__}: {e}")
+            # Throttling이면 사용자 알림용 시각 기록 (프론트 배너 트리거)
+            from app.utils.bedrock_exceptions import is_throttling_error
+            if is_throttling_error(e):
+                self._region_mgr.record_throttling()
             raise PlannerFallback(f"LLM error: {e}") from e
 
         # 토큰 사용량 로깅 (intent_classifier와 동일 패턴)

@@ -147,10 +147,17 @@ class RegionFallbackManager:
         self._fallback_region = os.getenv("AWS_FALLBACK_REGION", "us-west-2")
         self._lock = threading.Lock()
 
-        # 상태 파일에서 복원 — 재시작(배포 포함) 후에도 복구 예약 보존
+        # 상태 파일에서 복원 — 재시작(배포 보존)
         using, restore_at = _load_persisted_state()
         self._using_fallback = using
         self._restore_at: float = restore_at  # 복구 예정 시각 (Unix timestamp)
+
+        # 최근 throttling 발생 시각 — 사용자 알림용 (메모리 only, 재시작 시 초기화 OK)
+        self._last_throttle_at: float = 0.0
+        self._degraded_window_seconds: int = int(
+            os.getenv("DEGRADED_WINDOW_SECONDS", "300")  # 기본 5분
+        )
+
         if using:
             restore_kst = datetime.fromtimestamp(restore_at, _KST).strftime("%Y-%m-%d %H:%M KST")
             print(f"[PROFILE_FALLBACK] Restored from {_STATE_FILE}: "
@@ -221,6 +228,31 @@ class RegionFallbackManager:
         if self.is_fallback_active:
             return swap_inference_prefix(original_model_id)
         return original_model_id
+
+    # ========= Degraded 상태 (사용자 알림용) =========
+
+    def record_throttling(self) -> None:
+        """Throttling 발생 시각 기록. 프론트 배너 노출 트리거.
+
+        활성 프로필(us 또는 global)이 throttle 됐을 때 호출.
+        DEGRADED_WINDOW_SECONDS 동안 is_degraded=True 유지.
+        """
+        self._last_throttle_at = time.time()
+
+    @property
+    def is_degraded(self) -> bool:
+        """직전 N초(기본 300=5분) 이내에 throttling 발생했는지.
+
+        프론트가 폴링해서 True면 상단 배너 노출.
+        """
+        if self._last_throttle_at == 0.0:
+            return False
+        return (time.time() - self._last_throttle_at) < self._degraded_window_seconds
+
+    @property
+    def last_throttle_at(self) -> float:
+        """직전 throttling 발생 시각 (Unix timestamp). 0이면 미발생."""
+        return self._last_throttle_at
 
     # 하위 호환
     def convert_model_id_for_fallback(self, model_id: str) -> str:

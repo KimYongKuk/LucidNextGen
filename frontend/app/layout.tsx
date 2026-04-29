@@ -8,6 +8,7 @@ import { WhatsNewProvider } from "@/components/whats-new/whats-new-provider";
 import { NoticeToastProvider } from "@/components/notice-toast/notice-toast-provider";
 import { NotificationInboxProvider } from "@/components/notification-inbox/notification-inbox-provider";
 import { LunchboxRain } from "@/components/easter-egg/lunchbox-rain";
+import { SystemStatusBanner } from "@/components/system-status-banner";
 
 import "./globals.css";
 
@@ -134,6 +135,7 @@ export default function RootLayout({
                   <NoticeToastProvider>
                     <Toaster position="top-center" />
                     <LunchboxRain />
+                    <SystemStatusBanner />
                     {children}
                   </NoticeToastProvider>
                 </Suspense>
