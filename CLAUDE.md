@@ -193,13 +193,15 @@ LFChatbot_NextJS_FastAPI/
 | DirectWorker | (없음) | Sonnet |
 | WebSearchWorker | tavily_search | Haiku |
 | UserFilesWorker | search_user_files, search_workspace_docs | Haiku |
-| CorpRAGWorker | search_hr/ac/it/safety_docs | Haiku |
+| CorpRAGWorker | search_hr_docs, search_safety_docs, execute_org_chart_query (HR/안전 전담) | Haiku |
 | VisualizationWorker | PDF 도구 + 차트 도구 | Sonnet |
 | YouTubeWorker | youtube_summarize | Haiku |
 | URLFetchWorker | fetch | Sonnet |
-| ITSupportWorker | search_it_voc, execute_it_voc_query | Sonnet |
-| AcctSupportWorker | search_acct_voc, execute_acct_voc_query | Sonnet |
+| ITSupportWorker | search_it_docs + execute_it_voc_query + register_works_voc + reset_sap_password + execute_org_chart_query (IT 도메인 전체 통합) | Sonnet |
+| AcctSupportWorker | search_ac_docs + execute_acct_voc_query + execute_org_chart_query (회계 도메인 전체 통합) | Sonnet |
 | MailWorker | get_inbox/sent/unread_mail, search_mail, get_mail_folders, get_mail_detail | Sonnet |
+
+> **워커 책임 분담 원칙**: IT/회계 도메인은 규정(`search_*_docs`)과 VOC(`execute_*_voc_query`)를 같은 워커가 통합 보유 → 사용자가 같은 도메인 질문을 어떤 표현(규정/방법/사례)으로 하든 답변 일관성 유지. HR/안전은 VOC 워커가 없어 CorpRAGWorker가 RAG 단독 담당.
 
 ## 주요 기능
 
