@@ -17,6 +17,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from app.core.model_config import get_orchestrator_config, get_worker_config
 from app.core.region_fallback import get_region_fallback_manager
 from app.agents.workers.base_worker import CachedChatBedrockConverse
+from app.agents.routing_guide import DOMAIN_ROUTING_GUIDE
 from app.agents.state import (
     Intent,
     Task,
@@ -44,6 +45,9 @@ Your job: decompose user's request into a JSON Task DAG that can be executed by 
 8. **첨부파일은 분석 중간 단계 끼우지 말 것**: 사용자가 "등록해줘/업로드해줘/첨부해줘" 등 **쓰기 작업 + 파일 첨부**를 요청했을 때, 파일 내용 분석(user_files)을 **사전 태스크로 넣지 마세요**. 해당 쓰기 워커(it_support, mail 등)가 파일을 직접 첨부 파라미터로 전달합니다. 예외: 사용자가 명시적으로 "내 파일 내용 읽고 요약해줘/본문에 반영해줘"라고 요청한 경우만 user_files 사전 태스크 추가.
 9. **엑셀 파일 수정·편집 요청은 `xlsx` 단일 태스크(trivial=true)로 처리**: "업로드한 엑셀/기존 파일에 **시트 추가·복사·삭제·이름변경·값변경·서식·수식·병합·행열 삽입/삭제·차트·피벗**" 등 모든 xlsx 편집 요청은 **user_files 사전 태스크를 넣지 마세요**. XlsxWorker가 `get_workbook_metadata + read_data_from_excel + modify_xlsx`를 이미 보유하여 자체적으로 메타→읽기→수정을 처리합니다. **예외**: 사용자가 엑셀을 "요약해줘/분석해줘/요점만 알려줘" 등 **read-only 요약**을 요청한 경우에만 `user_files` 사용.
 10. **이미지 첨부 시(`has_images=true`) 분석/요약/변환 태스크는 절대 `user_files`로 보내지 마세요**: `search_user_files`는 ChromaDB 텍스트 검색이라 이미지 픽셀을 못 봅니다. 사용자가 첨부한 이미지를 "보고/요약/포맷에 맞춰 작성/표로 정리" 해달라고 하면 **`direct` 워커**(또는 차트/PDF 생성이 필요하면 `visualization`)를 사용하세요. 이미지는 Executor가 `depends=[]`인 첫 task에 자동으로 multimodal HumanMessage로 동봉하므로, 워커의 LLM이 직접 픽셀을 봅니다. 후속 task(`depends=[t1]`)는 t1의 텍스트 결과를 blackboard로 받으므로 이미지를 다시 받을 필요 없습니다.
+11. **도메인 분기는 아래 "DOMAIN ROUTING" 섹션을 따르세요** — 단일 도메인 질의는 단일 워커 단독 task로 처리하고, 다른 도메인 워커를 헤지로 추가하지 마세요.
+
+{domain_routing_guide}
 
 ## AVAILABLE WORKERS (use the `worker` field value)
 
@@ -233,6 +237,53 @@ Output:
 
 **주의**: 이미지가 첨부됐을 때 `user_files` 사전 태스크는 절대 추가하지 마세요. `search_user_files`는 텍스트 RAG라 이미지에 동작하지 않습니다. 이미지를 LLM이 직접 봐야 하는 모든 케이스는 `depends=[]`인 첫 task의 워커를 `direct` 또는 `visualization`으로 지정하세요.
 
+### Example 11 — 회계 도메인 규정/사례 단독 (acct_support 단독)
+
+User: "법인카드 사용 규정 알려줘"
+
+Output:
+{{
+  "is_trivial": true,
+  "rationale": "회계 도메인 단일 질의 — acct_support가 회계 규정 문서(search_ac_docs)와 회계 VOC(execute_acct_voc_query) 모두 보유. corp_rag는 HR/안전 docs만 보유하므로 추가하지 말 것.",
+  "tasks": [
+    {{"id":"t1","worker":"acct_support","goal":"법인카드 사용·전표·접대비 처리 규정 조회","depends":[],"needs_confirm":false}}
+  ]
+}}
+
+**중요**: "법인카드/결산/세금계산서/경비/접대비/자산/예산" 등 회계 키워드 + "규정/정책/지침"은 회계 100% 도메인입니다. `corp_rag` 태스크를 같이 끼우지 마세요 — `search_hr_docs`가 무관한 인사팀 문서를 끌어와 응답 품질이 떨어집니다.
+
+### Example 12 — IT 도메인 정책/규정 단독 (it_support 단독)
+
+User: "재택근무 시 VPN 사용 정책 알려줘"
+
+Output:
+{{
+  "is_trivial": true,
+  "rationale": "IT 도메인 단일 질의 — it_support가 IT 규정 문서(search_it_docs)와 IT VOC(execute_it_voc_query) 모두 보유.",
+  "tasks": [
+    {{"id":"t1","worker":"it_support","goal":"재택근무 VPN 사용 정책 및 절차 조회","depends":[],"needs_confirm":false}}
+  ]
+}}
+
+### Example 13 — HR/안전 도메인 규정 단독 (corp_rag 단독)
+
+User: "경조 휴가 규정"
+
+Output:
+{{
+  "is_trivial": true,
+  "rationale": "HR 도메인 — 경조사 휴가는 인사 규정. corp_rag가 HR docs를 담당.",
+  "tasks": [
+    {{"id":"t1","worker":"corp_rag","goal":"경조 휴가 규정 조회 (인사 docs)","depends":[],"needs_confirm":false}}
+  ]
+}}
+
+**도메인 매핑 정리**:
+- `corp_rag` → HR(인사·복리후생·휴가·급여) + 안전환경 docs **만**
+- `acct_support` → 회계·재경 docs + 회계 VOC
+- `it_support` → IT·보안 docs + IT VOC + 계정/패스워드 운영
+- 도메인이 명확한 단일 질의에 corp_rag를 헤지로 추가하지 마세요.
+
 """
 
 
@@ -365,6 +416,7 @@ class Planner:
         # 시스템 프롬프트 — 프로세스 수명 동안 고정 (cachePoint 대상)
         if self._system_prompt is None:
             self._system_prompt = PLANNER_SYSTEM.format(
+                domain_routing_guide=DOMAIN_ROUTING_GUIDE,
                 worker_catalog=self._build_worker_catalog(),
             )
 

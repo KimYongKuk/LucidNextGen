@@ -9,6 +9,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.core.model_config import get_orchestrator_config
 from app.core.region_fallback import get_region_fallback_manager
+from app.agents.routing_guide import DOMAIN_ROUTING_GUIDE
 from app.agents.state import Intent, RequestContext
 
 
@@ -36,12 +37,7 @@ INTENTS:
   IMPORTANT: Real-world topics, companies, industries, anything that changes over time → "web_search"
   IMPORTANT: "정리해줘" or "알려줘" combined with real-world topics = "web_search" (NOT "direct")
 - corp_rag: HR (인사) and Safety/Environment (안전환경) regulations/policies ONLY, organization chart, general department staff lookup
-  CRITICAL: corp_rag handles **HR + Safety only**. Other domains have dedicated workers:
-    - IT/Security regulations (정보보안 규정, IT 정책, 시스템 사용 규정, AD/SAP/VPN/PC 관련) → "it_support"
-    - Accounting/Finance regulations (회계 규정, 경비처리 규정, 재경 지침, 법인카드 정책) → "acct_support"
-    - Approval form templates (결재 양식) → "approval"
-    - Bulletin board posts/notices → "board"
-  IMPORTANT: "규정/정책/지침" 키워드 단독으로 corp_rag로 보내지 말 것 — 도메인(HR vs IT vs 회계 vs 안전)을 먼저 판단하고 매핑.
+  See the **DOMAIN ROUTING** section below for domain-to-worker mapping and exclusivity rules.
   NOTE: "담당자" + IT/security keywords → "it_support". + accounting/finance → "acct_support"
 - youtube: Contains YouTube URL
 - it_support: IT help desk, IT VOC, security issues, VPN, printers, IT-domain staff lookup
@@ -82,6 +78,8 @@ INTENTS:
 - clarify: The query asks to FIND a specific item/document/record, but NONE of the above intents match
   ONLY use as last resort when: no domain keywords, not a knowledge question, not how-to — purely "find this thing" with no clue where
 - direct: General conversation, coding, translation, math, creative writing — no external info needed
+
+{domain_routing_guide}
 
 CONTEXT:
 - User has uploaded files: {has_files}
@@ -501,6 +499,7 @@ class IntentClassifier:
                     workspace_instructions = raw_instructions[:500]
 
             prompt = CLASSIFIER_PROMPT.format(
+                domain_routing_guide=DOMAIN_ROUTING_GUIDE,
                 message=message,
                 has_files=context.get("has_files", False),
                 has_session_xlsx=context.get("has_session_xlsx", False),
