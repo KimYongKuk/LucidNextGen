@@ -1,0 +1,26 @@
+{
+  "name": "Lucid AI",
+  "short_name": "Lucid AI",
+  "description": "L&F 사내 AI 챗봇",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "lang": "ko-KR",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "200x200",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/logo.png",
+      "sizes": "200x200",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

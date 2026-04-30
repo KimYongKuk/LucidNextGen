@@ -12,6 +12,7 @@ import asyncpg
 from app.utils.crypto import decrypt_empno
 from app.core.database import get_database_connection
 from app.services.email_service import get_email_service
+from app.services import ad_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -192,6 +193,31 @@ async def login(request: LoginRequest):
         empno=user["empno"],
         login_id=user["login_id"],
         name=user["name"],
+        token=token,
+    )
+
+
+@router.post("/auth/login-ad", response_model=LoginResponse)
+async def login_ad(request: LoginRequest):
+    """AD/LDAP 로그인 — sAMAccountName(예: wg0403) + AD 비밀번호.
+
+    흐름: LDAP bind → 성공 시 TIMS v_user_info_mapping에서 사번 조회 → JWT 발급.
+    비밀번호는 저장하지 않음 (AD가 검증).
+    """
+    user = await ad_service.authenticate(request.login_id, request.password)
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="아이디 또는 비밀번호가 올바르지 않습니다.",
+        )
+
+    token = _create_token(user.empno, user.name)
+    logger.info(f"[AUTH-AD] Login success: {user.empno} ({user.name})")
+    return LoginResponse(
+        success=True,
+        empno=user.empno,
+        login_id=user.login_id,
+        name=user.name,
         token=token,
     )
 

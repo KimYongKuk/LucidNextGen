@@ -17,13 +17,28 @@ export const metadata: Metadata = {
   // metadataBase: new URL("https://chat.vercel.ai"),
   title: "Lucid AI",
   description: "Chatbot Lucid AI by L&F",
+  manifest: "/manifest.json",
   icons: {
     icon: "/logo.png",
+    apple: "/logo.png",
+  },
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "Lucid AI",
   },
 };
 
 export const viewport = {
-  maximumScale: 1, // Disable auto-zoom on mobile Safari
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: "cover",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "hsl(0 0% 100%)" },
+    { media: "(prefers-color-scheme: dark)", color: "hsl(240 10% 3.92%)" },
+  ],
 };
 
 const geist = Geist({

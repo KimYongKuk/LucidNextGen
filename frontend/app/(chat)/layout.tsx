@@ -3,6 +3,7 @@ import Script from "next/script";
 import { Suspense } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { DataStreamProvider } from "@/components/data-stream-provider";
+import { InstallPromptBanner } from "@/components/install-prompt-banner";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 
 
@@ -37,6 +38,7 @@ async function SidebarWrapper({ children }: { children: React.ReactNode }) {
     <SidebarProvider defaultOpen={!isCollapsed}>
       <AppSidebar user={user} />
       <SidebarInset>{children}</SidebarInset>
+      <InstallPromptBanner />
     </SidebarProvider>
   );
 }

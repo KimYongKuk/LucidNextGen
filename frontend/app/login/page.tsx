@@ -5,6 +5,14 @@ import { useRouter } from "next/navigation";
 
 type View = "login" | "setup-request" | "setup-sent";
 
+// AD 로그인 활성화 여부 — 운영 배포 시 NEXT_PUBLIC_AUTH_METHOD=ad 로 설정
+const AUTH_METHOD = process.env.NEXT_PUBLIC_AUTH_METHOD || "local";
+const USE_AD = AUTH_METHOD === "ad";
+
+const AUTH_ENDPOINT = USE_AD ? "/api/auth/login-ad" : "/api/auth/login";
+const ID_LABEL = USE_AD ? "AD 계정" : "아이디";
+const ID_PLACEHOLDER = USE_AD ? "사내 AD 계정 (예: wg0403)" : "그룹웨어 ID";
+
 export default function LoginPage() {
   const router = useRouter();
   const [view, setView] = useState<View>("login");
@@ -26,7 +34,7 @@ export default function LoginPage() {
     setIsLoading(true);
 
     try {
-      const res = await fetch("/api/auth/login", {
+      const res = await fetch(AUTH_ENDPOINT, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ login_id: loginId, password }),
@@ -108,14 +116,14 @@ export default function LoginPage() {
                     htmlFor="loginId"
                     className="block text-[13px] font-medium text-muted-foreground"
                   >
-                    아이디
+                    {ID_LABEL}
                   </label>
                   <input
                     id="loginId"
                     type="text"
                     value={loginId}
                     onChange={(e) => setLoginId(e.target.value)}
-                    placeholder="그룹웨어 ID"
+                    placeholder={ID_PLACEHOLDER}
                     required
                     autoFocus
                     autoComplete="username"

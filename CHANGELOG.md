@@ -3,6 +3,30 @@
 > 이 파일은 Claude Code 작업 세션 중 자동으로 업데이트됩니다.
 > 상세 내용은 각 항목의 [상세] 링크를 참조하세요.
 
+## [2026-04-30] - PWA 모바일 UI + AD/LDAP 자체 로그인
+
+- **추가** [pwa/auth] 모바일 PWA 도입 1차 작업. (1) PWA manifest + iOS/모바일 viewport 메타 + 미들웨어 화이트리스트, (2) shadcn `sidebar.*` 컬러 매핑 추가로 라이트 테마 모바일 드로어 투명 버그 수정, (3) `InstallPromptBanner` 신규 — `beforeinstallprompt` + iOS Safari·데스크톱 Chromium fallback 안내(브라우저별 메뉴 경로 분기), sessionStorage 단위 dismiss로 탭 닫고 다시 열면 재노출, (4) Workspace 설정 모달 모바일 풀스크린화 + 탭바 가로 전환 + Agents 탭 헤더/CapabilityStrip 폭 대응, (5) **AD/LDAP 자체 로그인 백엔드** — `ldap3==2.9.1` 추가, `app/services/ad_service.py` 신규(LDAP bind + TIMS `v_user_info_mapping` 사번 조회), `/auth/login-ad` 엔드포인트 추가, AD 환경변수 6종(`AD_HOST`, `AD_DOMAIN=ad.landf`, `AD_USE_LDAPS=false`, `AD_PORT=389`, `AD_BIND_TIMEOUT=5`), Next.js 프록시 `/api/auth/login-ad`, login 페이지 `NEXT_PUBLIC_AUTH_METHOD=ad` 분기. **핵심**: 비밀번호 저장 X(AD가 검증), AD `cn=A2304013` ≠ `sAMAccountName=wg0403`이라 사번은 TIMS VIEW로 매핑 필수, AD bind OK + TIMS 매핑 없음도 401 처리(보안), 운영 진입 전 LDAPS 활성화 필요(인프라팀 대기) — `AD_USE_LDAPS=true` 한 줄로 LDAPS(636) + TLS 1.2 강제 자동 전환되도록 설계. dev에선 평문 LDAP(389) UPN bind로 검증 가능. → [상세](docs/history/2026-04-30_PWA-AD-LDAP-인증.md)
+
+---
+
+## [2026-04-30] - Agent Hub Phase 1 설계 + 마이그레이션 SQL
+
+- **추가** [agent-hub] 사내 AI Hub 격상을 위한 설계 컨센서스 7문서 작성 + Phase 1 마이그레이션 2개. 기존 `docs/루시드AI_Hub_아키텍처_설계서.md`(4-06 비전)을 `docs/agent-hub/00_vision.md`로 보존하고, 4-17 프론트 mock 이후 비어 있던 구현 명세를 새로 정립. **핵심 결정**: 최상위 엔티티=Agent / Worker는 인스턴스 1:1 (코드 영구 유지) / Platform 4종(native/miso/runner/webhook) / Workspace=컨테이너 / **Hub=MISO에 도구 공급하는 MCP gateway + 가벼운 채팅** / 페르소나 Phase별(Phase 1: Runner=IT 단독, MISO=현업) / 라우팅=Workspace 격리(일반 채팅은 Native만, 워크스페이스 채팅은 Native+부착 Agent) / 빠른 워크스페이스 생성 + 시스템 프롬프트 자동 합성(`intent_hints` 매니페스트 필드 신설) / AI 검증+인간 승인(operator role)으로 모든 등록 게이팅 / Runner 통신=WebSocket 8종 메시지+S3 presigned 파일 / 자격증명=AWS SSM Parameter Store(Phase 1 무료) → Secrets Manager(Phase 2 점진). **조직도 분석**(`v_org_chart` 5회 쿼리) 결과 엘앤에프 본체 226부서 4본부(CPO 477명/영업 203/CFO 117/공통 21) → Runner 4대 본부별 매핑 확정. **마이그레이션 SQL**: `add_agent_hub_phase1.sql`(8개 테이블 DDL, 외래키 RESTRICT) + `seed_agent_hub_phase1.sql`(Runner 4대 + Native Agent 18개 카탈로그 seed, `is_native_seed=TRUE`). 다음 단계: 사용자별 Native 자동 install / AgentValidatorService / Agent CRUD API / 등록 폼 위저드. → [상세](docs/history/2026-04-30_AgentHub_Phase1_설계.md)
+
+---
+
+## [2026-04-30] - Planner 도메인 배타성 가드 + 라우팅 가이드 단일 소스 추출
+
+- **수정** [Planner/Routing] Planner-Executor 경로에서 회계 단일 도메인 질의("법인카드 사용 규정")에 Planner LLM이 `corp_rag` task를 헤지로 추가 생성해 무관한 HR docs(인사팀 급여계좌 변경)가 corp_sources에 노출되던 결함 수정. 운영 로그 직접 확인(a2304013, 2026-04-30 11:20·11:23) — `tools_used=['search_hr_docs', 'execute_acct_voc_query', 'search_ac_docs']`로 두 워커 동시 분해 확인. 4/29에 IntentClassifier 쪽은 같은 결함을 손봤지만 Planner의 PLANNER_SYSTEM에는 도메인 가드가 누락되어 재발. `planner.py`에 RULE 11(도메인 배타성) + Few-shot Example 11~13(회계/IT/HR 도메인 단독 케이스) 추가. 추가로 두 분류기에 동일 가드를 중복 유지하던 비효율 해소를 위해 `agents/routing_guide.py` 신규 추가 — 도메인-워커 매핑·배타성 원칙·"규정"이 도메인 신호 아님 등을 단일 정의(`DOMAIN_ROUTING_GUIDE`, 1625자)하고 IntentClassifier·Planner 양쪽이 `{domain_routing_guide}` 슬롯으로 주입. 다음 라우팅 룰 변경 시 routing_guide 한 곳만 수정하면 두 분류기에 자동 반영. format() 충돌 없음 검증 완료(planner 12,160자 / classifier 11,645자). 운영 적용은 다음 deploy.bat 실행 시 반영. → [상세](docs/history/2026-04-30_Planner_도메인_배타성_가드.md)
+
+---
+
+## [2026-04-29] - GS네오텍 OSS LLM PoC 자료 (시나리오 + 사용량)
+
+- **추가** [docs/ax/poc] GS네오텍과의 오픈소스 LLM(DeepSeek V4 / GPT-OSS 120B / Qwen3 등) PoC 협의용 자료 작성. **PoC 1순위는 Haiku 대체** (intent_classifier 9,075 calls·평균 6K in/5 out, memory_user_facts 659 calls·평균 13K in/88 out 등 정형 짧은 작업), **2순위는 Sonnet 워커 비교**(Direct/Mail/WebSearch/Xlsx/PPT 등 도구 호출 루프). 운영 50일 실측 통계 포함 — 총 LLM 호출 37,494건(Sonnet 72%/Haiku 28%), 입력 191M·출력 26.7M 토큰, MAU 438명·DAU 244명, 피크일 2,286 calls/844 msgs, 분당 최대 18 calls/7 동시 user, 평균 입력 209자·출력 1,472자, 워커별 평균 응답시간 17~102초(PPT 최대), Intent 분포 19종(direct 41%/web_search 12%/mail 7.6% 등), Sonnet 캐시 히트 ~58%. 컨텍스트 윈도우 권장 128K↑(MailWorker max 227K), 부하 검증 KPI는 30 RPM·동시 7 user. PoC 환경 후보 GPU(A100/H100/p5)·vLLM/TGI OpenAI-호환 서빙·평가 산출물 5종 정의. raw 통계 추출 스크립트 `c:\tmp\poc_stats\extract_*.py`로 재현 가능. → [상세](docs/ax/poc/2026-04-29_GSNeotek_OSS_PoC_Brief.md)
+
+---
+
 ## [2026-04-29] - IT/회계 규정 라우팅 결함 수정 (프롬프트 두 줄)
 
 - **수정** [Intent/Routing] "규정"+IT/회계 키워드 결합어("정보보안 관리 규정", "경비처리 규정")가 corp_rag로 잘못 분류되어 사용자에게 "찾지 못함" 응답이 나오던 라우팅 결함을 **키워드 룰 추가 0줄로 해결** — 분류 책임을 LLM에 일임하는 기존 구조를 유지하되 LLM 가이드 두 곳만 정정. (1) `state.py:WORKER_CAPABILITIES`에서 corp_rag = "인사·안전환경만", it_support/acct_support = "도메인 규정+VOC 통합"으로 명시. Planner는 이 dict를 worker_catalog로 사용하므로 자동 반영. (2) `intent_classifier.py:CLASSIFIER_PROMPT`의 corp_rag 줄에 "HR/Safety only — IT regulations → it_support, Finance → acct_support" 명시 + "규정/정책/지침 키워드 단독으로 corp_rag로 보내지 말 것" 가이드. Haiku 직접 호출로 6/6 케이스 검증(정보보안 규정→it_support, 경비처리 규정→acct_support, 안전관리 규정→corp_rag 유지). 어제 삭제했던 `it_support_security_regulation`/`acct_support_regulation` 골든 케이스 복구. 운영 적용은 다음 deploy.bat 실행 시 자연 반영. → [상세](docs/history/2026-04-29_라우팅_결함_프롬프트_수정.md)

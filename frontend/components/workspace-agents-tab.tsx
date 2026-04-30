@@ -134,24 +134,26 @@ export function WorkspaceAgentsTab({ workspaceUuid, onCountChange }: WorkspaceAg
 
   return (
     <div className="space-y-4 h-full flex flex-col">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h3 className="text-sm font-medium">활성 Agent</h3>
           <p className="mt-0.5 text-xs text-muted-foreground">
             이 Workspace 안에서만 호출되는 Agent들입니다.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 shrink-0">
           <Button asChild variant="outline" size="sm">
             <Link href="/agent-store" target="_blank">
               <Store className="mr-1.5 h-4 w-4" />
-              Agent Store
+              <span className="hidden sm:inline">Agent Store</span>
+              <span className="sm:hidden">Store</span>
               <ExternalLink className="ml-1 h-3 w-3" />
             </Link>
           </Button>
           <Button size="sm" onClick={() => setPickerOpen(true)}>
             <Plus className="mr-1.5 h-4 w-4" />
-            Agent 추가
+            <span className="hidden sm:inline">Agent 추가</span>
+            <span className="sm:hidden">추가</span>
           </Button>
         </div>
       </div>
@@ -207,7 +209,7 @@ function CapabilityStrip({
   if (items.length === 0) return null;
 
   return (
-    <div className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-xs">
+    <div className="flex flex-wrap items-center gap-1.5 rounded-md border bg-muted/30 px-3 py-2 text-xs">
       <span className="text-muted-foreground">활성 {total}개:</span>
       {items.map((cap) => {
         const Icon = capabilityIconMap[cap];

@@ -287,17 +287,17 @@ export function WorkspaceSettingsModal({
             onOpenChange(newOpen);
             if (!newOpen) forceCleanupPointerEvents();
         }}>
-            <DialogContent className="sm:max-w-[800px] h-[600px] flex flex-col p-0 gap-0">
-                <DialogHeader className="p-6 pb-4 border-b">
+            <DialogContent className="sm:max-w-[800px] w-screen max-w-none h-[100dvh] sm:w-[95vw] sm:max-w-[95vw] sm:h-[600px] sm:max-h-[90dvh] rounded-none sm:rounded-lg flex flex-col p-0 gap-0">
+                <DialogHeader className="p-4 pb-3 sm:p-6 sm:pb-4 border-b">
                     <DialogTitle>{workspace ? "Workspace 설정" : "Workspace 생성"}</DialogTitle>
                     <DialogDescription>
                         Configure your AI assistant's persona and knowledge base.
                     </DialogDescription>
                 </DialogHeader>
 
-                <div className="flex flex-1 overflow-hidden">
+                <div className="flex flex-1 overflow-hidden flex-col sm:flex-row">
                     {/* Sidebar Tabs */}
-                    <div className="w-[200px] bg-muted/30 border-r p-4 flex flex-col gap-2">
+                    <div className="w-full sm:w-[200px] bg-muted/30 border-b sm:border-b-0 sm:border-r p-2 sm:p-4 flex flex-row sm:flex-col gap-1 sm:gap-2 overflow-x-auto sm:overflow-x-visible shrink-0">
                         <Button
                             variant={activeTab === "general" ? "secondary" : "ghost"}
                             className="justify-start"
@@ -358,7 +358,7 @@ export function WorkspaceSettingsModal({
                     </div>
 
                     {/* Content Area */}
-                    <div className="flex-1 p-6 overflow-y-auto">
+                    <div className="flex-1 p-4 sm:p-6 overflow-y-auto min-h-0">
                         {activeTab === "agents" && workspace ? (
                             <WorkspaceAgentsTab
                                 workspaceUuid={workspace.uuid}
