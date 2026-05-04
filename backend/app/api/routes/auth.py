@@ -3,16 +3,17 @@ import os
 import uuid
 import logging
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 import jwt
 import bcrypt
 import asyncpg
 
-from app.utils.crypto import decrypt_empno
+from app.utils.crypto import decrypt_empno, encrypt_empno
 from app.core.database import get_database_connection
 from app.services.email_service import get_email_service
 from app.services import ad_service
+from app.api.dependencies.widget_auth import get_current_user_widget
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -124,6 +125,29 @@ async def decrypt_empno_endpoint(request: DecryptRequest):
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"복호화 실패: {str(e)}")
+
+
+# ── 위젯 토큰 → SSO empno 변환 (본체 진입용) ──
+
+class WidgetToSsoResponse(BaseModel):
+    encrypted_empno: str  # AES_KEY로 재암호화된 사번 (URL-encoded base64)
+
+
+@router.post("/auth/widget-to-sso", response_model=WidgetToSsoResponse)
+async def widget_to_sso(user: dict = Depends(get_current_user_widget)):
+    """위젯 X-Widget-Auth 토큰을 본체 SSO empno 토큰으로 변환.
+
+    그룹웨어 위젯에서 본체(/chat/...)로 이동할 때 사용.
+    - 입력: X-Widget-Auth 헤더 (email|ts 포맷, WIDGET_SHARED_KEY)
+    - 출력: AES_KEY로 암호화된 사번 (middleware의 ?empno= 파라미터로 그대로 사용 가능)
+
+    위젯 토큰과 SSO empno 토큰은 평문 포맷이 다르므로(전자: email|ts, 후자: 사번)
+    위젯 토큰을 그대로 ?empno=에 넣으면 미들웨어 복호화 결과가 사번이 아닌 email|ts가 되어
+    JWT empno에 잘못된 값이 들어가는 문제를 방지한다.
+    """
+    aes_key = os.getenv("AES_KEY", "landf01234567890")
+    encrypted = encrypt_empno(user["empno"], aes_key)
+    return WidgetToSsoResponse(encrypted_empno=encrypted)
 
 
 # ── 그룹웨어 user_id → 사번 변환 ──

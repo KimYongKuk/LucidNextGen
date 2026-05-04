@@ -193,14 +193,33 @@ export function EmbedChat({
     onNewChat?.();
   }, [setMessages, setDataStream, onNewChat]);
 
-  const handleOpenInMainApp = useCallback(() => {
+  const handleOpenInMainApp = useCallback(async () => {
     if (typeof window === "undefined") return;
-    window.open(
-      `${window.location.origin}/chat/${sessionId}`,
-      "_blank",
-      "noopener,noreferrer"
-    );
-  }, [sessionId]);
+
+    const baseUrl = `${window.location.origin}/chat/${sessionId}`;
+    let targetUrl = baseUrl;
+
+    // 위젯 인증 토큰이 있으면 본체 SSO empno로 변환해서 ?empno=&gosso= 부착
+    // → 본체 미들웨어가 SSO 흐름 그대로 처리 → auth_token 쿠키 발급 → 채팅 화면 진입
+    if (widgetAuthToken) {
+      try {
+        const res = await fetch(`${getApiUrl()}/api/auth/widget-to-sso`, {
+          method: "POST",
+          headers: { "X-Widget-Auth": widgetAuthToken },
+        });
+        if (res.ok) {
+          const { encrypted_empno } = await res.json();
+          const params = new URLSearchParams({ empno: encrypted_empno });
+          if (gossoCookie) params.set("gosso", gossoCookie);
+          targetUrl = `${baseUrl}?${params.toString()}`;
+        }
+      } catch {
+        // 변환 실패 시 fallback — 사용자는 로그인 화면을 보게 됨 (기존 동작)
+      }
+    }
+
+    window.open(targetUrl, "_blank", "noopener,noreferrer");
+  }, [sessionId, widgetAuthToken, gossoCookie]);
 
   return (
     <div className="flex h-full min-w-0 flex-col overflow-x-hidden bg-background">

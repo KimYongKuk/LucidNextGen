@@ -3,6 +3,12 @@
 > 이 파일은 Claude Code 작업 세션 중 자동으로 업데이트됩니다.
 > 상세 내용은 각 항목의 [상세] 링크를 참조하세요.
 
+## [2026-05-04] - 위젯 본체 이동 시 SSO 자동 인증
+
+- **추가** [auth/widget] 그룹웨어 위젯에서 "본체에서 열기" 클릭 시 새 탭이 로그인 화면으로 빠지던 문제 해결. 위젯 토큰(`email|ts`, WIDGET_SHARED_KEY)과 SSO empno 토큰(`사번`, AES_KEY)이 평문 포맷이 달라 위젯 토큰을 그대로 `?empno=`에 못 넣는 구조였음. 변환 엔드포인트 `POST /api/auth/widget-to-sso` 신설 — `Depends(get_current_user_widget)`로 X-Widget-Auth 검증 + 사번 정규화 후 `encrypt_empno(AES_KEY)`로 재암호화해 반환. `embed-chat.tsx::handleOpenInMainApp`을 async로 바꿔서 본체 이동 직전에 변환 호출 → `?empno=&gosso=` 부착 → 미들웨어가 기존 SSO 흐름 그대로 처리 → `auth_token` 쿠키 발급 → 채팅 화면 진입. 변환 실패 시 기존 동작(쿼리 없이 새 탭) fallback 유지. 새 탭 URL에 8시간짜리 위젯 토큰을 직접 노출하지 않는 게 미들웨어 분기 확장 안 대비 핵심 장점. → [상세](docs/history/2026-05-04_위젯_본체이동_SSO_자동인증.md)
+
+---
+
 ## [2026-04-30] - PWA 모바일 UI + AD/LDAP 자체 로그인
 
 - **추가** [pwa/auth] 모바일 PWA 도입 1차 작업. (1) PWA manifest + iOS/모바일 viewport 메타 + 미들웨어 화이트리스트, (2) shadcn `sidebar.*` 컬러 매핑 추가로 라이트 테마 모바일 드로어 투명 버그 수정, (3) `InstallPromptBanner` 신규 — `beforeinstallprompt` + iOS Safari·데스크톱 Chromium fallback 안내(브라우저별 메뉴 경로 분기), sessionStorage 단위 dismiss로 탭 닫고 다시 열면 재노출, (4) Workspace 설정 모달 모바일 풀스크린화 + 탭바 가로 전환 + Agents 탭 헤더/CapabilityStrip 폭 대응, (5) **AD/LDAP 자체 로그인 백엔드** — `ldap3==2.9.1` 추가, `app/services/ad_service.py` 신규(LDAP bind + TIMS `v_user_info_mapping` 사번 조회), `/auth/login-ad` 엔드포인트 추가, AD 환경변수 6종(`AD_HOST`, `AD_DOMAIN=ad.landf`, `AD_USE_LDAPS=false`, `AD_PORT=389`, `AD_BIND_TIMEOUT=5`), Next.js 프록시 `/api/auth/login-ad`, login 페이지 `NEXT_PUBLIC_AUTH_METHOD=ad` 분기. **핵심**: 비밀번호 저장 X(AD가 검증), AD `cn=A2304013` ≠ `sAMAccountName=wg0403`이라 사번은 TIMS VIEW로 매핑 필수, AD bind OK + TIMS 매핑 없음도 401 처리(보안), 운영 진입 전 LDAPS 활성화 필요(인프라팀 대기) — `AD_USE_LDAPS=true` 한 줄로 LDAPS(636) + TLS 1.2 강제 자동 전환되도록 설계. dev에선 평문 LDAP(389) UPN bind로 검증 가능. → [상세](docs/history/2026-04-30_PWA-AD-LDAP-인증.md)
