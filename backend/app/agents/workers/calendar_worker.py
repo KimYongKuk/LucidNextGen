@@ -336,4 +336,15 @@ class CalendarWorker(BaseWorker):
         gosso = context.get("gosso_cookie") or ""
         prompt = prompt.replace("{gosso_cookie}", gosso)
 
+        if not gosso:
+            prompt += (
+                "\n\n## ⚠️ 인증 모드 제한 (GSO 쿠키 없음)\n"
+                "사용자가 그룹웨어를 거치지 않고 직접 로그인(AD/자체)한 상태입니다.\n"
+                "**캘린더 도구는 호출하지 마세요** — 다음과 같이 안내하고 종료하세요:\n"
+                '"일정(캘린더) 기능은 그룹웨어를 통해 접속하셔야 사용 가능합니다. '
+                '그룹웨어 → AI 챗봇 메뉴로 다시 들어와주세요. '
+                '회의실/자산 예약 기능은 그대로 사용 가능합니다."\n'
+                "회의실/자산 예약 도구(get_sites, find_available_rooms, create_reservation 등)는 정상 사용 가능합니다."
+            )
+
         return prompt
