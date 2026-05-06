@@ -623,7 +623,6 @@ async def chat_stream(
                 tools = await adapter.get_tools()
                 tools_time = int((time.time() - tools_start) * 1000)
                 print(f"[TIMING] [2/4] Tools ready: {tools_time}ms ({len(tools)} tools)")
-                print(f"[DEBUG] Available tool names: {[t.name for t in tools]}")
 
                 # ============================================================
                 # A2A Hierarchical Agent 경로 (Feature Flag)

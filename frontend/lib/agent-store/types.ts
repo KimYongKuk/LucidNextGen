@@ -43,6 +43,7 @@ export interface Agent {
   executionHistory: ExecutionHistory[];
   isInstalled: boolean;
   isMine: boolean;
+  isNative?: boolean; // Native seed Agent — 자동 활성화, install/uninstall 불가
 }
 
 export const CAPABILITY_LABELS: Record<Capability, string> = {

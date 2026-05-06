@@ -6,13 +6,14 @@ import {
   Check,
   Database,
   FileBarChart,
+  Loader2,
   MapPin,
   MessageCircle,
   Newspaper,
+  Puzzle,
   Receipt,
   Search,
   Shield,
-  Sparkles,
   TrendingUp,
   type LucideIcon,
 } from "lucide-react";
@@ -34,7 +35,8 @@ import {
   CAPABILITY_LABELS,
   getPrimaryCapabilityColor,
 } from "@/lib/agent-store/types";
-import { getInstalledAgents } from "@/lib/agent-store/workspace-agents";
+import { agentApi } from "@/lib/api/agents";
+import { adaptBackendAgent } from "@/lib/agent-store/adapter";
 
 const iconMap: Record<string, LucideIcon> = {
   MapPin,
@@ -45,7 +47,7 @@ const iconMap: Record<string, LucideIcon> = {
   MessageCircle,
   Shield,
   TrendingUp,
-  Sparkles,
+  Sparkles: Puzzle,
   Newspaper,
 };
 
@@ -64,15 +66,27 @@ export function AgentPickerDialog({
 }: AgentPickerDialogProps) {
   const [selected, setSelected] = useState<Set<string>>(new Set(attachedIds));
   const [query, setQuery] = useState("");
+  const [installedAgents, setInstalledAgents] = useState<Agent[]>([]);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (open) {
       setSelected(new Set(attachedIds));
       setQuery("");
+      // 사용자 active Agent 목록 fetch (Native + 외부 모두 포함). Native는 이미 자동 활성이라 제외.
+      setLoading(true);
+      agentApi
+        .listMyActive()
+        .then((list) => {
+          const adapted = list
+            .filter((b) => b.is_native_seed !== true) // Native는 picker에 안 띄움
+            .map((b) => adaptBackendAgent(b, { isInstalled: true }));
+          setInstalledAgents(adapted);
+        })
+        .catch(() => setInstalledAgents([]))
+        .finally(() => setLoading(false));
     }
   }, [open, attachedIds]);
-
-  const installedAgents = useMemo(() => getInstalledAgents(), []);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -124,7 +138,12 @@ export function AgentPickerDialog({
 
         <ScrollArea className="flex-1">
           <div className="p-4 space-y-2">
-            {installedAgents.length === 0 ? (
+            {loading ? (
+              <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                불러오는 중...
+              </div>
+            ) : installedAgents.length === 0 ? (
               <EmptyInstalledState />
             ) : filtered.length === 0 ? (
               <div className="py-12 text-center text-sm text-muted-foreground">
@@ -166,7 +185,7 @@ function AgentPickerRow({
   checked: boolean;
   onToggle: () => void;
 }) {
-  const Icon = iconMap[agent.icon] ?? Sparkles;
+  const Icon = iconMap[agent.icon] ?? Puzzle;
   const iconColor = getPrimaryCapabilityColor(agent.capabilities);
 
   return (
@@ -180,11 +199,8 @@ function AgentPickerRow({
           : "border-border bg-card hover:bg-muted/50",
       ].join(" ")}
     >
-      <div
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
-        style={{ backgroundColor: `${iconColor}20` }}
-      >
-        <Icon className="h-4 w-4" style={{ color: iconColor }} />
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center">
+        <Icon className="h-5 w-5" style={{ color: iconColor }} />
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
@@ -231,7 +247,7 @@ function CapabilityChip({ capability }: { capability: Capability }) {
 function EmptyInstalledState() {
   return (
     <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed bg-muted/30 py-12 text-center">
-      <Sparkles className="h-7 w-7 text-muted-foreground" />
+      <Puzzle className="h-7 w-7 text-muted-foreground" />
       <div className="text-sm font-semibold">설치한 Agent가 없습니다</div>
       <div className="max-w-sm text-xs text-muted-foreground">
         Agent Store에서 원하는 Agent를 먼저 설치한 뒤 Workspace에 붙일 수 있습니다.

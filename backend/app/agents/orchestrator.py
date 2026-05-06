@@ -141,6 +141,77 @@ class Orchestrator:
                 print(f"[ORCHESTRATOR] Memory load error (non-fatal): {e}")
 
         # ============================================================
+        # Phase 0.5: External Agent Router (워크스페이스 부착 외부 Agent 사전 매칭)
+        # workspace_id 있고 부착된 외부 Agent (MISO/Runner/Webhook) 있으면
+        # 사용자 발화가 그중 어느 Agent와 매칭되는지 Haiku로 사전 분류.
+        # 매칭 시 → 외부 Agent Worker 직접 호출 + 종료 (Native 흐름 우회)
+        # 미매칭 시 → 기존 Planner-Executor / IntentClassifier 흐름으로 흘러감
+        # ============================================================
+        if workspace_id:
+            try:
+                from app.agents.external_agent_router import (
+                    get_external_agent_router,
+                    instantiate_worker_for_agent,
+                )
+                ext_router = get_external_agent_router()
+                attached = await ext_router.fetch_attached_external_agents(workspace_id)
+                if attached:
+                    ext_start = time.time()
+                    decision = await ext_router.route(message, attached)
+                    ext_ms = int((time.time() - ext_start) * 1000)
+                    print(
+                        f"[ORCHESTRATOR] Phase 0.5: external router → "
+                        f"{decision['action']} ({ext_ms}ms) — {decision.get('rationale','')[:80]}"
+                    )
+                    if decision["action"] == "external":
+                        agent = decision["agent"]
+                        slug = decision["slug"]
+                        # intent_classified 호환 이벤트 (프론트가 인지)
+                        yield {
+                            "type": "intent_classified",
+                            "intent": "external",
+                            "worker": f"ExtAgent[{slug}]",
+                            "timing_ms": ext_ms,
+                            "external_slug": slug,
+                            "external_name": agent.get("name"),
+                        }
+                        try:
+                            ext_worker = await instantiate_worker_for_agent(agent)
+                            print(f"[ORCHESTRATOR] Phase 0.5: ext_worker instantiated → {ext_worker.name}")
+                        except NotImplementedError as e:
+                            print(f"[ORCHESTRATOR] Phase 0.5: NotImplementedError {e}")
+                            yield {
+                                "event": "text",
+                                "data": f"⚠ {e} 플랫폼은 아직 호출이 구현되지 않았습니다.",
+                            }
+                            yield {"event": "done", "data": {"elapsed": time.time() - start_time}}
+                            return
+                        except Exception as e:
+                            import traceback
+                            print(f"[ORCHESTRATOR] Phase 0.5: ext_worker instantiate failed: {type(e).__name__}: {e}")
+                            traceback.print_exc()
+                            raise
+                        # MisoWorker는 messages를 받음 → 단일 user 메시지로 변환
+                        ev_count = 0
+                        async for ev in ext_worker.stream_response(
+                            messages=[HumanMessage(content=message)],
+                            context=dict(context),
+                        ):
+                            ev_count += 1
+                            yield ev
+                        print(f"[ORCHESTRATOR] Phase 0.5: ext_worker yielded {ev_count} events")
+                        yield {
+                            "type": "orchestrator_timing",
+                            "external_router_ms": ext_ms,
+                            "total_ms": int((time.time() - start_time) * 1000),
+                        }
+                        return
+            except Exception as e:
+                import traceback
+                print(f"[ORCHESTRATOR] External router error (non-fatal, falling back): {e}")
+                traceback.print_exc()
+
+        # ============================================================
         # Phase 1: Intent Classification (Haiku, ~0.3-0.5초)
         # ============================================================
         classify_start = time.time()

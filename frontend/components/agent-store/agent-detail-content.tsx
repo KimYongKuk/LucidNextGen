@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
@@ -24,10 +24,11 @@ import {
   MessageSquare,
   Newspaper,
   Play,
+  Puzzle,
   Receipt,
   Shield,
-  Sparkles,
   Tag,
+  Trash2,
   TrendingUp,
   User,
   XCircle,
@@ -36,8 +37,22 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import type { Agent, Capability, ExecutionHistory, Visibility } from "@/lib/agent-store/types";
+import { agentApi } from "@/lib/api/agents";
+import { workspaceApi } from "@/lib/api/workspaces";
+import { getUserId, isOperatorUser } from "@/lib/utils";
+import { ResubmitStatusPanel } from "./resubmit-status-panel";
 import {
   CAPABILITY_COLORS,
   CAPABILITY_HINTS,
@@ -58,7 +73,7 @@ const iconMap: Record<string, LucideIcon> = {
   MessageCircle,
   Shield,
   TrendingUp,
-  Sparkles,
+  Sparkles: Puzzle,
   Newspaper,
 };
 
@@ -76,33 +91,109 @@ interface AgentDetailContentProps {
 export function AgentDetailContent({ agent: initialAgent }: AgentDetailContentProps) {
   const router = useRouter();
   const [agent, setAgent] = useState<Agent>(initialAgent);
+  const [running, setRunning] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [isOperator, setIsOperator] = useState(false);
 
-  const Icon = iconMap[agent.icon] ?? Sparkles;
+  useEffect(() => {
+    setIsOperator(isOperatorUser(getUserId()));
+  }, []);
+
+  const Icon = iconMap[agent.icon] ?? Puzzle;
   const iconColor = getPrimaryCapabilityColor(agent.capabilities);
   const isChat = agent.capabilities.includes("chat");
   const disabled = agent.status !== "active";
+  const canDelete = !agent.isNative && (agent.isMine || isOperator);
 
-  const handleToggleInstall = () => {
-    setAgent((prev) => {
-      const next = !prev.isInstalled;
-      toast.success(next ? `'${prev.name}' 설치 완료` : `'${prev.name}' 제거`);
-      return {
+  const handleToggleInstall = async () => {
+    if (agent.isNative) return; // 안전망 (UI에서 이미 차단됨)
+    const willInstall = !agent.isInstalled;
+    setAgent((prev) => ({
+      ...prev,
+      isInstalled: willInstall,
+      installCount: Math.max(0, prev.installCount + (willInstall ? 1 : -1)),
+    }));
+    try {
+      if (willInstall) await agentApi.install(agent.slug);
+      else await agentApi.uninstall(agent.slug);
+      toast.success(willInstall ? `'${agent.name}' 설치 완료` : `'${agent.name}' 제거`);
+    } catch (e: any) {
+      // 롤백
+      setAgent((prev) => ({
         ...prev,
-        isInstalled: next,
-        installCount: Math.max(0, prev.installCount + (next ? 1 : -1)),
-      };
-    });
+        isInstalled: !willInstall,
+        installCount: Math.max(0, prev.installCount + (willInstall ? -1 : 1)),
+      }));
+      toast.error(`처리 실패: ${e?.message ?? "오류"}`);
+    }
   };
 
-  const handleRun = () => {
-    toast.info("실제 실행 로직은 백엔드 연동 후 활성화됩니다.");
+  // "이 Agent로 워크스페이스 만들기" — 빠른 워크스페이스 생성
+  const handleRun = async () => {
+    if (running) return;
+    setRunning(true);
+    try {
+      // 1. Agent 매니페스트 fetch (intent_hints.system_prompt 추출)
+      let systemPrompt = "";
+      try {
+        const backendAgent = await agentApi.get(agent.slug);
+        const hints = (backendAgent.manifest as any)?.intent_hints;
+        if (hints?.system_prompt) systemPrompt = hints.system_prompt;
+      } catch {
+        // manifest 못 가져와도 워크스페이스는 만들 수 있음
+      }
+
+      // 2. 워크스페이스 자동 생성 (이름 + Agent의 시스템 프롬프트 합성)
+      const userId = getUserId() ?? "";
+      const wsName = `${agent.name} Workspace`;
+      const wsInstructions = systemPrompt
+        ? `# ${agent.name}\n${systemPrompt}`
+        : agent.description;
+
+      const created = await workspaceApi.create({
+        user_id: userId,
+        name: wsName,
+        description: agent.description,
+        instructions: wsInstructions,
+        is_public: false,
+      });
+
+      // 3. Agent를 워크스페이스에 자동 부착
+      try {
+        await agentApi.attachToWorkspace(created.uuid, agent.slug);
+      } catch (e: any) {
+        // 부착 실패해도 워크스페이스는 만들어짐. 경고만.
+        console.warn(`[handleRun] attach failed: ${e?.message}`);
+      }
+
+      toast.success(`'${wsName}' 생성 완료`);
+      // 4. 워크스페이스 채팅으로 이동
+      router.push(`/?workspace_id=${created.uuid}`);
+    } catch (e: any) {
+      toast.error(`워크스페이스 생성 실패: ${e?.message ?? "오류"}`);
+    } finally {
+      setRunning(false);
+    }
   };
 
-  const runLabel = !agent.isInstalled
+  const handleDelete = async () => {
+    if (deleting) return;
+    setDeleting(true);
+    try {
+      await agentApi.delete(agent.slug);
+      toast.success(`'${agent.name}' 삭제 완료`);
+      setDeleteOpen(false);
+      router.push("/agent-store");
+    } catch (e: any) {
+      toast.error(`삭제 실패: ${e?.message ?? "오류"}`);
+      setDeleting(false);
+    }
+  };
+
+  const runLabel = (!agent.isInstalled && !agent.isNative)
     ? "설치 후 사용 가능"
-    : isChat
-      ? "대화 시작"
-      : "실행하기";
+    : "이 Agent로 워크스페이스 만들기";
 
   const RunIcon = isChat ? MessageSquare : Play;
 
@@ -126,11 +217,8 @@ export function AgentDetailContent({ agent: initialAgent }: AgentDetailContentPr
             className="flex flex-col gap-5 border-b border-border pb-6"
           >
             <div className="flex items-start gap-4">
-              <div
-                className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl"
-                style={{ backgroundColor: `${iconColor}20` }}
-              >
-                <Icon className="h-8 w-8" style={{ color: iconColor }} />
+              <div className="flex h-16 w-16 shrink-0 items-center justify-center">
+                <Icon className="h-10 w-10" style={{ color: iconColor }} />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -167,41 +255,112 @@ export function AgentDetailContent({ agent: initialAgent }: AgentDetailContentPr
             </div>
 
             <div className="flex flex-col gap-2 sm:flex-row">
-              <Button
-                type="button"
-                size="lg"
-                variant={agent.isInstalled ? "outline" : "default"}
-                onClick={handleToggleInstall}
-                disabled={disabled && !agent.isInstalled}
-                className="sm:w-44"
-              >
-                {agent.isInstalled ? (
-                  <>
-                    <Check className="mr-1.5 h-4 w-4" />
-                    설치됨 (제거)
-                  </>
-                ) : (
-                  <>
-                    <Download className="mr-1.5 h-4 w-4" />
-                    설치
-                  </>
-                )}
-              </Button>
+              {agent.isNative ? (
+                // Native Agent — 자동 활성, 토글 불가
+                <div className="flex items-center justify-center gap-1.5 rounded-md border border-dashed border-emerald-300 bg-emerald-50/50 px-4 py-2 text-sm text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300 sm:w-44">
+                  <Check className="h-4 w-4" />
+                  기본 탑재
+                </div>
+              ) : (
+                <Button
+                  type="button"
+                  size="lg"
+                  variant={agent.isInstalled ? "outline" : "default"}
+                  onClick={handleToggleInstall}
+                  disabled={disabled && !agent.isInstalled}
+                  className="sm:w-44"
+                >
+                  {agent.isInstalled ? (
+                    <>
+                      <Check className="mr-1.5 h-4 w-4" />
+                      설치됨 (제거)
+                    </>
+                  ) : (
+                    <>
+                      <Download className="mr-1.5 h-4 w-4" />
+                      설치
+                    </>
+                  )}
+                </Button>
+              )}
               <Button
                 type="button"
                 size="lg"
                 className="flex-1"
-                disabled={disabled || !agent.isInstalled}
+                disabled={running || disabled || (!agent.isNative && !agent.isInstalled)}
                 onClick={handleRun}
                 style={{
-                  backgroundColor: disabled || !agent.isInstalled ? undefined : iconColor,
+                  backgroundColor: disabled || (!agent.isNative && !agent.isInstalled) ? undefined : iconColor,
                 }}
               >
-                <RunIcon className="mr-1.5 h-4 w-4" />
-                {runLabel}
+                {running ? (
+                  <>
+                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                    워크스페이스 생성 중...
+                  </>
+                ) : (
+                  <>
+                    <RunIcon className="mr-1.5 h-4 w-4" />
+                    {runLabel}
+                  </>
+                )}
               </Button>
+              {canDelete && (
+                <Button
+                  type="button"
+                  size="lg"
+                  variant="outline"
+                  onClick={() => setDeleteOpen(true)}
+                  className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive sm:w-32"
+                >
+                  <Trash2 className="mr-1.5 h-4 w-4" />
+                  삭제
+                </Button>
+              )}
             </div>
           </motion.header>
+
+          <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>이 에이전트를 삭제하시겠습니까?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  <strong>'{agent.name}'</strong>이(가) 카탈로그에서 제거되며,
+                  설치한 사용자들도 더 이상 사용할 수 없습니다.
+                  <br />
+                  이 작업은 되돌릴 수 없습니다.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel disabled={deleting}>취소</AlertDialogCancel>
+                <AlertDialogAction
+                  disabled={deleting}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    handleDelete();
+                  }}
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                >
+                  {deleting ? (
+                    <>
+                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                      삭제 중...
+                    </>
+                  ) : (
+                    "삭제"
+                  )}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
+          {/* 진행 중/반려 상태 패널 (작성자에게 수정 후 재제출 버튼 노출) */}
+          {!agent.isNative && (
+            <ResubmitStatusPanel
+              slug={agent.slug}
+              isAuthor={agent.isMine}
+            />
+          )}
 
           <section>
             <h2 className="mb-4 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
@@ -293,23 +452,6 @@ export function AgentDetailContent({ agent: initialAgent }: AgentDetailContentPr
               </div>
             </section>
           ) : null}
-
-          <section>
-            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-              최근 실행 이력
-            </h2>
-            {agent.executionHistory.length > 0 ? (
-              <div className="space-y-2">
-                {agent.executionHistory.slice(0, 10).map((h) => (
-                  <HistoryItem key={h.id} history={h} />
-                ))}
-              </div>
-            ) : (
-              <p className="rounded-lg bg-muted/30 py-6 text-center text-sm text-muted-foreground">
-                실행 이력이 없습니다
-              </p>
-            )}
-          </section>
 
           <section className="rounded-lg border border-border bg-muted/20 p-4">
             <h2 className="mb-2 text-sm font-semibold text-foreground">작성자 정보</h2>

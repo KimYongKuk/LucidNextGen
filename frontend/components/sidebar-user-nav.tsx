@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { ChevronUp } from "lucide-react";
 import Image from "next/image";
 
@@ -16,10 +17,25 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
+import { getUserId, getUserName } from "@/lib/utils";
+import { useUserInfo } from "@/hooks/use-user-directory";
 
 
 export function SidebarUserNav({ user }: { user: any }) {
   const { setTheme, resolvedTheme } = useTheme();
+  // AD 인증 쿠키 + 백엔드 디렉토리 lookup (부서 포함). SSR/CSR 일치 위해 useEffect로 set.
+  const [userId, setUserId] = useState<string | null>(null);
+  const [cookieName, setCookieName] = useState<string | null>(null);
+  useEffect(() => {
+    setUserId(getUserId());
+    setCookieName(getUserName());
+  }, []);
+
+  const info = useUserInfo(userId);
+  // 표시 우선순위: 디렉토리(부서+이름, found=true) > 쿠키(이름) > email > 사번
+  const display = info && info.found && info.name
+    ? (info.team ? `${info.team} ${info.name}` : info.name)
+    : (cookieName ?? user?.email ?? userId ?? "Guest");
 
   return (
     <SidebarMenu>
@@ -38,7 +54,7 @@ export function SidebarUserNav({ user }: { user: any }) {
                 width={24}
               />
               <span className="truncate" data-testid="user-email">
-                {user?.email ?? "Guest"}
+                {display}
               </span>
               <ChevronUp className="ml-auto" />
             </SidebarMenuButton>

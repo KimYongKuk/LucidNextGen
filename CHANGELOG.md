@@ -3,6 +3,12 @@
 > 이 파일은 Claude Code 작업 세션 중 자동으로 업데이트됩니다.
 > 상세 내용은 각 항목의 [상세] 링크를 참조하세요.
 
+## [2026-05-06] - MISO Workflow 파일 출력 응답 처리
+
+- **추가** [agents/miso_worker] MISO/Dify 표준 파일 출력 응답(`{type, url, filename, ...}` shape, type ∈ image/document/audio/video) 자동 감지 및 마크다운 변환. 기존엔 `_extract_answer`가 string outputs만 처리하고 dict 값은 JSON dump로 폴백 → 사용자에겐 raw JSON이 노출되어 클릭 불가능했음. 이제 `outputs` 트리를 재귀 스캔하여 file shape를 찾으면 image는 `![filename](url)` 인라인, 그 외는 `[📎 filename (size)](url)` 다운로드 링크로 변환. 텍스트와 파일이 같이 나오면 `텍스트\n\n파일링크` 형태로 결합. chat 모드도 `data.files` 필드 처리 추가. 단순 string-only 워크플로우는 기존 동작 그대로 유지(보수적). MISO 응답 spec 변동 대비해 string 우선 + 파일 보조 + JSON dump fallback 3단계로 안전. → `_format_file_outputs`/`_collect_file_nodes`/`_human_size` 헬퍼 신규.
+
+---
+
 ## [2026-05-06] - Outline 위키 임베드 챗 두 번째 메시지 401 fix
 
 - **수정** [embed/wiki] 위키 임베드 위젯에서 두 번째 메시지부터 401("인증 토큰이 없습니다")이 발생하던 버그 수정. 원인: [embed/wiki/page.tsx](frontend/app/embed/wiki/page.tsx)가 `widgetAuthToken`/`userId`를 `useMemo([searchParams])`로 잡고 있었는데, 첫 메시지 전송 시 [multimodal-input.tsx:149](frontend/components/multimodal-input.tsx#L149)의 `window.history.pushState({}, "", `/chat/${chatId}`)` 호출이 URL을 `/embed/wiki?token=…&sid=…` → `/chat/{sessionId}`로 바꿔버려 다음 렌더에서 `searchParams.get("token")`이 null이 됨 → `widgetAuthToken=undefined` → 두 번째 fetch에 `X-Widget-Auth` 헤더 빠짐 → JWT 쿠키도 없는 임베드 컨텍스트라 401. 수정: 그룹웨어 임베드([embed/gw/page.tsx:9-15](frontend/app/embed/gw/page.tsx#L9-L15))와 동일하게 `useState(() => …)` 패턴으로 마운트 시 1회만 캡처하도록 변경. 향후 보강안 B(`MultimodalInput`/`SuggestedActions`에 `chatMode` prop 가드 추가해서 임베드 모드면 `pushState` 자체 스킵)는 별도 작업으로.

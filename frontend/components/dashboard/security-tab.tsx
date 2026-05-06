@@ -44,6 +44,7 @@ import {
   type SecurityBlock,
   type LlmUsage,
 } from "@/lib/api/security"
+import { useUserDirectory, formatUserDisplay } from "@/hooks/use-user-directory"
 
 interface Props {
   dateFrom: string
@@ -99,6 +100,15 @@ export function SecurityTab({ dateFrom, dateTo, adminId }: Props) {
   const [dryRunMsg, setDryRunMsg] = useState("")
   const [dryRunResult, setDryRunResult] = useState<any>(null)
   const [dryRunLoading, setDryRunLoading] = useState(false)
+
+  // 사번 → 이름/부서 매핑
+  const userIds = [
+    ...(stats?.top_offenders?.map((u) => u.user_id) ?? []),
+    ...blocks.map((b) => b.user_id),
+    ...events.map((e) => e.user_id),
+    ...(eventDetail ? [eventDetail.user_id] : []),
+  ]
+  const directory = useUserDirectory(userIds)
 
   const loadAll = useCallback(async () => {
     setLoading(true)
@@ -281,7 +291,10 @@ export function SecurityTab({ dateFrom, dateTo, adminId }: Props) {
               <tbody>
                 {stats.top_users.map((u) => (
                   <tr key={u.user_id} className="border-t border-[#334155]">
-                    <td className="px-4 py-3 text-[#F3F4F6]">{u.user_id}</td>
+                    <td className="px-4 py-3 text-[#F3F4F6]">
+                      {formatUserDisplay(u.user_id, directory[u.user_id])}
+                      <span className="ml-1.5 font-mono text-[10px] text-[#64748B]">({u.user_id})</span>
+                    </td>
                     <td className="px-4 py-3 text-right text-[#F3F4F6]">{u.count}</td>
                     <td className="px-4 py-3 text-right">
                       <span
@@ -329,7 +342,10 @@ export function SecurityTab({ dateFrom, dateTo, adminId }: Props) {
               <tbody>
                 {blocks.map((b) => (
                   <tr key={b.user_id} className="border-t border-[#334155]">
-                    <td className="px-4 py-3 text-[#F3F4F6] font-mono">{b.user_id}</td>
+                    <td className="px-4 py-3 text-[#F3F4F6]">
+                      {formatUserDisplay(b.user_id, directory[b.user_id])}
+                      <span className="ml-1.5 font-mono text-[10px] text-[#64748B]">({b.user_id})</span>
+                    </td>
                     <td className="px-4 py-3">
                       <span
                         className={`px-2 py-0.5 rounded text-xs font-semibold ${
@@ -394,7 +410,10 @@ export function SecurityTab({ dateFrom, dateTo, adminId }: Props) {
                     <td className="px-3 py-2.5 text-xs text-[#9CA3AF]">
                       {e.created_at ? new Date(e.created_at).toLocaleString("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "-"}
                     </td>
-                    <td className="px-3 py-2.5 font-mono text-xs text-[#F3F4F6]">{e.user_id}</td>
+                    <td className="px-3 py-2.5 text-xs text-[#F3F4F6]">
+                      {formatUserDisplay(e.user_id, directory[e.user_id])}
+                      <span className="ml-1 font-mono text-[10px] text-[#64748B]">({e.user_id})</span>
+                    </td>
                     <td className="px-3 py-2.5 text-xs">
                       <span
                         className="px-1.5 py-0.5 rounded font-medium"
@@ -505,7 +524,7 @@ export function SecurityTab({ dateFrom, dateTo, adminId }: Props) {
               </button>
             </div>
             <div className="space-y-3 text-sm">
-              <DetailRow label="사용자" value={eventDetail.user_id} />
+              <DetailRow label="사용자" value={`${formatUserDisplay(eventDetail.user_id, directory[eventDetail.user_id])} (${eventDetail.user_id})`} />
               <DetailRow label="세션" value={eventDetail.session_id || "-"} />
               <DetailRow label="위협 유형" value={THREAT_LABELS[eventDetail.threat_type] || eventDetail.threat_type} />
               <DetailRow label="조치" value={ACTION_LABELS[eventDetail.action_taken] || eventDetail.action_taken} />

@@ -94,6 +94,25 @@ export function getUserId(): string | null {
   return null;
 }
 
+/**
+ * Get user name from SSO cookie (user_name).
+ * AD/LDAP 인증 시 백엔드가 set한 쿠키에서 읽음. 없으면 null.
+ */
+export function getUserName(): string | null {
+  if (typeof window !== 'undefined') {
+    const cookies = document.cookie.split(';');
+    const c = cookies.find(c => c.trim().startsWith('user_name='));
+    if (c) {
+      try {
+        return decodeURIComponent(c.split('=')[1].trim());
+      } catch {
+        return c.split('=')[1].trim();
+      }
+    }
+  }
+  return null;
+}
+
 export function isAdminUser(userId: string | null): boolean {
   if (!userId) return false;
   const adminUsers = (process.env.NEXT_PUBLIC_ADMIN_USERS || '')

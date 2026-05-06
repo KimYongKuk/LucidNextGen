@@ -138,7 +138,8 @@ async function fetchReport<T>(endpoint: string, dateFrom: string, dateTo: string
       url += `&${k}=${encodeURIComponent(v)}`;
     }
   }
-  const res = await fetch(url);
+  // JWT 쿠키 자동 전송 (admin 인증)
+  const res = await fetch(url, { credentials: 'include' });
   if (!res.ok) throw new Error(`Report API error: ${res.status}`);
   return res.json();
 }
@@ -192,6 +193,7 @@ const emailBase = `${BASE}/email`;
 async function fetchEmailApi<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${getApiUrl()}${emailBase}${endpoint}`, {
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'include', // JWT 쿠키 자동 전송 (admin 인증)
     ...options,
   });
   if (!res.ok) throw new Error(`Email API error: ${res.status}`);

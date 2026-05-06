@@ -1,6 +1,6 @@
 "use client";
 
-import { Sparkles, Search, PackagePlus, Inbox } from "lucide-react";
+import { Puzzle, Search, PackagePlus, Inbox } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { AgentStoreTab } from "@/lib/agent-store/types";
 
@@ -37,7 +37,7 @@ export function EmptyState({ tab, hasFilters, onResetFilters, onGoCatalog, onGoN
           카탈로그에서 필요한 에이전트를 설치하면, 채팅 중 자연어로 해당 에이전트를 자동 호출할 수 있습니다.
         </div>
         <Button size="sm" onClick={onGoCatalog}>
-          <Sparkles className="mr-1.5 h-4 w-4" />
+          <Puzzle className="mr-1.5 h-4 w-4" />
           카탈로그 둘러보기
         </Button>
       </div>

@@ -5,9 +5,12 @@
 워크스페이스(Workspace)는 사용자가 문서를 업로드하고 관리할 수 있는 독립적인 작업 공간입니다.
 각 워크스페이스는 고유한 벡터 스토어 컬렉션을 가지며, 채팅 세션과 연결될 수 있습니다.
 """
+import os
 import uuid
 import re
+import shutil
 import logging
+from pathlib import Path as FilePath
 from typing import List, Dict, Optional
 from datetime import datetime
 from fastapi import UploadFile, HTTPException
@@ -16,6 +19,11 @@ from app.core.database import get_database_connection
 from app.services.chromadb_service import get_chromadb_service, ChromaDBService
 
 logger = logging.getLogger(__name__)
+
+# 워크스페이스 영속 파일 원본 보존 디렉토리
+# 구조: data/workspace_uploads/{ws_uuid}/{file_id}/{filename}
+# - file_id 단위 격리: 같은 파일명 재업로드 시 충돌 방지 + 삭제 시 디렉토리 통째 제거
+WORKSPACE_UPLOAD_DIR = FilePath(__file__).parent.parent.parent / "data" / "workspace_uploads"
 
 # 사전정의 PII 패턴 (개인정보 모니터링용)
 PII_PATTERNS = {
@@ -160,7 +168,15 @@ class WorkspaceService:
             self.chromadb.client.delete_collection(collection_name)
         except Exception as e:
             logger.warning(f"Failed to delete ChromaDB collection for workspace {workspace_id}: {e}")
-            
+
+        # 3. 영속 원본 디렉토리 통째 제거
+        try:
+            ws_dir = WORKSPACE_UPLOAD_DIR / workspace['uuid']
+            if ws_dir.exists():
+                shutil.rmtree(ws_dir, ignore_errors=True)
+        except Exception as e:
+            logger.warning(f"Failed to cleanup workspace originals dir: {e}")
+
         return True
 
     async def upload_file(self, workspace_id: int, file: UploadFile) -> Dict:
@@ -172,7 +188,7 @@ class WorkspaceService:
         collection_name = self._get_collection_name(workspace['uuid'])
         file_content = await file.read()
 
-        # Use ChromaDB service to upload
+        # 1. ChromaDB 청킹 + 임베딩
         result = await self.chromadb.upload_file(
             file_content=file_content,
             filename=file.filename,
@@ -180,6 +196,22 @@ class WorkspaceService:
             collection=collection_name,
             replace_existing=False  # Append mode
         )
+
+        # 2. 원본 파일 영속 보존 (외부 워크플로우 호출용)
+        try:
+            saved_file_id = result.get("file_id")
+            if saved_file_id:
+                ws_dir = WORKSPACE_UPLOAD_DIR / workspace['uuid'] / saved_file_id
+                ws_dir.mkdir(parents=True, exist_ok=True)
+                safe_name = (file.filename or "unknown").replace("/", "_").replace("\\", "_").replace("..", "_")
+                with open(ws_dir / safe_name, "wb") as f:
+                    f.write(file_content)
+                logger.info(f"Workspace original preserved: {workspace['uuid']}/{saved_file_id}/{safe_name}")
+        except Exception as e:
+            logger.warning(
+                f"Workspace original preservation failed (non-fatal): "
+                f"workspace={workspace['uuid']} file={file.filename} error={e}"
+            )
 
         return result
 
@@ -197,7 +229,7 @@ class WorkspaceService:
 
         collection_name = self._get_collection_name(workspace['uuid'])
 
-        # Use ChromaDB service to upload
+        # 1. ChromaDB로 청킹 + 임베딩
         result = await self.chromadb.upload_file(
             file_content=file_content,
             filename=filename,
@@ -207,7 +239,64 @@ class WorkspaceService:
             file_id=file_id
         )
 
+        # 2. 원본 파일을 워크스페이스 영속 디렉토리에도 보존 (외부 워크플로우 호출용)
+        # ChromaDB의 temp 파일은 finally에서 삭제되므로 별도 보존 필요.
+        # 실패해도 ChromaDB 업로드는 성공으로 응답 — 외부 워크플로우 못 쓰는 것뿐 RAG는 동작.
+        try:
+            saved_file_id = result.get("file_id") or file_id
+            if saved_file_id:
+                ws_dir = WORKSPACE_UPLOAD_DIR / workspace['uuid'] / saved_file_id
+                ws_dir.mkdir(parents=True, exist_ok=True)
+                # 파일명에 경로 분리자/상위 이동 시퀀스 차단
+                safe_name = filename.replace("/", "_").replace("\\", "_").replace("..", "_")
+                with open(ws_dir / safe_name, "wb") as f:
+                    f.write(file_content)
+                logger.info(f"Workspace original preserved: {workspace['uuid']}/{saved_file_id}/{safe_name}")
+        except Exception as e:
+            logger.warning(
+                f"Workspace original preservation failed (non-fatal, RAG still works): "
+                f"workspace={workspace['uuid']} file={filename} error={e}"
+            )
+
         return result
+
+    @staticmethod
+    def list_persisted_files_by_uuid(workspace_uuid: str) -> List[Dict]:
+        """워크스페이스 영속 원본 파일 목록 (외부 워크플로우 호출용).
+
+        DB 조회 없이 디스크 스캔만 수행. 워커가 workspace_uuid만 들고 있어도 호출 가능.
+
+        반환:
+            [{"file_id": str, "filename": str, "path": str, "mtime": float, "size": int}]
+            mtime 최신 순 정렬.
+        """
+        if not workspace_uuid:
+            return []
+        ws_dir = WORKSPACE_UPLOAD_DIR / workspace_uuid
+        if not ws_dir.exists():
+            return []
+        results: List[Dict] = []
+        try:
+            for fid_dir in ws_dir.iterdir():
+                if not fid_dir.is_dir():
+                    continue
+                # 각 file_id 디렉토리에 파일 1개 가정 (보통의 경우)
+                for f in fid_dir.iterdir():
+                    if f.is_file():
+                        st = f.stat()
+                        results.append({
+                            "file_id": fid_dir.name,
+                            "filename": f.name,
+                            "path": str(f),
+                            "mtime": st.st_mtime,
+                            "size": st.st_size,
+                        })
+                        break  # file_id 디렉토리 내 첫 파일만
+        except Exception as e:
+            logger.warning(f"Workspace persisted files scan failed: {workspace_uuid} {e}")
+            return []
+        results.sort(key=lambda x: x["mtime"], reverse=True)
+        return results
 
     def list_files(self, workspace_id: int) -> List[Dict]:
         """워크스페이스의 벡터 스토어 파일 목록 조회"""
@@ -248,7 +337,7 @@ class WorkspaceService:
             return []
 
     def delete_file(self, workspace_id: int, file_id: str) -> bool:
-        """워크스페이스의 벡터 스토어에서 파일 삭제"""
+        """워크스페이스의 벡터 스토어에서 파일 삭제 + 영속 원본도 정리"""
         workspace = self.get_workspace(workspace_id)
         if not workspace:
             raise HTTPException(status_code=404, detail="Workspace not found")
@@ -258,10 +347,19 @@ class WorkspaceService:
         try:
             collection = self.chromadb.client.get_collection(collection_name)
             collection.delete(where={"file_id": file_id})
-            return True
         except Exception as e:
             logger.error(f"Failed to delete file {file_id} from workspace {workspace_id}: {e}")
             return False
+
+        # 영속 원본 디렉토리 제거 (file_id 단위 격리되어 있어 안전)
+        try:
+            file_dir = WORKSPACE_UPLOAD_DIR / workspace['uuid'] / file_id
+            if file_dir.exists():
+                shutil.rmtree(file_dir, ignore_errors=True)
+        except Exception as e:
+            logger.warning(f"Workspace original cleanup failed (file_id={file_id}): {e}")
+
+        return True
 
     def get_file_chunks(self, workspace_id: int, file_id: str, limit: int = 10, offset: int = 0) -> Dict:
         """파일의 텍스트 청크 조회 (미리보기용, Admin 전용)"""

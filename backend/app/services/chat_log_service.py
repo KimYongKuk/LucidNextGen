@@ -196,6 +196,8 @@ class ChatLogService:
                 title,
                 workspace_id,
                 is_pinned,
+                auto_generated,
+                source_agent_id,
                 DATE_FORMAT(created_at, '%%Y-%%m-%%dT%%H:%%i:%%s') as created_at,
                 DATE_FORMAT(updated_at, '%%Y-%%m-%%dT%%H:%%i:%%s') as updated_at
             FROM chat_sessions
@@ -290,6 +292,8 @@ class ChatLogService:
                 cs.title,
                 cs.workspace_id,
                 cs.is_pinned,
+                cs.auto_generated,
+                cs.source_agent_id,
                 DATE_FORMAT(cs.created_at, '%%Y-%%m-%%dT%%H:%%i:%%s') as created_at,
                 DATE_FORMAT(cs.updated_at, '%%Y-%%m-%%dT%%H:%%i:%%s') as updated_at
             FROM chat_sessions cs
@@ -368,6 +372,8 @@ class ChatLogService:
                 message_count,
                 title,
                 workspace_id,
+                auto_generated,
+                source_agent_id,
                 DATE_FORMAT(created_at, '%%Y-%%m-%%dT%%H:%%i:%%s') as created_at,
                 DATE_FORMAT(updated_at, '%%Y-%%m-%%dT%%H:%%i:%%s') as updated_at
             FROM chat_sessions

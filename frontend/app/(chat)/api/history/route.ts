@@ -57,6 +57,9 @@ export async function GET(request: Request) {
         updatedAt: session.updated_at,
         chatMode: session.chat_mode,
         isPinned: session.is_pinned,
+        // Phase 3b: cron 자동 생성 세션 시각 구분
+        auto_generated: session.auto_generated,
+        source_agent_id: session.source_agent_id,
       })) ?? [];
 
     return NextResponse.json({

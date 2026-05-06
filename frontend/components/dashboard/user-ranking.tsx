@@ -13,6 +13,7 @@ import {
 import { KpiCard } from "./kpi-card"
 import { SectionHeader } from "./section-header"
 import type { UserRankingData } from "@/lib/api/report"
+import { useUserDirectory, formatUserDisplay } from "@/hooks/use-user-directory"
 
 interface Props {
   data: UserRankingData
@@ -31,7 +32,14 @@ export function UserRanking({ data, onUserClick }: Props) {
     ? Math.round(data.totalMessages / data.totalUsers)
     : 0
 
-  const chartData = data.ranking.slice(0, 10)
+  // 사번 → 이름/부서 매핑 (배치 lookup)
+  const userIds = data.ranking.map((u) => u.userId)
+  const directory = useUserDirectory(userIds)
+
+  const chartData = data.ranking.slice(0, 10).map((u) => ({
+    ...u,
+    displayName: formatUserDisplay(u.userId, directory[u.userId]),
+  }))
 
   return (
     <section>
@@ -62,12 +70,12 @@ export function UserRanking({ data, onUserClick }: Props) {
                 tickLine={false}
               />
               <YAxis
-                dataKey="userId"
+                dataKey="displayName"
                 type="category"
                 tick={{ fill: "#9CA3AF", fontSize: 12 }}
                 axisLine={{ stroke: "#334155" }}
                 tickLine={false}
-                width={75}
+                width={140}
               />
               <Tooltip
                 contentStyle={{
@@ -121,7 +129,10 @@ export function UserRanking({ data, onUserClick }: Props) {
                       <span className="font-mono text-[#9CA3AF]">{user.rank}</span>
                     )}
                   </td>
-                  <td className="px-4 py-2.5 font-mono text-[#3B82F6] underline decoration-[#3B82F6]/30">{user.userId}</td>
+                  <td className="px-4 py-2.5 text-[#3B82F6] underline decoration-[#3B82F6]/30">
+                    {formatUserDisplay(user.userId, directory[user.userId])}
+                    <span className="ml-1.5 font-mono text-[10px] text-[#64748B]">({user.userId})</span>
+                  </td>
                   <td className="px-4 py-2.5 text-right font-mono font-medium text-[#3B82F6]">
                     {user.messageCount.toLocaleString()}
                   </td>

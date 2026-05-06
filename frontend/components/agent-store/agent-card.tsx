@@ -10,7 +10,7 @@ import {
   MessageCircle,
   Shield,
   TrendingUp,
-  Sparkles,
+  Puzzle,
   Newspaper,
   Download,
   Check,
@@ -18,6 +18,7 @@ import {
   Play,
   CalendarClock,
   Hourglass,
+  Trash2,
   type LucideIcon,
 } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -45,7 +46,7 @@ const iconMap: Record<string, LucideIcon> = {
   MessageCircle,
   Shield,
   TrendingUp,
-  Sparkles,
+  Sparkles: Puzzle,
   Newspaper,
 };
 
@@ -60,13 +61,15 @@ interface AgentCardProps {
   agent: Agent;
   onClick: () => void;
   onToggleInstall: (id: string) => void;
+  onDelete?: (agent: Agent) => void;
   index: number;
 }
 
-export function AgentCard({ agent, onClick, onToggleInstall, index }: AgentCardProps) {
-  const Icon = iconMap[agent.icon] ?? Sparkles;
+export function AgentCard({ agent, onClick, onToggleInstall, onDelete, index }: AgentCardProps) {
+  const Icon = iconMap[agent.icon] ?? Puzzle;
   const iconColor = getPrimaryCapabilityColor(agent.capabilities);
   const disabled = agent.status !== "active";
+  const canDelete = !!onDelete && agent.isMine && !agent.isNative;
 
   return (
     <motion.div
@@ -80,11 +83,8 @@ export function AgentCard({ agent, onClick, onToggleInstall, index }: AgentCardP
       >
         <CardHeader className="pb-3">
           <div className="flex items-start justify-between gap-2">
-            <div
-              className="flex h-10 w-10 items-center justify-center rounded-xl"
-              style={{ backgroundColor: `${iconColor}20` }}
-            >
-              <Icon className="h-5 w-5" style={{ color: iconColor }} />
+            <div className="flex h-10 w-10 items-center justify-center">
+              <Icon className="h-6 w-6" style={{ color: iconColor }} />
             </div>
             <VisibilityBadge visibility={agent.visibility} />
           </div>
@@ -122,29 +122,51 @@ export function AgentCard({ agent, onClick, onToggleInstall, index }: AgentCardP
 
           <div className="mt-4 flex-1" />
 
-          <Button
-            type="button"
-            size="sm"
-            variant={agent.isInstalled ? "outline" : "default"}
-            className="mt-3 w-full"
-            disabled={disabled && !agent.isInstalled}
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleInstall(agent.id);
-            }}
-          >
-            {agent.isInstalled ? (
-              <>
-                <Check className="mr-1.5 h-4 w-4" />
-                설치됨
-              </>
-            ) : (
-              <>
-                <Download className="mr-1.5 h-4 w-4" />
-                설치
-              </>
+          <div className="mt-3 flex items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant={agent.isInstalled ? "outline" : "default"}
+              className="flex-1"
+              disabled={disabled && !agent.isInstalled}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleInstall(agent.id);
+              }}
+            >
+              {agent.isInstalled ? (
+                <>
+                  <Check className="mr-1.5 h-4 w-4" />
+                  설치됨
+                </>
+              ) : (
+                <>
+                  <Download className="mr-1.5 h-4 w-4" />
+                  설치
+                </>
+              )}
+            </Button>
+            {canDelete && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    aria-label="에이전트 삭제"
+                    className="shrink-0 border-destructive/40 px-2 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDelete!(agent);
+                    }}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>삭제</TooltipContent>
+              </Tooltip>
             )}
-          </Button>
+          </div>
         </CardContent>
       </Card>
     </motion.div>

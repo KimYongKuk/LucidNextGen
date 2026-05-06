@@ -165,6 +165,23 @@ async def lifespan(app: FastAPI):
     print("[STARTUP] Outline Wiki Sync Scheduler starting...")
     outline_sync_scheduler.start()
 
+    # Agent Cron Scheduler — workspace_agents에 부착된 schedule trigger 등록
+    print("[STARTUP] Agent Cron Scheduler starting...")
+    try:
+        from app.agents.cron_scheduler import get_agent_cron_scheduler
+        get_agent_cron_scheduler().start()
+    except Exception as e:
+        print(f"[STARTUP] Agent Cron Scheduler failed (non-fatal): {e}")
+
+    # 사용자 디렉토리 캐시 (사번 → 이름/부서) 1회 로드
+    print("[STARTUP] User Directory cache loading...")
+    try:
+        from app.services.user_directory_service import refresh_cache as _refresh_user_dir
+        n = await _refresh_user_dir()
+        print(f"[STARTUP] User Directory: {n} users cached")
+    except Exception as e:
+        print(f"[STARTUP] User Directory cache failed: {e}")
+
     # Outline Webhook 큐 프로세서 시작
     _outline_webhook_service = None
     if os.getenv("OUTLINE_WEBHOOK_ENABLED", "true").lower() == "true":
@@ -194,6 +211,11 @@ async def lifespan(app: FastAPI):
             nightly_summary_scheduler.stop()
             voc_wiki_scheduler.stop()
             outline_sync_scheduler.stop()
+            try:
+                from app.agents.cron_scheduler import get_agent_cron_scheduler
+                get_agent_cron_scheduler().shutdown()
+            except Exception:
+                pass
             if _outline_webhook_service:
                 _outline_webhook_service.stop()
             await close_mcp_adapter()
@@ -254,7 +276,7 @@ async def validation_exception_handler(request, exc: RequestValidationError):
         }
     )
 
-from app.api.routes import chat, upload, auth, workspace, chat_a2a, feedback, report, board, openapi_compat, voc_wiki, outline_sync, outline_webhook, service_menu, admin_security, system_status
+from app.api.routes import chat, upload, auth, workspace, chat_a2a, feedback, report, board, openapi_compat, voc_wiki, outline_sync, outline_webhook, service_menu, admin_security, system_status, agents, users
 
 # 라우터 등록
 app.include_router(auth.router, prefix="/api", tags=["auth"])
@@ -272,6 +294,8 @@ app.include_router(outline_webhook.router, prefix="/api", tags=["outline-webhook
 app.include_router(service_menu.router, prefix="/api", tags=["service-menu"])
 app.include_router(admin_security.router, prefix="/api", tags=["admin-security"])  # 보안 관리
 app.include_router(system_status.router, prefix="/api", tags=["system"])  # 시스템 상태 (배너용)
+app.include_router(agents.router, prefix="/api", tags=["agents"])  # Agent Hub Phase 1
+app.include_router(users.router, prefix="/api", tags=["users"])  # 사용자 디렉토리 (사번↔이름)
 
 @app.get("/")
 async def root():

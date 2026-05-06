@@ -1,38 +1,90 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { ArrowLeft, PackagePlus, Store } from "lucide-react";
+import { ArrowLeft, ClipboardCheck, Loader2, PackagePlus, Store } from "lucide-react";
+import { getUserId, isOperatorUser } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
-import type { Agent, AgentStoreTab, Capability, Visibility } from "@/lib/agent-store/types";
+import type { Agent, AgentStoreTab, Capability } from "@/lib/agent-store/types";
 import { TAB_LABELS } from "@/lib/agent-store/types";
-import { MOCK_AGENTS } from "@/lib/agent-store/mock-data";
+import { agentApi } from "@/lib/api/agents";
+import { adaptBackendAgent } from "@/lib/agent-store/adapter";
 import { AgentCard } from "./agent-card";
-import { AgentFilters, type SortKey } from "./agent-filters";
+import { AgentFilters, type ScopeOption, type SortKey } from "./agent-filters";
 import { EmptyState } from "./empty-state";
 
 export function AgentStoreContent() {
   const router = useRouter();
 
-  const [agents, setAgents] = useState<Agent[]>(MOCK_AGENTS);
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<AgentStoreTab>("catalog");
+  const [isOperator, setIsOperator] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const uid = getUserId();
+    setCurrentUserId(uid);
+    setIsOperator(isOperatorUser(uid));
+  }, []);
+
+  // 카탈로그 + 내 Active 동시 fetch → adapter로 mock 형식 변환
+  useEffect(() => {
+    if (!currentUserId) return;
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const [catalog, mine] = await Promise.all([
+          agentApi.list({ limit: 500 }),         // 모든 상태 (deleted 제외, 백엔드 default)
+          agentApi.listMyActive().catch(() => []),
+        ]);
+        if (cancelled) return;
+        const mineIds = new Set(mine.map((a) => a.id));
+        const adapted = catalog.map((b) =>
+          adaptBackendAgent(b, {
+            isInstalled: mineIds.has(b.id),
+            isMine: b.author_user_id === currentUserId,
+          }),
+        );
+        setAgents(adapted);
+      } catch (e: any) {
+        toast.error(`카탈로그 조회 실패: ${e?.message ?? "오류"}`);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUserId]);
 
   const [searchQuery, setSearchQuery] = useState("");
-  const [capabilityFilter, setCapabilityFilter] = useState<Capability | "all">("all");
-  const [departmentFilter, setDepartmentFilter] = useState("전체");
-  const [visibilityFilter, setVisibilityFilter] = useState<Visibility | "all">("all");
+  const [capabilityFilter, setCapabilityFilter] = useState<Capability[]>([]);
+  const [scopeFilter, setScopeFilter] = useState<ScopeOption[]>([]);
   const [sortKey, setSortKey] = useState<SortKey>("popular");
+  const [deleteTarget, setDeleteTarget] = useState<Agent | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const hasFilters =
     searchQuery !== "" ||
-    capabilityFilter !== "all" ||
-    departmentFilter !== "전체" ||
-    visibilityFilter !== "all";
+    capabilityFilter.length > 0 ||
+    scopeFilter.length > 0;
 
   const installedCount = agents.filter((a) => a.isInstalled).length;
   const mineCount = agents.filter((a) => a.isMine).length;
@@ -54,11 +106,14 @@ export function AgentStoreContent() {
         (a.tags ?? []).some((t) => t.toLowerCase().includes(q));
 
       const matchesCapability =
-        capabilityFilter === "all" || a.capabilities.includes(capabilityFilter);
-      const matchesDept = departmentFilter === "전체" || a.author.department === departmentFilter;
-      const matchesVis = visibilityFilter === "all" || a.visibility === visibilityFilter;
+        capabilityFilter.length === 0 ||
+        capabilityFilter.some((c) => a.capabilities.includes(c));
 
-      return matchesSearch && matchesCapability && matchesDept && matchesVis;
+      const agentScope: ScopeOption = a.isNative ? "native" : a.visibility;
+      const matchesScope =
+        scopeFilter.length === 0 || scopeFilter.includes(agentScope);
+
+      return matchesSearch && matchesCapability && matchesScope;
     });
 
     const sorted = [...byFilter].sort((a, b) => {
@@ -70,36 +125,88 @@ export function AgentStoreContent() {
     });
 
     return sorted;
-  }, [agents, activeTab, searchQuery, capabilityFilter, departmentFilter, visibilityFilter, sortKey]);
+  }, [agents, activeTab, searchQuery, capabilityFilter, scopeFilter, sortKey]);
 
   const handleCardClick = (a: Agent) => {
     router.push(`/agent-store/${a.slug}`);
   };
 
-  const handleToggleInstall = (id: string) => {
+  const handleToggleInstall = async (id: string) => {
+    const target = agents.find((a) => a.id === id);
+    if (!target) return;
+    if (target.isNative) {
+      toast.info(`'${target.name}'은 Native Agent로 삭제할 수 없습니다.`);
+      return;
+    }
+    const willInstall = !target.isInstalled;
+    // 낙관적 UI 갱신
     setAgents((prev) =>
-      prev.map((a) => {
-        if (a.id !== id) return a;
-        const next = !a.isInstalled;
-        toast.success(next ? `'${a.name}' 설치 완료` : `'${a.name}' 제거`);
-        return {
-          ...a,
-          isInstalled: next,
-          installCount: Math.max(0, a.installCount + (next ? 1 : -1)),
-        };
-      }),
+      prev.map((a) =>
+        a.id === id
+          ? {
+              ...a,
+              isInstalled: willInstall,
+              installCount: Math.max(0, a.installCount + (willInstall ? 1 : -1)),
+            }
+          : a,
+      ),
     );
+    try {
+      if (willInstall) {
+        await agentApi.install(target.slug);
+        toast.success(`'${target.name}' 설치 완료`);
+      } else {
+        await agentApi.uninstall(target.slug);
+        toast.success(`'${target.name}' 제거`);
+      }
+    } catch (e: any) {
+      // 롤백
+      setAgents((prev) =>
+        prev.map((a) =>
+          a.id === id
+            ? {
+                ...a,
+                isInstalled: !willInstall,
+                installCount: Math.max(0, a.installCount + (willInstall ? -1 : 1)),
+              }
+            : a,
+        ),
+      );
+      toast.error(`처리 실패: ${e?.message ?? "오류"}`);
+    }
+  };
+
+  const handleDeleteRequest = (a: Agent) => {
+    if (a.isNative) {
+      toast.info(`'${a.name}'은 Native Agent로 삭제할 수 없습니다.`);
+      return;
+    }
+    setDeleteTarget(a);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteTarget || deleting) return;
+    setDeleting(true);
+    try {
+      await agentApi.delete(deleteTarget.slug);
+      toast.success(`'${deleteTarget.name}' 삭제 완료`);
+      setAgents((prev) => prev.filter((a) => a.id !== deleteTarget.id));
+      setDeleteTarget(null);
+    } catch (e: any) {
+      toast.error(`삭제 실패: ${e?.message ?? "오류"}`);
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const handleResetFilters = () => {
     setSearchQuery("");
-    setCapabilityFilter("all");
-    setDepartmentFilter("전체");
-    setVisibilityFilter("all");
+    setCapabilityFilter([]);
+    setScopeFilter([]);
   };
 
   const handleGoNew = () => {
-    toast.info("에이전트 등록 페이지는 준비 중입니다.");
+    router.push("/agent-store/new");
   };
 
   return (
@@ -133,10 +240,20 @@ export function AgentStoreContent() {
                   </p>
                 </div>
               </div>
-              <Button onClick={handleGoNew} className="sm:self-center">
-                <PackagePlus className="mr-1.5 h-4 w-4" />
-                등록하기
-              </Button>
+              <div className="flex items-center gap-2 sm:self-center">
+                {isOperator && (
+                  <Button asChild variant="outline">
+                    <Link href="/admin/agent-store/approvals">
+                      <ClipboardCheck className="mr-1.5 h-4 w-4" />
+                      승인 큐
+                    </Link>
+                  </Button>
+                )}
+                <Button onClick={handleGoNew}>
+                  <PackagePlus className="mr-1.5 h-4 w-4" />
+                  등록하기
+                </Button>
+              </div>
             </motion.div>
           </div>
 
@@ -166,15 +283,17 @@ export function AgentStoreContent() {
             onSearchChange={setSearchQuery}
             capabilityFilter={capabilityFilter}
             onCapabilityFilterChange={setCapabilityFilter}
-            departmentFilter={departmentFilter}
-            onDepartmentFilterChange={setDepartmentFilter}
-            visibilityFilter={visibilityFilter}
-            onVisibilityFilterChange={setVisibilityFilter}
+            scopeFilter={scopeFilter}
+            onScopeFilterChange={setScopeFilter}
             sortKey={sortKey}
             onSortChange={setSortKey}
           />
 
-          {visibleAgents.length > 0 ? (
+          {loading ? (
+            <div className="rounded-lg border bg-card p-12 text-center text-sm text-muted-foreground">
+              카탈로그 불러오는 중...
+            </div>
+          ) : visibleAgents.length > 0 ? (
             <>
               <p className="text-xs text-muted-foreground">
                 {visibleAgents.length}개의 에이전트
@@ -187,6 +306,7 @@ export function AgentStoreContent() {
                     index={i}
                     onClick={() => handleCardClick(a)}
                     onToggleInstall={handleToggleInstall}
+                    onDelete={handleDeleteRequest}
                   />
                 ))}
               </div>
@@ -201,6 +321,49 @@ export function AgentStoreContent() {
             />
           )}
         </div>
+
+        <AlertDialog
+          open={deleteTarget !== null}
+          onOpenChange={(open) => {
+            if (!open && !deleting) setDeleteTarget(null);
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>이 에이전트를 삭제하시겠습니까?</AlertDialogTitle>
+              <AlertDialogDescription>
+                {deleteTarget ? (
+                  <>
+                    <strong>'{deleteTarget.name}'</strong>이(가) 카탈로그에서 제거되며,
+                    설치한 사용자들도 더 이상 사용할 수 없습니다.
+                    <br />
+                    이 작업은 되돌릴 수 없습니다.
+                  </>
+                ) : null}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={deleting}>취소</AlertDialogCancel>
+              <AlertDialogAction
+                disabled={deleting}
+                onClick={(e) => {
+                  e.preventDefault();
+                  handleConfirmDelete();
+                }}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                {deleting ? (
+                  <>
+                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                    삭제 중...
+                  </>
+                ) : (
+                  "삭제"
+                )}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </TooltipProvider>
   );

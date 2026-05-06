@@ -11,15 +11,16 @@ import {
   FileBarChart,
   Hourglass,
   Info,
+  Loader2,
   MapPin,
   MessageCircle,
   MessageSquare,
   Newspaper,
   Play,
   Plus,
+  Puzzle,
   Receipt,
   Shield,
-  Sparkles,
   Store,
   TrendingUp,
   X,
@@ -36,11 +37,8 @@ import {
   STATUS_LABELS,
   getPrimaryCapabilityColor,
 } from "@/lib/agent-store/types";
-import {
-  getWorkspaceAgents,
-  getWorkspaceAgentIds,
-  setWorkspaceAgents,
-} from "@/lib/agent-store/workspace-agents";
+import { agentApi } from "@/lib/api/agents";
+import { adaptBackendAgent } from "@/lib/agent-store/adapter";
 import { AgentPickerDialog } from "@/components/agent-store/agent-picker-dialog";
 
 const iconMap: Record<string, LucideIcon> = {
@@ -52,7 +50,7 @@ const iconMap: Record<string, LucideIcon> = {
   MessageCircle,
   Shield,
   TrendingUp,
-  Sparkles,
+  Sparkles: Puzzle,
   Newspaper,
 };
 
@@ -70,13 +68,28 @@ interface WorkspaceAgentsTabProps {
 
 export function WorkspaceAgentsTab({ workspaceUuid, onCountChange }: WorkspaceAgentsTabProps) {
   const [attached, setAttached] = useState<Agent[]>([]);
+  const [loading, setLoading] = useState(true);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = async () => {
+    setLoading(true);
+    try {
+      const list = await agentApi.listWorkspaceAgents(workspaceUuid);
+      const adapted = list.map((b) => adaptBackendAgent(b, { isInstalled: true }));
+      setAttached(adapted);
+      onCountChange?.(adapted.length);
+    } catch (e: any) {
+      toast.error(`부착된 Agent 조회 실패: ${e?.message ?? "오류"}`);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const list = getWorkspaceAgents(workspaceUuid);
-    setAttached(list);
-    onCountChange?.(list.length);
-  }, [workspaceUuid, onCountChange]);
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceUuid]);
 
   const attachedIds = useMemo(() => attached.map((a) => a.id), [attached]);
 
@@ -108,28 +121,65 @@ export function WorkspaceAgentsTab({ workspaceUuid, onCountChange }: WorkspaceAg
     return list;
   }, [capabilityCounts, attached.length]);
 
-  const persist = (ids: string[]) => {
-    setWorkspaceAgents(workspaceUuid, ids);
-    const list = getWorkspaceAgents(workspaceUuid);
-    setAttached(list);
-    onCountChange?.(list.length);
-  };
+  const handlePickerConfirm = async (nextIds: string[]) => {
+    const current = new Set(attachedIds);
+    const next = new Set(nextIds);
+    const toAdd = [...next].filter((id) => !current.has(id));
+    const toRemove = [...current].filter((id) => !next.has(id));
 
-  const handlePickerConfirm = (ids: string[]) => {
-    const current = new Set(getWorkspaceAgentIds(workspaceUuid));
-    const next = new Set(ids);
-    const added = [...next].filter((id) => !current.has(id)).length;
-    const removed = [...current].filter((id) => !next.has(id)).length;
-    persist(ids);
-    if (added > 0 || removed > 0) {
-      toast.success(`Agent ${added > 0 ? `+${added}` : ""}${added > 0 && removed > 0 ? " / " : ""}${removed > 0 ? `-${removed}` : ""}`);
+    if (toAdd.length === 0 && toRemove.length === 0) return;
+
+    setBusy(true);
+    try {
+      // Picker가 ID 기준으로 동작하므로 slug 필요 — attached + 모든 active에서 lookup
+      const allActive = await agentApi.listMyActive();
+      const idToSlug = new Map<string, string>();
+      [...allActive, ...attached.map((a) => ({ id: a.id, slug: a.slug }))].forEach((a) => {
+        idToSlug.set(a.id, a.slug);
+      });
+
+      // 추가
+      for (const id of toAdd) {
+        const slug = idToSlug.get(id);
+        if (!slug) continue;
+        try {
+          await agentApi.attachToWorkspace(workspaceUuid, slug);
+        } catch (e: any) {
+          toast.error(`'${slug}' 부착 실패: ${e?.message ?? "오류"}`);
+        }
+      }
+      // 제거
+      for (const id of toRemove) {
+        const slug = idToSlug.get(id);
+        if (!slug) continue;
+        try {
+          await agentApi.detachFromWorkspace(workspaceUuid, slug);
+        } catch (e: any) {
+          toast.error(`'${slug}' 제거 실패: ${e?.message ?? "오류"}`);
+        }
+      }
+      toast.success(
+        `Agent ${toAdd.length > 0 ? `+${toAdd.length}` : ""}${
+          toAdd.length > 0 && toRemove.length > 0 ? " / " : ""
+        }${toRemove.length > 0 ? `-${toRemove.length}` : ""}`,
+      );
+      await refresh();
+    } finally {
+      setBusy(false);
     }
   };
 
-  const handleRemove = (id: string) => {
-    const next = attachedIds.filter((x) => x !== id);
-    persist(next);
-    toast.success("Agent 제거됨");
+  const handleRemove = async (agent: Agent) => {
+    setBusy(true);
+    try {
+      await agentApi.detachFromWorkspace(workspaceUuid, agent.slug);
+      toast.success(`'${agent.name}' 제거됨`);
+      await refresh();
+    } catch (e: any) {
+      toast.error(`제거 실패: ${e?.message ?? "오류"}`);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -150,7 +200,7 @@ export function WorkspaceAgentsTab({ workspaceUuid, onCountChange }: WorkspaceAg
               <ExternalLink className="ml-1 h-3 w-3" />
             </Link>
           </Button>
-          <Button size="sm" onClick={() => setPickerOpen(true)}>
+          <Button size="sm" onClick={() => setPickerOpen(true)} disabled={busy}>
             <Plus className="mr-1.5 h-4 w-4" />
             <span className="hidden sm:inline">Agent 추가</span>
             <span className="sm:hidden">추가</span>
@@ -174,13 +224,18 @@ export function WorkspaceAgentsTab({ workspaceUuid, onCountChange }: WorkspaceAg
       )}
 
       <div className="border rounded-md flex-1 overflow-hidden flex flex-col">
-        {attached.length === 0 ? (
+        {loading ? (
+          <div className="flex flex-1 items-center justify-center gap-2 p-8 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            부착된 Agent 불러오는 중...
+          </div>
+        ) : attached.length === 0 ? (
           <EmptyAttachedState onAdd={() => setPickerOpen(true)} />
         ) : (
           <div className="flex-1 overflow-y-auto">
             <div className="p-3 space-y-2">
               {attached.map((a) => (
-                <AttachedAgentRow key={a.id} agent={a} onRemove={() => handleRemove(a.id)} />
+                <AttachedAgentRow key={a.id} agent={a} onRemove={() => handleRemove(a)} disabled={busy} />
               ))}
             </div>
           </div>
@@ -229,18 +284,23 @@ function CapabilityStrip({
   );
 }
 
-function AttachedAgentRow({ agent, onRemove }: { agent: Agent; onRemove: () => void }) {
-  const Icon = iconMap[agent.icon] ?? Sparkles;
+function AttachedAgentRow({
+  agent,
+  onRemove,
+  disabled,
+}: {
+  agent: Agent;
+  onRemove: () => void;
+  disabled?: boolean;
+}) {
+  const Icon = iconMap[agent.icon] ?? Puzzle;
   const iconColor = getPrimaryCapabilityColor(agent.capabilities);
   const statusColor = STATUS_COLORS[agent.status];
 
   return (
     <div className="group grid grid-cols-[auto_1fr_auto] items-center gap-3 rounded-md border bg-background p-3 transition-colors hover:bg-muted/40">
-      <div
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
-        style={{ backgroundColor: `${iconColor}20` }}
-      >
-        <Icon className="h-4 w-4" style={{ color: iconColor }} />
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center">
+        <Icon className="h-5 w-5" style={{ color: iconColor }} />
       </div>
       <div className="min-w-0">
         <div className="flex items-center gap-2">
@@ -281,6 +341,7 @@ function AttachedAgentRow({ agent, onRemove }: { agent: Agent; onRemove: () => v
         size="icon"
         className="invisible h-7 w-7 text-destructive hover:bg-destructive/10 hover:text-destructive group-hover:visible"
         onClick={onRemove}
+        disabled={disabled}
         aria-label="Agent 제거"
       >
         <X className="h-4 w-4" />
@@ -306,7 +367,7 @@ function EmptyAttachedState({ onAdd }: { onAdd: () => void }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-3 p-10 text-center">
       <div className="rounded-full bg-muted p-3">
-        <Sparkles className="h-6 w-6 text-muted-foreground" />
+        <Puzzle className="h-6 w-6 text-muted-foreground" />
       </div>
       <div className="text-sm font-semibold">붙은 Agent가 없습니다</div>
       <div className="max-w-md text-xs text-muted-foreground">

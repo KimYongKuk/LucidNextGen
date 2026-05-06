@@ -1,7 +1,13 @@
 "use client";
 
-import { Search } from "lucide-react";
+import { ChevronDown, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Select,
   SelectContent,
@@ -11,37 +17,65 @@ import {
 } from "@/components/ui/select";
 import type { Capability, Visibility } from "@/lib/agent-store/types";
 import { CAPABILITY_COLORS, CAPABILITY_LABELS } from "@/lib/agent-store/types";
-import { DEPARTMENTS } from "@/lib/agent-store/mock-data";
 
 export type SortKey = "popular" | "recent" | "name";
+export type ScopeOption = Visibility | "native";
 
 interface AgentFiltersProps {
   searchQuery: string;
   onSearchChange: (value: string) => void;
-  capabilityFilter: Capability | "all";
-  onCapabilityFilterChange: (value: Capability | "all") => void;
-  departmentFilter: string;
-  onDepartmentFilterChange: (value: string) => void;
-  visibilityFilter: Visibility | "all";
-  onVisibilityFilterChange: (value: Visibility | "all") => void;
+  capabilityFilter: Capability[];
+  onCapabilityFilterChange: (value: Capability[]) => void;
+  scopeFilter: ScopeOption[];
+  onScopeFilterChange: (value: ScopeOption[]) => void;
   sortKey: SortKey;
   onSortChange: (value: SortKey) => void;
 }
 
 const CAPABILITY_OPTIONS: Capability[] = ["chat", "run", "scheduled", "async"];
 
+const SCOPE_OPTIONS: { value: ScopeOption; label: string }[] = [
+  { value: "public", label: "Public · 전사 공개" },
+  { value: "team", label: "Team · 팀 공개" },
+  { value: "private", label: "Private · 나만" },
+  { value: "native", label: "Native · 기본 제공" },
+];
+
+const SCOPE_SHORT_LABEL: Record<ScopeOption, string> = {
+  public: "Public",
+  team: "Team",
+  private: "Private",
+  native: "Native",
+};
+
+function toggleItem<T>(arr: T[], value: T): T[] {
+  return arr.includes(value) ? arr.filter((v) => v !== value) : [...arr, value];
+}
+
 export function AgentFilters({
   searchQuery,
   onSearchChange,
   capabilityFilter,
   onCapabilityFilterChange,
-  departmentFilter,
-  onDepartmentFilterChange,
-  visibilityFilter,
-  onVisibilityFilterChange,
+  scopeFilter,
+  onScopeFilterChange,
   sortKey,
   onSortChange,
 }: AgentFiltersProps) {
+  const capabilityLabel =
+    capabilityFilter.length === 0
+      ? "전체 기능"
+      : capabilityFilter.length === 1
+        ? CAPABILITY_LABELS[capabilityFilter[0]]
+        : `기능 ${capabilityFilter.length}개`;
+
+  const scopeLabel =
+    scopeFilter.length === 0
+      ? "전체 범위"
+      : scopeFilter.length === 1
+        ? SCOPE_SHORT_LABEL[scopeFilter[0]]
+        : `범위 ${scopeFilter.length}개`;
+
   return (
     <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
       <div className="relative flex-1">
@@ -56,17 +90,28 @@ export function AgentFilters({
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <Select
-          value={capabilityFilter}
-          onValueChange={(v) => onCapabilityFilterChange(v as Capability | "all")}
-        >
-          <SelectTrigger className="h-9 w-[140px]">
-            <SelectValue placeholder="기능" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">전체 기능</SelectItem>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="flex h-9 w-[160px] items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <span className={capabilityFilter.length === 0 ? "text-muted-foreground" : ""}>
+                {capabilityLabel}
+              </span>
+              <ChevronDown className="h-4 w-4 opacity-50" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-[200px]">
             {CAPABILITY_OPTIONS.map((cap) => (
-              <SelectItem key={cap} value={cap}>
+              <DropdownMenuCheckboxItem
+                key={cap}
+                checked={capabilityFilter.includes(cap)}
+                onCheckedChange={() =>
+                  onCapabilityFilterChange(toggleItem(capabilityFilter, cap))
+                }
+                onSelect={(e) => e.preventDefault()}
+              >
                 <span className="flex items-center gap-2">
                   <span
                     className="h-2 w-2 rounded-full"
@@ -74,38 +119,38 @@ export function AgentFilters({
                   />
                   {CAPABILITY_LABELS[cap]}
                 </span>
-              </SelectItem>
+              </DropdownMenuCheckboxItem>
             ))}
-          </SelectContent>
-        </Select>
+          </DropdownMenuContent>
+        </DropdownMenu>
 
-        <Select value={departmentFilter} onValueChange={onDepartmentFilterChange}>
-          <SelectTrigger className="h-9 w-[140px]">
-            <SelectValue placeholder="부서" />
-          </SelectTrigger>
-          <SelectContent>
-            {DEPARTMENTS.map((dept) => (
-              <SelectItem key={dept} value={dept}>
-                {dept}
-              </SelectItem>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="flex h-9 w-[160px] items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <span className={scopeFilter.length === 0 ? "text-muted-foreground" : ""}>
+                {scopeLabel}
+              </span>
+              <ChevronDown className="h-4 w-4 opacity-50" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-[220px]">
+            {SCOPE_OPTIONS.map((opt) => (
+              <DropdownMenuCheckboxItem
+                key={opt.value}
+                checked={scopeFilter.includes(opt.value)}
+                onCheckedChange={() =>
+                  onScopeFilterChange(toggleItem(scopeFilter, opt.value))
+                }
+                onSelect={(e) => e.preventDefault()}
+              >
+                {opt.label}
+              </DropdownMenuCheckboxItem>
             ))}
-          </SelectContent>
-        </Select>
-
-        <Select
-          value={visibilityFilter}
-          onValueChange={(v) => onVisibilityFilterChange(v as Visibility | "all")}
-        >
-          <SelectTrigger className="h-9 w-[140px]">
-            <SelectValue placeholder="공개 범위" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">전체 범위</SelectItem>
-            <SelectItem value="public">Public · 전사 공개</SelectItem>
-            <SelectItem value="team">Team · 팀 공개</SelectItem>
-            <SelectItem value="private">Private · 나만</SelectItem>
-          </SelectContent>
-        </Select>
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         <Select value={sortKey} onValueChange={(v) => onSortChange(v as SortKey)}>
           <SelectTrigger className="h-9 w-[140px]">

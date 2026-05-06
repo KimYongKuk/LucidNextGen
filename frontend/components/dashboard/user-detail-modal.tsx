@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react"
 import { X, Loader2 } from "lucide-react"
 import { reportApi, type UserDetailData } from "@/lib/api/report"
+import { useUserInfo, formatUserDisplay } from "@/hooks/use-user-directory"
 
 interface Props {
   userId: string
@@ -13,6 +14,8 @@ interface Props {
 
 export function UserDetailModal({ userId, dateFrom, dateTo, onClose }: Props) {
   const [data, setData] = useState<UserDetailData | null>(null)
+  const userInfo = useUserInfo(userId)
+  const displayName = formatUserDisplay(userId, userInfo)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -38,7 +41,9 @@ export function UserDetailModal({ userId, dateFrom, dateTo, onClose }: Props) {
         <div className="flex items-center justify-between border-b border-[#334155] px-6 py-4">
           <div>
             <h2 className="text-lg font-semibold text-[#F3F4F6]">
-              <span className="font-mono">{userId}</span> 활동 상세
+              {displayName}
+              <span className="ml-2 font-mono text-xs text-[#64748B]">({userId})</span>
+              <span className="ml-1.5 text-sm">활동 상세</span>
             </h2>
             <p className="text-xs text-[#9CA3AF]">{dateFrom} ~ {dateTo} | 최근 50건</p>
           </div>
